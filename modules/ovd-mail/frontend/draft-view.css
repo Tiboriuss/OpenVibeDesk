@@ -1,6 +1,16 @@
 .draft-layout .draft-toolbar{height:auto;min-height:66px;gap:12px;padding:13px 0}
 .draft-layout .draft-toolbar h2{font-size:18px}
-.draft-layout .draft-toolbar>span{max-width:50%;color:var(--muted);font-size:11px;line-height:1.4;text-align:right}
+.draft-save-controls{display:flex;align-items:center;justify-content:flex-end;gap:7px;max-width:60%;min-width:0;color:var(--muted)}
+.draft-save-status{display:flex;align-items:center;justify-content:flex-end;gap:5px;min-width:0;font-size:10px;line-height:1.4;text-align:right}
+.draft-save-status>svg{flex:none}.draft-save-status>span{overflow-wrap:anywhere}
+.draft-save-controls.error{color:#952c3d}
+.draft-save-button{display:grid;place-items:center;flex:none;width:29px;height:29px;padding:0;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--accent-dark)}
+.draft-save-button:hover:not(:disabled){background:var(--accent-soft)}.draft-save-button:disabled{color:var(--muted);opacity:.55}
+.draft-save-error{flex:none;margin:0 0 8px;padding:8px 10px;border-radius:7px;background:#fff0f2;color:#952c3d;font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+.draft-save-spinner{animation:draft-save-spin 1.2s linear infinite}
+@keyframes draft-save-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.draft-save-spinner{animation:none}}
+@media(max-width:420px){.draft-layout .draft-toolbar{gap:8px}.draft-layout .draft-toolbar h2{font-size:16px}.draft-save-controls{max-width:55%}}
 .draft-layout .draft-fields label{gap:12px;color:var(--muted);font-weight:700}
 .draft-layout .draft-fields input{min-width:0;font-weight:400}
 .draft-layout .draft-fields select{flex:1;min-width:0;padding:5px 0;border:0;background:transparent;color:var(--ink);font-size:11px;font-weight:400}

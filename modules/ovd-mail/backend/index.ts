@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import addressParser from 'nodemailer/lib/addressparser';
+import { DraftPersistence } from './draft-persistence';
 import { applyUiAction, type UiAction } from '../../../shared/actions';
 import type { Draft, EmailReference, EmailReferenceSummary, Folder, Mail, MailViewContext, WindowKind, WorkspaceState } from '../../../shared/model';
 import type { ImapMessage, MailSendResult } from '../../../shared/mail';
@@ -42,6 +43,9 @@ export interface MailModuleHost {
 /** Optional trusted Mail adapter. Nothing is loaded or registered before the host activates it. */
 export function createMailModule(host: MailModuleHost) {
   const { getState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel, verifySender, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles } = host;
+  const draftPersistence = new DraftPersistence({ getState, saveState, publish: status => {
+    for (const win of panels.values()) if (!win.isDestroyed()) win.webContents.send('mail:draft:save-state', status);
+  } });
   let mailSettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
   let mailAccountsUnavailable = false;
   let smtpSettingsUnavailable = false;
@@ -565,11 +569,14 @@ async function createWorkspaceDraft(args: MailCapabilityArgs<'drafts.create'>, c
   const quote = reply && source?.bodyText ? `\n\n${source.bodyText.slice(0, 20000).split('\n').map(line => `> ${line}`).join('\n')}` : '';
   const draft: Draft = { id: randomUUID(), ...(account ? { accountId: account.id } : {}), to, cc: args.cc ?? '', bcc: args.bcc ?? '', subject: args.subject ?? (reply && source ? `Re: ${source.subject.replace(/^Re:\s*/i, '')}`.slice(0, 1000) : ''), body: `${args.body ?? ''}${quote}`.slice(0, 100000), attachments: [], updatedAt: new Date().toISOString(), ...(originalId ? { inReplyTo: originalId } : {}), ...(references.length ? { references } : {}) };
   context.signal.throwIfAborted();
-  const previousDraftId = getState().activeDraftId;
   commit({ ...applyUiAction(getState(), { type: 'open_window', kind: 'draft' }).state, drafts: [...getState().drafts, draft], activeDraftId: draft.id });
-  try { await saveState(getState()); } catch { commit({ ...getState(), drafts: getState().drafts.filter(item => item.id !== draft.id), activeDraftId: previousDraftId }); throw new Error('Der Entwurf konnte nicht lokal gespeichert werden und wurde nicht geöffnet.'); }
-  try { await openPanel('draft'); return { draftId: draft.id, accountId: account?.id, to: draft.to, subject: draft.subject, opened: true, sent: false }; }
-  catch { return { draftId: draft.id, accountId: account?.id, to: draft.to, opened: false, created: true, sent: false }; }
+  let persistenceError: string | undefined;
+  try { await draftPersistence.save(draft.id); }
+  catch { persistenceError = 'Der Entwurf ist im Editor erhalten, konnte aber noch nicht lokal gespeichert werden. Bitte die Speicherung erneut versuchen.'; }
+  let opened = true;
+  try { await openPanel('draft'); } catch { opened = false; }
+  return { draftId: draft.id, accountId: account?.id, to: draft.to, subject: draft.subject, opened, created: true, sent: false,
+    saveState: draftPersistence.getStatus(draft.id), ...(persistenceError ? { outcome: 'failed' as const, error: persistenceError } : { saved: true }) };
 }
 async function snapshotLiveReference(id: string, signal: AbortSignal): Promise<EmailReference | undefined> {
   const live = liveMail.get(id);
@@ -595,6 +602,7 @@ async function initialize(): Promise<void> {
   if ((state.mailLayoutRevision ?? 0) < 2) state = { ...state, mailLayoutRevision: 2, windows: state.windows.map(win => win.kind === 'mail' ? { ...win, width: Math.max(win.width, 1070), height: Math.max(win.height, 720) } : win) };
   state = { ...state, drafts: state.drafts.map(draft => draft.deliveryStatus === 'sending' ? { ...draft, deliveryStatus: 'uncertain', deliveryError: 'Der Versandstatus ist nach einem Neustart unklar. Bitte vor einem erneuten Versand prüfen.' } : draft) };
   commit(state);
+  draftPersistence.onStateChanged();
 }
 function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry): void {
   const querySummary = (result: Extract<Awaited<ReturnType<typeof queryHost.count>>, { count: number }>) => ({
@@ -613,11 +621,15 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
     if ('cancelled' in result) return result;
     return { ...querySummary(result), hasMore: result.hasMore, nextCursor: result.nextCursor, messages: result.messages.map(({ id, from, to, subject, date, receivedAt, accountId, accountName, folder, read, attachments }) => ({ id, from: from.slice(0, 160), to: to.slice(0, 160), subject: subject.slice(0, 200), date, receivedAt, accountId, accountName: accountName?.slice(0, 80), folder: folder?.slice(0, 120), ...(folder && folder.length > 120 ? { folderTruncated: true } : {}), read, attachmentCount: attachments.length })) };
   });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.list'], ({ limit }) => ({ drafts: [...getState().drafts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit ?? 20).map(({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus, attachments }) => ({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus: deliveryStatus ?? 'draft', attachments: attachments.map(({ name, size }, index) => ({ index, name, size })) })), activeDraftId: getState().activeDraftId }));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.list'], ({ limit }) => ({ drafts: [...getState().drafts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit ?? 20).map(({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus, attachments }) => ({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus: deliveryStatus ?? 'draft', saveState: draftPersistence.getStatus(id), attachments: attachments.map(({ name, size }, index) => ({ index, name, size })) })), activeDraftId: getState().activeDraftId }));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.create'], (args, context) => createWorkspaceDraft(args, context as OperationContext));
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.get'], ({ draftId }) => { const draft = getState().drafts.find(item => item.id === activeDraftId(draftId))!; return { ...draft, body: draft.body.slice(0, 12000), bodyTruncated: draft.body.length > 12000, attachments: draft.attachments.map(({ name, size }, index) => ({ index, name, size })) }; });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.get'], ({ draftId }) => { const draft = getState().drafts.find(item => item.id === activeDraftId(draftId))!; return { ...draft, saveState: draftPersistence.getStatus(draft.id), body: draft.body.slice(0, 12000), bodyTruncated: draft.body.length > 12000, attachments: draft.attachments.map(({ name, size }, index) => ({ index, name, size })) }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.open'], ({ draftId }) => openDraft(draftId));
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.update'], async ({ draftId, patch }) => { const id = activeDraftId(draftId); await dispatchAction({ type: 'update_draft', draftId: id, patch }); await saveState(getState()); return { draftId: id, updated: true }; });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.update'], async ({ draftId, patch }) => { const id = activeDraftId(draftId); await dispatchAction({ type: 'update_draft', draftId: id, patch }); return { draftId: id, updated: true, saved: true, saveState: draftPersistence.getStatus(id) }; });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.save'], async ({ draftId }) => {
+    const id = activeDraftId(draftId); await draftPersistence.save(id); return { ...draftPersistence.getStatus(id), saved: true, sent: false };
+  });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.save_status'], ({ draftId }) => draftPersistence.getStatus(activeDraftId(draftId)));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.send'], ({ draftId }, context) => sendDraft(draftId ?? getState().activeDraftId, context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.search'], async (args, context) => {
     const result = await searchWorkspaceMail(args, context as OperationContext);
@@ -667,6 +679,14 @@ function registerIpc(): void {
   ipcMain.handle('smtp:settings:list', (event) => { verifyPanel(event, ['settings', 'draft']); return readSmtpSettings(uiOperationContext(event)); });
   ipcMain.handle('smtp:settings:test', (event, input: unknown) => { verifyPanel(event, ['settings']); return checkSmtpSettings(input, uiOperationContext(event)); });
   ipcMain.handle('smtp:settings:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return saveSmtpSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('mail:draft:save-state', (event, draftId: unknown) => {
+    verifyPanel(event, ['draft']); const args = mailCapabilitySchemas['drafts.save_status'].parse({ draftId }); return draftPersistence.getStatus(activeDraftId(args.draftId));
+  });
+  ipcMain.handle('mail:draft:save', async (event, draftId: unknown) => {
+    verifyPanel(event, ['draft']); const args = mailCapabilitySchemas['drafts.save'].parse({ draftId }); const id = activeDraftId(args.draftId);
+    try { await draftPersistence.save(id); } catch { /* The status contains the actionable error; retain editor content. */ }
+    return draftPersistence.getStatus(id);
+  });
   ipcMain.handle('smtp:draft:send', (event, draftId: unknown) => { verifyPanel(event, ['draft']); return sendDraft(draftId, uiOperationContext(event)); });
   ipcMain.handle('mail:accounts:list', event => { verifyPanel(event, ['settings', 'mail', 'draft']); ensureMailAccountsAvailable(); return getMailAccounts(); });
   ipcMain.handle('mail:accounts:test', (event, input: unknown) => { verifyPanel(event, ['settings']); return checkMailAccount(input, uiOperationContext(event)); });
@@ -713,6 +733,9 @@ function getContext(context: OperationContext) {
 return {
   initialize, registerCapabilities, registerIpc, validateAction, getContext,
   createDraft: createWorkspaceDraft, openDraft,
+  onStateChanged: (state: WorkspaceState) => draftPersistence.onStateChanged(state),
+  saveDraft: (id: string) => draftPersistence.save(activeDraftId(id)),
+  flushDrafts: () => draftPersistence.flush(),
   getAccount: mailAccount, listAccounts: getMailAccounts,
   getLiveMail: (id: string) => liveMail.get(id),
   externalMail, snapshotLiveReference,

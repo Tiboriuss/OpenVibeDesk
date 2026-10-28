@@ -32,6 +32,7 @@ if (!hasInstanceLock) app.quit();
 let currentState: WorkspaceState;
 let dock: BrowserWindow | null = null;
 const panels = new Map<WindowKind, BrowserWindow>();
+const confirmedDraftCloses = new WeakSet<BrowserWindow>();
 const panelModules: Partial<Record<WindowKind, string>> = { mail: 'ovd-mail', draft: 'ovd-mail', files: 'ovd-files' };
 const moduleWindows = new Map<string, { moduleId: string; viewId: string; window: BrowserWindow }>();
 let moduleHost: ModuleHost | undefined;
@@ -145,6 +146,7 @@ async function selectModuleReference(raw: ModuleReferenceSummary): Promise<void>
 function broadcast(): void { for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('workspace:changed', currentState); }
 function commit(next: WorkspaceState): void {
   currentState = next;
+  mailModule?.onStateChanged(next);
   broadcast();
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { void saveState(currentState).catch(error => console.error('Workspace save failed', error)); }, 250);
@@ -206,6 +208,20 @@ async function openPanel(kind: WindowKind): Promise<void> {
     const bounds = win.getBounds();
     commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, ...bounds } : w) });
   };
+  if (kind === 'draft') {
+    let closing = false;
+    win.on('close', event => {
+      if (quitting || confirmedDraftCloses.has(win)) return;
+      event.preventDefault();
+      if (closing) return;
+      closing = true;
+      void mailModule?.flushDrafts().then(() => {
+        confirmedDraftCloses.add(win); if (!win.isDestroyed()) win.close();
+      }).catch(() => {
+        dialog.showErrorBox('Entwurf nicht gespeichert', 'Der Entwurf konnte nicht lokal gespeichert werden. Das Fenster bleibt geöffnet. Bitte die Speicherung erneut versuchen.');
+      }).finally(() => { closing = false; });
+    });
+  }
   win.on('move', rememberBounds);
   win.on('resize', rememberBounds);
   win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
@@ -229,7 +245,12 @@ async function dispatchAction(raw: unknown): Promise<void> {
   if (action.type === 'read_email' || action.type === 'open_window' && ['mail', 'draft'].includes(action.kind)) requireMailModule();
   if (action.type === 'open_file_manager' || action.type === 'open_window' && action.kind === 'files') requireFilesModule();
   if (action.type === 'create_draft') { await requireMailModule().createDraft({ ...(action.replyTo ? { sourceEmailId: action.replyTo, mode: 'reply' as const } : {}) }, { origin: 'ui', signal: new AbortController().signal }); return; }
-  if (action.type === 'update_draft' || action.type === 'attach_file' || action.type === 'remove_attachment') requireMailModule().validateAction(action);
+  if (action.type === 'update_draft' || action.type === 'attach_file' || action.type === 'remove_attachment') {
+    const module = requireMailModule(); module.validateAction(action);
+    commit(applyUiAction(currentState, action).state);
+    await module.saveDraft(action.draftId);
+    return;
+  }
   commit(applyUiAction(currentState, action).state);
   if (action.type === 'open_window' || action.type === 'read_email' || action.type === 'open_file_manager') {
     const kind = action.type === 'open_window' ? action.kind : action.type === 'read_email' ? 'mail' : 'files';
@@ -309,7 +330,10 @@ async function controlPanel(kind: WindowKind, action: 'minimize' | 'toggleMaximi
   if (!win || win.isDestroyed()) throw new Error('Dieses Fenster ist nicht geöffnet.');
   if (action === 'minimize') win.minimize();
   else if (action === 'toggleMaximize') { if (win.isMaximized()) win.unmaximize(); else win.maximize(); }
-  else win.close();
+  else {
+    if (kind === 'draft') { await mailModule?.flushDrafts(); confirmedDraftCloses.add(win); }
+    win.close();
+  }
   return { kind, action, closed: win.isDestroyed() };
 }
 function newWorkspaceChat(title?: string) {
@@ -587,6 +611,7 @@ async function initializeModules(): Promise<void> {
   moduleHost = new ModuleHost({ builtInRoot: path.join(app.getAppPath(), 'modules'), userRoot: path.join(userData, 'modules'), dataRoot: path.join(userData, 'module-data'), configFile: path.join(userData, 'module-settings.json'), capabilities: workspaceCapabilities,
     activateBuiltin: async id => { if (id === 'ovd-mail') await initializeMailModule(); if (id === 'ovd-files') await initializeFilesModule(); if (id === 'ovd-mcp') await initializeMcpModule(); },
     beforeDisable: async id => {
+      if (id === 'ovd-mail') await mailModule?.flushDrafts();
       if (id === 'ovd-mail' && mailModule?.getSendingCount()) throw new Error('Bitte warte auf den laufenden Mailversand.');
       if (id === 'ovd-mail' && mailModule?.getSettingsStatus() !== undefined && mailModule.getSettingsStatus() !== 'clean') throw new Error('Bitte Mail-Einstellungen zuerst speichern oder zurücksetzen.');
       if (id === 'ovd-mcp' && mcpSettingsStatus !== 'clean') throw new Error('Bitte die MCP-Einstellungen zuerst speichern oder zurücksetzen.');
@@ -686,9 +711,33 @@ app.on('before-quit', event => {
   quitting = true;
   if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; currentState = updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m)); }
   if (saveTimer) clearTimeout(saveTimer);
-  void saveState(currentState).catch(error => {
-    console.error('Workspace save failed', error);
-    dialog.showErrorBox('OpenVibeDesk', 'Der aktuelle Zustand konnte vor dem Beenden nicht gespeichert werden.');
-  }).finally(async () => { try { await mcpModule?.deactivate(); } catch { /* Other windows still shut down even if a transport is already gone. */ } moduleHost?.dispose(); readyToQuit = true; app.quit(); });
+  void (async () => {
+    try {
+      await mailModule?.flushDrafts();
+      await saveState(currentState);
+    } catch (error) {
+      console.error('Workspace save failed', error);
+      quitting = false; allowSettingsUnload = false;
+      dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Der aktuelle Zustand konnte vor dem Beenden nicht gespeichert werden. Deine Entwürfe bleiben geöffnet. Bitte die Speicherung erneut versuchen.');
+      return;
+    }
+    try { await mcpModule?.deactivate(); } catch { /* Other windows still shut down even if a transport is already gone. */ }
+    // Cleanup can await external transports while a last renderer edit arrives.
+    // Only quit after the exact latest state has a confirmed disk acknowledgement.
+    try {
+      while (true) {
+        await mailModule?.flushDrafts();
+        const snapshot = currentState;
+        await saveState(snapshot);
+        if (currentState === snapshot) break;
+      }
+    } catch (error) {
+      console.error('Workspace save failed', error);
+      quitting = false; allowSettingsUnload = false;
+      dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Die letzten Änderungen konnten nicht gespeichert werden. Bitte die Speicherung erneut versuchen.');
+      return;
+    }
+    moduleHost?.dispose(); readyToQuit = true; app.quit();
+  })();
 });
 app.on('window-all-closed', () => app.quit());

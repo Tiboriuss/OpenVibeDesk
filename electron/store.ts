@@ -30,11 +30,20 @@ export function loadState(): WorkspaceState | null {
 }
 
 export function saveState(state: WorkspaceState): Promise<void> {
+  // Capture the exact requested revision before waiting for earlier disk writes.
+  const serialized = JSON.stringify(state);
   const operation = writeQueue.then(async () => {
-    db.run('INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', ['workspace', JSON.stringify(state)]);
+    db.run('INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', ['workspace', serialized]);
     const temporary = `${filePath}.tmp`;
-    await fs.writeFile(temporary, Buffer.from(db.export()));
+    const file = await fs.open(temporary, 'w');
+    try { await file.writeFile(Buffer.from(db.export())); await file.sync(); }
+    finally { await file.close(); }
     await fs.rename(temporary, filePath);
+    // Flush the directory entry as well as the SQLite bytes before acknowledging.
+    if (process.platform !== 'win32') {
+      const directory = await fs.open(path.dirname(filePath), 'r');
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
   });
   writeQueue = operation.catch(() => {});
   return operation;

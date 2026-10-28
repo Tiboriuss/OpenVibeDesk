@@ -146,7 +146,17 @@ Sending, destructive actions and protected settings use the common, understandab
 
 [`WorkspaceState`](../shared/model.ts) includes window positions, retained sample mail, drafts, settings and chat sessions. [`electron/store.ts`](../electron/store.ts) stores it as a JSON value in a local SQLite table. Unsent chat text and pending reference metadata are also kept in renderer-local storage for recovery. The SQLite file is not encrypted. Although fetched IMAP messages are cached only in memory, local drafts, explicitly sent reference snapshots and chat responses can contain real mail or file content. Snapshots preserve bounded text and metadata for history and forks after a restart. Downloaded attachments are written to the user's selected location.
 
+Workspace writes capture their serialized snapshot when requested, then run in order. The store writes the exported SQLite bytes to a temporary file, flushes that file, atomically replaces `workspace.sqlite`, and flushes the directory entry on non-Windows platforms before acknowledging success. This strengthens the existing storage path without introducing a new database schema.
+
 Before a persistent mail cache is introduced, the plan calls for a relational schema for accounts, folders, messages, MIME parts, threads, drafts, attachments and sync cursors, with versioned, transactional migrations. Large attachments belong in managed files, with metadata and references in SQLite. The current `sql.js` implementation loads/exports the complete database and atomically writes its file; it is not yet the planned large-mailbox store.
+
+### Draft persistence and recovery
+
+The Mail module's [DraftPersistence](../modules/ovd-mail/backend/draft-persistence.ts) compares complete draft revisions, queues pending changes, and acknowledges only the revision actually written. Its [shared status contract](../shared/drafts.ts) contains `draftId`, `contentUpdatedAt`, `status: saving | saved | error`, an optional actual `savedAt`, and any error. These transient status records are not persisted as draft content. Drafts loaded successfully from disk start as saved without a fabricated last-save time.
+
+The [draft frontend](../modules/ovd-mail/frontend/index.tsx) subscribes to status changes, rejects stale query responses, and accounts for pending renderer edits before displaying saved. It offers explicit save/retry and Cmd/Ctrl+S. The shared mutation path awaits persistence for edits and attachment changes; failures retain the in-memory draft. Native close and app quit flush pending drafts and keep the relevant window/application open if saving fails. Only successfully acknowledged revisions are guaranteed by this flow; unacknowledged edits can still be lost after an abrupt process failure.
+
+The assistant discovers `drafts.save` and `drafts.save_status` through the ordinary module catalog. `drafts.get` and `drafts.list` include `saveState`, and `drafts.update` waits for the same persistence path before reporting success. Startup restores stored account, recipient, body, reply-header and attachment-reference fields. Attachments remain external local files rather than managed copies. These acknowledgements concern local draft storage, separately from SMTP outcomes and any future Sent-folder reconciliation.
 
 ## Mail pipeline
 

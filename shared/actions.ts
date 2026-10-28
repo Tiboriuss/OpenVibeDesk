@@ -36,6 +36,10 @@ function openWindow(state: WorkspaceState, kind: WindowKind): WorkspaceState {
   return { ...state, windows: [...state.windows, win] };
 }
 
+function draftUpdatedAt(draft: Draft): string {
+  return new Date(Math.max(Date.now(), (Date.parse(draft.updatedAt) || 0) + 1)).toISOString();
+}
+
 export function applyUiAction(state: WorkspaceState, raw: unknown): ActionResult {
   const action = uiActionSchema.parse(raw);
   switch (action.type) {
@@ -59,16 +63,16 @@ export function applyUiAction(state: WorkspaceState, raw: unknown): ActionResult
     }
     case 'update_draft': {
       if (!state.drafts.some(d => d.id === action.draftId)) throw new Error('Draft not found');
-      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, ...action.patch, updatedAt: new Date().toISOString() } : d) }, message: 'Draft updated' };
+      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, ...action.patch, updatedAt: draftUpdatedAt(d) } : d) }, message: 'Draft updated' };
     }
     case 'attach_file': {
       if (!state.drafts.some(d => d.id === action.draftId)) throw new Error('Draft not found');
-      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: [...d.attachments, action.file], updatedAt: new Date().toISOString() } : d) }, message: 'File attached' };
+      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: [...d.attachments, action.file], updatedAt: draftUpdatedAt(d) } : d) }, message: 'File attached' };
     }
     case 'remove_attachment': {
       const draft = state.drafts.find(d => d.id === action.draftId);
       if (!draft || action.index >= draft.attachments.length) throw new Error('Attachment not found');
-      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: d.attachments.filter((_, index) => index !== action.index), updatedAt: new Date().toISOString() } : d) }, message: 'Attachment removed' };
+      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: d.attachments.filter((_, index) => index !== action.index), updatedAt: draftUpdatedAt(d) } : d) }, message: 'Attachment removed' };
     }
     case 'request_user_input': return { state, message: 'User input requested', requestedInput: action.prompt };
   }

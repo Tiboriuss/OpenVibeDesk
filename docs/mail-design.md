@@ -243,7 +243,11 @@ If drafts are later edited on several devices, make conflicts visible. Never sil
 
 Detect moved or deleted attachment files before the user attempts to send. A managed attachment copy may make drafts more robust.
 
-**Current implementation:** local draft records are stored with the workspace and restored on startup. New draft creation explicitly checks persistence before reporting success. Ordinary edits use the shared workspace save path, and the editor displays a general autosave note. A dedicated per-draft save/failure indicator, managed attachment copies, IMAP draft synchronization and cross-device conflict handling remain target work. Referenced attachment files are checked again for availability and changes when sending.
+**Current implementation:** local draft records retain the sending account, To/CC/BCC, subject, body, reply headers, attachment references and modification time in the existing workspace store. They are restored on startup. The [draft persistence coordinator](../modules/ovd-mail/backend/draft-persistence.ts) tracks each draft revision and publishes **saving**, **saved** or **error**; an older completed write cannot acknowledge newer edits. The [editor](../modules/ovd-mail/frontend/DraftView.tsx) shows that actual state, a successful save time when available, and a save/retry button with **Cmd/Ctrl+S**. Drafts recovered from disk show that they are saved without inventing a historical save timestamp.
+
+Draft creation and updates wait for persistence before reporting successful storage. Through the same module capabilities, the assistant can inspect `saveState` in `drafts.get`/`drafts.list`, request `drafts.save`, or check `drafts.save_status`. Those tools remain available through normal selective discovery. A save failure retains the current edits in memory and displays an actionable error. Closing the draft window or quitting flushes pending changes and is blocked if saving fails. An abrupt process or system failure can still lose edits that have not yet received a successful save acknowledgement.
+
+Attachments remain references to local files, which are checked again for availability and changes when sending. Managed attachment copies, IMAP draft-folder synchronization and cross-device conflict handling remain target work. Local draft persistence does not send a message or file a copy in Sent.
 
 ## 6. Sending and outcomes
 

@@ -1,15 +1,26 @@
 import { useEffect, useState } from 'react';
-import { Paperclip, Send, X } from 'lucide-react';
+import { Check, LoaderCircle, Paperclip, Save, Send, TriangleAlert, X } from 'lucide-react';
 import type { Draft } from '../../../shared/model';
+import type { DraftSaveState } from '../../../shared/drafts';
 import type { MailSendResult } from '../../../shared/mail';
 import './draft-view.css';
 
-export function DraftView({ draft, accounts = [], onUpdate, onAttach, onRemoveAttachment, onSend }: { draft?: Draft; accounts?: { id: string; name: string; email: string }[]; onUpdate(patch: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; accountId?: string }): void; onAttach(): void; onRemoveAttachment?(index: number): void; onSend?(): Promise<void | MailSendResult> }) {
+export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, onAttach, onRemoveAttachment, onSend }: { draft?: Draft; saveState?: DraftSaveState; onSave?(): Promise<void>; accounts?: { id: string; name: string; email: string }[]; onUpdate(patch: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; accountId?: string }): void; onAttach(): void; onRemoveAttachment?(index: number): void; onSend?(): Promise<void | MailSendResult> }) {
   const [showCopies, setShowCopies] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
   useEffect(() => { setShowCopies(!!(draft?.cc || draft?.bcc)); }, [draft?.id]);
   useEffect(() => { setSendError(''); }, [draft?.id]);
+  useEffect(() => {
+    if (!draft || !onSave) return;
+    const saveShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return;
+      event.preventDefault();
+      if (saveState?.status !== 'saving' && !sending) void onSave();
+    };
+    window.addEventListener('keydown', saveShortcut);
+    return () => window.removeEventListener('keydown', saveShortcut);
+  }, [draft?.id, onSave, saveState?.status, sending]);
   if (!draft) return <div className="empty-detail">Kein Entwurf ausgewählt.</div>;
   const deliveryStatus = draft.deliveryStatus ?? 'draft';
   const locked = sending || deliveryStatus !== 'draft';
@@ -21,8 +32,18 @@ export function DraftView({ draft, accounts = [], onUpdate, onAttach, onRemoveAt
     finally { setSending(false); }
   };
   const formatSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  const savedDate = saveState?.savedAt ? new Date(saveState.savedAt) : undefined;
+  const savedTime = savedDate && Number.isFinite(savedDate.getTime()) ? savedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : undefined;
+  const saveLabel = saveState?.status === 'saved' ? `Lokal gespeichert${savedTime ? ` · ${savedTime}` : ''}` : saveState?.status === 'saving' ? 'Wird gespeichert …' : saveState?.status === 'error' ? 'Speicherung nicht bestätigt' : 'Speicherstatus wird geladen …';
   return <div className="draft-layout">
-    <div className="draft-toolbar"><div><small>ENTWURF</small><h2>{draft.replyTo || draft.inReplyTo ? 'Antwort' : 'Neue Nachricht'}</h2></div><span>Wird automatisch lokal gespeichert</span></div>
+    <div className="draft-toolbar"><div><small>ENTWURF</small><h2>{draft.replyTo || draft.inReplyTo ? 'Antwort' : 'Neue Nachricht'}</h2></div><div className={`draft-save-controls ${saveState?.status ?? 'loading'}`}>
+      <span className="draft-save-status" role="status" aria-live="polite" title={savedDate && Number.isFinite(savedDate.getTime()) ? `Zuletzt lokal gespeichert: ${savedDate.toLocaleString()}` : undefined}>
+        {saveState?.status === 'saved' ? <Check size={14} aria-hidden="true" /> : saveState?.status === 'error' ? <TriangleAlert size={14} aria-hidden="true" /> : <LoaderCircle size={14} className="draft-save-spinner" aria-hidden="true" />}
+        <span>{saveLabel}</span>
+      </span>
+      {onSave && <button className="draft-save-button" type="button" onClick={() => void onSave()} disabled={saveState?.status === 'saving' || sending || deliveryStatus === 'sending'} aria-label={saveState?.status === 'error' ? 'Entwurf erneut lokal speichern' : 'Entwurf lokal speichern'} title="Lokal speichern (⌘S / Strg+S)"><Save size={15} aria-hidden="true" /></button>}
+    </div></div>
+    {saveState?.status === 'error' && <p className="draft-save-error" role="alert">{saveState.error || 'Die letzte Änderung konnte nicht lokal gespeichert werden.'} Deine Änderungen sind noch im Fenster verfügbar. Bitte erneut speichern.</p>}
     <div className="draft-fields">
       <label htmlFor="draft-account">Von<select id="draft-account" disabled={locked} value={draft.accountId ?? ''} onChange={event => onUpdate({ accountId: event.target.value })}><option value="">{accounts.length ? 'Sendekonto auswählen' : 'Kein Mailkonto eingerichtet'}</option>{accounts.map(account => <option value={account.id} key={account.id}>{account.name} · {account.email}</option>)}</select></label>
       <div className="draft-to-row"><label htmlFor="draft-to">An<input id="draft-to" disabled={locked} value={draft.to} onChange={event => onUpdate({ to: event.target.value })} placeholder="name@beispiel.de" /></label><button type="button" className="draft-copy-toggle" onClick={() => setShowCopies(value => !value)} aria-expanded={showCopies} aria-controls="draft-copy-fields">CC / BCC</button></div>
