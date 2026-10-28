@@ -1,0 +1,9 @@
+.mail-reader-controls{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:18px 0 10px;padding-top:12px;border-top:1px solid var(--line);font-size:10px;color:var(--muted)}
+.mail-reader-format{display:inline-flex;flex:none;padding:2px;border:1px solid var(--line);border-radius:7px;background:var(--canvas)}
+.mail-reader-format button{padding:4px 8px;border:0;border-radius:5px;background:transparent;color:var(--muted);font:inherit;font-size:10px;font-weight:600}
+.mail-reader-format button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent-dark)}
+.mail-reader-format button:disabled{opacity:.5}
+.mail-reader-images{display:inline-flex;align-items:center;gap:4px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--accent-dark);font-size:10px}
+.mail-reader-images:disabled{opacity:.5}.mail-reader-note{flex-basis:100%;margin:0;color:var(--muted);font-size:10px;line-height:1.4}
+.mail-html-body{width:100%;min-width:0}.mail-html-frame{display:block;width:100%;max-width:100%;min-height:180px;border:0;background:#fff}
+.mail-html-error{margin:8px 0;color:#952c3d;font-size:11px;line-height:1.5}.mail-html-unavailable{margin:7px 0;color:var(--muted);font-size:10px;line-height:1.4}

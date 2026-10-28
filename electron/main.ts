@@ -154,6 +154,10 @@ function commit(next: WorkspaceState): void {
 function setupWindow(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
+  win.webContents.on('will-frame-navigate', event => {
+    // Static srcdoc readers may be replaced by their parent, but never navigate away.
+    if (event.isMainFrame || (event.frame?.url === 'about:srcdoc' && event.url !== 'about:srcdoc')) event.preventDefault();
+  });
 }
 function panelTitle(kind: WindowKind): string { return { mail: 'Mail', chat: 'Assistant', draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen', sessions: 'Chats' }[kind]; }
 

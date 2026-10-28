@@ -113,6 +113,8 @@ const api: WorkspaceApi = {
   listMailMessages: (accountId, folder, cursor) => ipcRenderer.invoke('mail:messages:list', accountId, folder, cursor),
   getCachedMail: (accountId, folder, messageId) => ipcRenderer.invoke('mail:message:cached', accountId, folder, messageId),
   onMailMessageChanged: callback => { const listener = (_event: Electron.IpcRendererEvent, message: import('../shared/mail').ImapMessage) => callback(message); ipcRenderer.on('mail:message-changed', listener); return () => ipcRenderer.removeListener('mail:message-changed', listener); },
+  setMailDisplay: (id, patch) => ipcRenderer.invoke('mail:message:display', id, patch),
+  openMailLink: (id, url) => ipcRenderer.invoke('mail:message:open-link', id, url),
   loadMailBody: messageId => ipcRenderer.invoke('mail:message:body', messageId),
   createMailDraft: (accountId, messageId) => ipcRenderer.invoke('mail:draft:create', accountId, messageId),
   downloadMailAttachment: (messageId, index) => ipcRenderer.invoke('mail:attachment:download', messageId, index),

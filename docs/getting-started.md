@@ -56,6 +56,14 @@ Open **Settings → Email** (**Einstellungen → E-Mail**) and add an IMAP accou
 
 Use the Mail window to browse folders and messages. Drag a message into chat to reference it. The [mail design guide](mail-design.md) describes the intended workflow and identifies work that remains beyond the current implementation.
 
+### Read HTML mail
+
+When a message has a usable HTML alternative, the Mail reader displays it automatically. Use **HTML** or **Text** in the reading pane to switch views. Messages without HTML use text; a partially loaded view is marked accordingly. This does not mark the message read.
+
+External images start blocked. Select **Load external images** (currently **Externe Bilder laden**) to show them for that message, or **Hide external images** (**Externe Bilder ausblenden**) to block them again. Loading contacts external servers and may reveal your IP address and access time. Embedded supported raster images are handled separately. The choice applies to the loaded message in the current session rather than becoming a permanent account setting.
+
+The assistant can perform the same actions, for example: “Show this email as HTML,” “Switch to the text view,” or “Load the external images in this message.” Image loading follows your saved confirmation mode. Mail links open in the default external application after an intentional click. The reader removes active content and limits sender CSS, so complex layouts may differ from the sender's original. For details, see [HTML mail behavior](mail-design.md#html-email).
+
 ### Configure optional modules and MCP
 
 Open **Settings → Modules** (**Einstellungen → Module**) to manage optional modules. The Assistant is required. The module navigation order is configurable under **Modules → Sidebar & dock** (**Module → Seitenleiste & Dock**).

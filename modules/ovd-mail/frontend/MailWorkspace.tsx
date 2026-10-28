@@ -271,6 +271,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
           onRefresh={() => { if (queryResults && queryRequest) { void queryMail({ ...queryRequest, cursor: undefined }).catch(reason => setError(reason instanceof Error ? reason.message : 'Die Abfrage konnte nicht aktualisiert werden.')); return; } if (searchResults) { void searchMail(searchResults.query); return; } setPendingOpen(undefined); refreshVersion.current++; setRefresh(refreshVersion.current); }}
           onSettings={openSettings} onCompose={accountId ? () => openDraft() : undefined} onReply={message => openDraft(message.id)} onToggleRead={changeRead}
           onDownloadAttachment={async (message, index) => { await window.workspace.downloadMailAttachment(message.id, index); }}
+          onDisplay={async (id, patch) => { await window.workspace.setMailDisplay(id, patch); }} onOpenLink={(id, url) => window.workspace.openMailLink(id, url)}
           onDrafts={() => { clearSearch(); setPendingOpen(undefined); setMode('drafts'); }} draftCount={editableDrafts.length} draftsSelected={mode === 'drafts'} draftsView={draftsView}/>}
     </div>
   </div>;

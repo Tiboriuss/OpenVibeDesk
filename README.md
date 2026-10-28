@@ -15,7 +15,7 @@ This is an early, single-user development version. Development and practical use
 | Area | Current scope |
 | --- | --- |
 | **Assistant** | Streaming, Markdown, session management, chat branches, mail/chat/file references, time and calculation tools, and configurable agent execution. |
-| **Mail** | IMAP accounts, folders, server search, combined filters and counts, plain-text reading, attachments, local drafts, SMTP sending, and separate Sent-copy filing with retry. |
+| **Mail** | IMAP accounts, folders, server search, combined filters and counts, HTML/text reading with controlled image loading, attachments, local drafts, SMTP sending, and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
 
@@ -62,7 +62,7 @@ Custom modules are discovered at startup under `<userData>/modules/`. Their exac
 
 - **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
 - **AI provider:** Messages, selected references, and requested tool results are sent to the configured provider. A local desktop app can use either a local or remote model endpoint.
-- **Mail:** OAuth, HTML rendering, full synchronization, and a durable offline cache are not implemented. SMTP server acceptance does not guarantee delivery. Sent-copy filing has its own visible status and retry; a filing failure never triggers another SMTP send.
+- **Mail:** OAuth, full synchronization, HTML composition and a durable offline cache are not implemented. The HTML reader supports a restricted subset of sender formatting; remote images start blocked and are enabled per message. SMTP server acceptance does not guarantee delivery. Sent-copy filing has its own visible status and retry; a filing failure never triggers another SMTP send.
 - **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
 - **Extensions:** MCP OAuth, resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
 
@@ -75,7 +75,7 @@ The internal package name `ai-workspace` and storage identifiers are retained to
 | Area | Current state | Next work |
 | --- | --- | --- |
 | Desktop and chat | Usable foundation | Improve usability, accessibility, and reliability. |
-| Mail | Basic reading and sending | Add OAuth, HTML rendering, synchronization, and offline caching. |
+| Mail | HTML/text reading, draft recovery and separate Sent filing | Add OAuth, synchronization, offline caching and further everyday mail actions. |
 | Modules and MCP | Shared registration and selective tool discovery | Exercise the module contract further; add MCP resources, prompts, and OAuth. |
 | Distribution | Local development and packaging scripts | Validate platforms, signed packages, data migrations, and updates. |
 

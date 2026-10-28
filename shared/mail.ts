@@ -24,6 +24,11 @@ export interface ImapMessage {
   date: string;
   receivedAt?: string;
   bodyText: string;
+  /** Untrusted markup, only consumed by the isolated Mail renderer. */
+  bodyHtml?: string;
+  htmlTruncated?: boolean;
+  inlineImages?: Record<string, string>;
+  display?: import('./mail-display').MailDisplayState;
   bodyLoaded: boolean;
   attachments: { name: string; size: number; part: string }[];
   read: boolean;

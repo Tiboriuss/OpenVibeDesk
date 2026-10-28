@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Archive, ArrowLeft, ChevronDown, Download, FileText, Folder, Inbox, Mail, MailCheck, MailOpen, MoreHorizontal, Paperclip, PenLine, RefreshCw, Reply, Search, Send, Settings, ShieldAlert, Trash2, X } from 'lucide-react';
 import type { ImapFolder, ImapMessage, MailAccountSummary } from '../../../shared/mail';
+import { HtmlMailBody } from './HtmlMailBody';
 import { writeMailDrag } from '../../../src/mail-reference';
 import './imap-mail.css';
 
@@ -32,6 +33,8 @@ type Props = {
   onReply?(message: ImapMessage): void;
   onDownloadAttachment?(message: ImapMessage, attachmentIndex: number): Promise<void> | void;
   onToggleRead?(message: ImapMessage): Promise<void> | void;
+  onDisplay?(emailId: string, patch: { format?: 'auto' | 'html' | 'text'; remoteImages?: boolean }): Promise<void>;
+  onOpenLink?(emailId: string, url: string): Promise<void>;
   onDrafts(): void;
   draftCount: number;
   draftsSelected?: boolean;
@@ -74,7 +77,7 @@ function folderDisplay(folder: ImapFolder) {
   return { label: folder.name || folder.path, Icon: Folder, primary: false };
 }
 
-export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, error, hasMore = false, onAccount, onFolder, onSelect, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
+export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, error, hasMore = false, onAccount, onFolder, onSelect, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDisplay, onOpenLink, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
   const [showDetail, setShowDetail] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [query, setQuery] = useState('');
@@ -86,6 +89,18 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
   const [marking, setMarking] = useState<string>();
   const [actionError, setActionError] = useState('');
   const selected = messages.find(message => message.id === selectedMessageId);
+  const [displayBusy, setDisplayBusy] = useState<string>();
+  const [remoteCount, setRemoteCount] = useState<{ id: string; count: number }>();
+  const displayFormat = selected?.display?.format ?? 'auto';
+  const useHtml = !!selected?.bodyHtml?.trim() && displayFormat !== 'text';
+  const remoteImages = selected?.display?.remoteImages === true;
+  const changeDisplay = async (patch: { format?: 'auto' | 'html' | 'text'; remoteImages?: boolean }) => {
+    if (!selected || !onDisplay || displayBusy) return;
+    const id = selected.id; setDisplayBusy(id); setActionError('');
+    try { await onDisplay(id, patch); }
+    catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Die Leseansicht konnte nicht geändert werden.'); }
+    finally { setDisplayBusy(current => current === id ? undefined : current); }
+  };
   const currentAccount = accounts.find(account => account.id === selectedAccountId);
   const selectedAccount = accounts.find(account => account.id === selected?.accountId) ?? currentAccount;
   const resultCount = searchState ? `${searchState.countExact === false ? 'Mindestens ' : ''}${searchState.total}${searchState.countExact === undefined && searchState.hasMore ? '+' : ''}` : '';
@@ -216,8 +231,16 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
             <div className="imap-recipient-line"><span>An</span><span title={selected.to}>{selected.to || 'Empfänger nicht angegeben'}</span></div>
             {showDetails && <dl className="imap-metadata"><div><dt>Von</dt><dd>{selected.from}</dd></div><div><dt>An</dt><dd>{selected.to || 'Nicht angegeben'}</dd></div>{selected.cc && <div><dt>CC</dt><dd>{selected.cc}</dd></div>}<div><dt>Konto</dt><dd>{selectedAccount?.email}</dd></div>{selected.folder && <div><dt>Ordner</dt><dd>{selected.folder}</dd></div>}{selected.receivedAt && <div><dt>Eingegangen</dt><dd>{formatDate(selected.receivedAt, true)}</dd></div>}{selected.messageId && <div><dt>Nachrichten-ID</dt><dd>{selected.messageId}</dd></div>}</dl>}
             {selected.attachments.length > 0 && <div className="imap-attachments"><h3><Paperclip size={13} />{selected.attachments.length} {selected.attachments.length === 1 ? 'Anhang' : 'Anhänge'}</h3><div className="imap-attachment-list">{selected.attachments.map((attachment, index) => <div className="imap-attachment" key={`${attachment.name}-${index}`}><FileText size={20} /><div><span>{attachment.name || 'Anhang'}</span><small>{formatSize(attachment.size)}</small></div>{onDownloadAttachment && <button type="button" disabled={!!downloading || loading} onClick={() => void downloadAttachment(selected, index)} aria-label={`${attachment.name || 'Anhang'} herunterladen`} title="Anhang herunterladen"><Download size={16} />{downloading?.messageId === selected.id && downloading.index === index && <span>Wird geladen …</span>}</button>}</div>)}</div></div>}
-            <div className="imap-body-text">{bodyLoading ? 'Nachricht wird geladen …' : selected.bodyLoaded ? selected.bodyText || 'Für diese Nachricht ist kein Text verfügbar.' : 'Nachricht konnte nicht geladen werden. Erneut auswählen zum Wiederholen.'}</div>
-            {selected.truncated && <p className="imap-truncated">Diese Nachricht wurde nur teilweise geladen.</p>}
+            {selected.bodyLoaded && !bodyLoading && selected.bodyHtml?.trim() && <div className="mail-reader-controls" aria-label="Leseansicht">
+              <div className="mail-reader-format" role="group" aria-label="Darstellung der Nachricht">
+                <button type="button" aria-pressed={useHtml} disabled={!onDisplay || !!displayBusy} onClick={() => void changeDisplay({ format: 'html' })}>HTML</button>
+                <button type="button" aria-pressed={!useHtml} disabled={!onDisplay || !!displayBusy} onClick={() => void changeDisplay({ format: 'text' })}>Text</button>
+              </div>
+              {useHtml && ((remoteCount?.id === selected.id && remoteCount.count > 0) || remoteImages) && <button type="button" className="mail-reader-images" disabled={!onDisplay || !!displayBusy} onClick={() => void changeDisplay({ remoteImages: !remoteImages })}>{remoteImages ? 'Externe Bilder ausblenden' : `Externe Bilder laden${remoteCount?.id === selected.id ? ` (${remoteCount.count})` : ''}`}</button>}
+              {useHtml && <p className="mail-reader-note">{remoteImages ? 'Externe Bilder sind für diese Nachricht freigegeben.' : 'Externe Bilder sind blockiert. Beim Laden kann der Absender den Abruf erkennen.'}</p>}
+            </div>}
+            {bodyLoading ? <div className="imap-body-text" role="status">Nachricht wird geladen …</div> : selected.bodyLoaded ? useHtml ? <HtmlMailBody key={selected.id} html={selected.bodyHtml!} remoteImages={remoteImages} inlineImages={selected.inlineImages} onRemoteImagesCount={count => setRemoteCount(current => current?.id === selected.id && current.count === count ? current : { id: selected.id, count })} onOpenLink={onOpenLink ? url => onOpenLink(selected.id, url) : undefined} /> : <div className="imap-body-text">{selected.bodyText || 'Für diese Nachricht ist kein Text verfügbar.'}</div> : <div className="imap-body-text">Nachricht konnte nicht geladen werden. Erneut auswählen zum Wiederholen.</div>}
+            {(useHtml ? selected.htmlTruncated : selected.truncated) && <p className="imap-truncated">Diese Nachricht wurde nur teilweise geladen.</p>}
             {onReply && selected.bodyLoaded && !bodyLoading && <div className="imap-message-footer"><button type="button" onClick={() => onReply(selected)}><Reply size={16} />Antworten</button><span>Zum Referenzieren kannst du diese Mail in den Chat ziehen.</span></div>}
           </article></div> : <div className="imap-detail-empty"><span><Mail size={30} /></span><strong>Deine Nachrichten im Blick</strong><p>Wähle links eine Mail aus, um sie hier zu lesen.</p><small>Mails lassen sich direkt in den OVD-Chat ziehen.</small></div>}
         </section>

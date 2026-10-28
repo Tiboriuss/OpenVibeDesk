@@ -18,6 +18,7 @@ export type ImapMessage = {
   messageId?: string; inReplyTo?: string; references?: string[]; replyTo?: string; cc?: string;
   fromAddresses: string[]; replyToAddresses: string[]; toAddresses: string[]; ccAddresses: string[];
   bodyLoaded: boolean; truncated: boolean;
+  bodyHtml?: string; htmlTruncated?: boolean; inlineImages?: Record<string, string>;
 };
 
 const validHost = (host: string) => {
@@ -38,6 +39,11 @@ const configSchema = accountSchema.omit({ password: true });
 const pathSchema = z.string().min(1).max(1024).refine(noControls);
 const PASSWORD_SERVICE = 'OpenVibeDesk Mail IMAP';
 const TEXT_BYTE_LIMIT = 128 * 1024;
+const TEXT_CHAR_LIMIT = 20_000;
+const HTML_BYTE_LIMIT = 128 * 1024;
+const INLINE_IMAGE_LIMIT = 512 * 1024;
+const INLINE_TOTAL_LIMIT = 2 * 1024 * 1024;
+const INLINE_IMAGE_COUNT = 10;
 const ATTACHMENT_LIMIT = 25 * 1024 * 1024;
 const MESSAGE_LIMIT = 25;
 const OPERATION_TIMEOUT = 45_000;
@@ -150,7 +156,7 @@ export async function listImapFolders(config: MailAccountConfig): Promise<ImapFo
 const partSchema = z.string().max(80).regex(/^\d+(?:\.\d+)*$/);
 const uidSchema = z.number().int().positive().max(0xffffffff);
 const uidValiditySchema = z.string().regex(/^\d{1,20}$/);
-type Part = { part: string; type: string; disposition: string; name: string; size: number };
+type Part = { part: string; type: string; disposition: string; name: string; size: number; cid?: string };
 
 function messageParts(root: MessageStructureObject | undefined): Part[] {
   const result: Part[] = [];
@@ -161,7 +167,8 @@ function messageParts(root: MessageStructureObject | undefined): Part[] {
     const name = node.dispositionParameters?.filename ?? node.parameters?.name ?? '';
     const part = node.part ?? (!node.childNodes?.length ? '1' : '');
     if (partSchema.safeParse(part).success && (disposition === 'attachment' || !!name || !node.childNodes?.length)) {
-      result.push({ part, type, disposition, name: name.slice(0, 200), size: Math.max(0, Number(node.size) || 0) });
+      const cid = normalizeContentId(node.id);
+      result.push({ part, type, disposition, name: name.slice(0, 200), size: Math.max(0, Number(node.size) || 0), ...(cid ? { cid } : {}) });
     }
     if (disposition !== 'attachment' && !name) for (const child of node.childNodes ?? []) visit(child, depth + 1);
   }
@@ -278,7 +285,71 @@ function validateMessageIdentity(rawPath: string, rawValidity: string, rawUid: n
   return { path: path.data, validity: validity.data, uid: uid.data };
 }
 
-export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number): Promise<{ bodyText: string; bodyLoaded: true; truncated: boolean }> {
+export interface ImapMessageBody {
+  bodyText: string;
+  /** Raw source stays in the display path; the reader sanitizes it before rendering. */
+  bodyHtml?: string;
+  bodyLoaded: true;
+  /** Whether the plain-text view/reference is incomplete. */
+  truncated: boolean;
+  htmlTruncated?: boolean;
+  /** Referenced, bounded raster MIME parts only; never remote image URLs. */
+  inlineImages?: Record<string, string>;
+}
+
+function normalizeContentId(raw: string | undefined): string | undefined {
+  if (!raw) return;
+  let value = raw.trim();
+  try { value = decodeURIComponent(value); } catch { /* Keep literal, malformed %-escapes as part of the ID. */ }
+  value = value.trim().replace(/^<|>$/g, '');
+  return value.length > 0 && value.length <= 500 && !/[<>\u0000-\u0020\u007f]/.test(value) ? value : undefined;
+}
+
+function referencedContentIds(html: string): Set<string> {
+  const ids = new Set<string>();
+  // This only identifies MIME resources to fetch. It never sanitizes or renders HTML.
+  for (const match of html.matchAll(/\bcid:([^"'<>\s)]+)/gi)) {
+    const id = normalizeContentId(match[1]);
+    if (id) ids.add(id);
+    if (ids.size >= 100) break;
+  }
+  return ids;
+}
+
+function isRasterImage(type: string, content: Buffer): boolean {
+  if (type === 'image/png') return content.length >= 8 && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (type === 'image/jpeg') return content.length >= 3 && content[0] === 255 && content[1] === 216 && content[2] === 255;
+  if (type === 'image/gif') return ['GIF87a', 'GIF89a'].includes(content.subarray(0, 6).toString('ascii'));
+  if (type === 'image/webp') return content.length >= 12 && content.subarray(0, 4).toString('ascii') === 'RIFF' && content.subarray(8, 12).toString('ascii') === 'WEBP';
+  return false;
+}
+
+async function inlineMessageImages(client: ImapFlow, uid: number, parts: Part[], html: string): Promise<Record<string, string> | undefined> {
+  const referenced = referencedContentIds(html);
+  if (!referenced.size) return;
+  const images: Record<string, string> = Object.create(null);
+  const seen = new Set<string>();
+  let total = 0, attempts = 0;
+  for (const part of parts) {
+    if (!part.cid || !referenced.has(part.cid) || seen.has(part.cid) || part.disposition === 'attachment') continue;
+    if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(part.type)) continue;
+    seen.add(part.cid);
+    if (attempts >= INLINE_IMAGE_COUNT || total >= INLINE_TOTAL_LIMIT) break;
+    // BODYSTRUCTURE sizes describe transfer-encoded data. The decoded stream
+    // is bounded separately and must be complete before it can become an image.
+    if (part.size > INLINE_IMAGE_LIMIT * 2) continue;
+    attempts++;
+    try {
+      const loaded = await readPart(client, uid, part.part, Math.min(INLINE_IMAGE_LIMIT, INLINE_TOTAL_LIMIT - total));
+      total += loaded.content.length;
+      if (loaded.truncated || !loaded.content.length || !isRasterImage(part.type, loaded.content)) continue;
+      images[part.cid] = `data:${part.type};base64,${loaded.content.toString('base64')}`;
+    } catch { /* An unavailable embedded image must not hide otherwise readable mail text. */ }
+  }
+  return Object.keys(images).length ? images : undefined;
+}
+
+export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number): Promise<ImapMessageBody> {
   const identity = validateMessageIdentity(rawPath, rawValidity, rawUid);
   return withImap(config, undefined, async client => {
     const mailbox = await client.mailboxOpen(identity.path, { readOnly: true });
@@ -286,18 +357,39 @@ export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: s
     const message = await client.fetchOne(String(identity.uid), { uid: true, bodyStructure: true }, { uid: true });
     if (!message || message.uid !== identity.uid) throw new MailOperationError('Die Nachricht wurde nicht gefunden.');
     const parts = messageParts(message.bodyStructure);
-    const body = parts.find(part => part.type === 'text/plain' && part.disposition !== 'attachment' && !part.name)
-      ?? parts.find(part => part.type === 'text/html' && part.disposition !== 'attachment' && !part.name);
-    if (!body) return { bodyText: 'Für diese Nachricht ist keine Textansicht verfügbar.', bodyLoaded: true as const, truncated: !message.bodyStructure };
-    const loaded = await readPart(client, identity.uid, body.part, TEXT_BYTE_LIMIT);
-    let text: string, unsupported = false;
-    try { text = new TextDecoder(loaded.charset || 'utf-8').decode(loaded.content); }
-    catch { text = 'Die Zeichenkodierung dieser Nachricht wird noch nicht unterstützt.'; unsupported = true; }
-    if (body.type === 'text/html' && !unsupported) {
-      const parsed = await simpleParser(`Content-Type: text/html; charset=utf-8\r\n\r\n${text}`, { skipImageLinks: true, skipTextToHtml: true });
-      text = parsed.text ?? '';
+    const bodyPart = (type: string) => parts.find(part => part.type === type && part.disposition !== 'attachment' && !part.name);
+    const plainPart = bodyPart('text/plain'), htmlPart = bodyPart('text/html');
+    if (!plainPart && !htmlPart) return { bodyText: 'Für diese Nachricht ist keine Textansicht verfügbar.', bodyLoaded: true, truncated: !message.bodyStructure };
+
+    let text = '', plainTruncated = false, plainUnsupported = false;
+    if (plainPart) {
+      const loaded = await readPart(client, identity.uid, plainPart.part, TEXT_BYTE_LIMIT);
+      try { text = new TextDecoder(loaded.charset || 'utf-8').decode(loaded.content); }
+      catch { plainUnsupported = true; }
+      plainTruncated = loaded.truncated || text.length > TEXT_CHAR_LIMIT;
     }
-    return { bodyText: text.slice(0, 20_000), bodyLoaded: true as const, truncated: unsupported || loaded.truncated || text.length > 20_000 || body.size > TEXT_BYTE_LIMIT * 4 };
+
+    let bodyHtml: string | undefined, htmlTruncated = false;
+    if (htmlPart) {
+      const loaded = await readPart(client, identity.uid, htmlPart.part, HTML_BYTE_LIMIT);
+      try { bodyHtml = new TextDecoder(loaded.charset || 'utf-8').decode(loaded.content).slice(0, HTML_BYTE_LIMIT); }
+      catch { htmlTruncated = true; }
+      htmlTruncated ||= loaded.truncated;
+      if ((!plainPart || plainUnsupported) && bodyHtml !== undefined) {
+        // Conversion is for replies/references/model text only. Raw HTML is
+        // never substituted for plain text or trusted as model instructions.
+        const parsed = await simpleParser(`Content-Type: text/html; charset=utf-8\r\n\r\n${bodyHtml}`, { skipImageLinks: true, skipTextToHtml: true });
+        text = parsed.text ?? '';
+        plainUnsupported = false;
+        plainTruncated = htmlTruncated || text.length > TEXT_CHAR_LIMIT;
+      }
+    }
+    if (plainUnsupported || (!plainPart && bodyHtml === undefined)) text = 'Die Zeichenkodierung dieser Nachricht wird noch nicht unterstützt.';
+    const inlineImages = bodyHtml ? await inlineMessageImages(client, identity.uid, parts, bodyHtml) : undefined;
+    return { bodyText: text.slice(0, TEXT_CHAR_LIMIT), bodyLoaded: true,
+      truncated: plainUnsupported || plainTruncated || (!plainPart && bodyHtml === undefined),
+      ...(bodyHtml !== undefined ? { bodyHtml, htmlTruncated } : htmlPart ? { htmlTruncated: true } : {}),
+      ...(inlineImages ? { inlineImages } : {}) };
   });
 }
 

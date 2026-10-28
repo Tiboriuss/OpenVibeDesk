@@ -1,10 +1,12 @@
-import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
+import { app, dialog, ipcMain, shell, type BrowserWindow } from 'electron';
 import { promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import addressParser from 'nodemailer/lib/addressparser';
 import { DraftPersistence } from './draft-persistence';
 import { draftCollection } from '../../../shared/draft-status';
+import { defaultMailDisplay, mailDisplayPatchSchema, type MailDisplayPatch, type MailDisplayResult } from '../../../shared/mail-display';
+import { getExternalChatUrl } from '../../../shared/chat-links';
 import { OutgoingStore } from './outgoing-store';
 import { fileSentMessage } from './sent-service';
 import { applyUiAction, type UiAction } from '../../../shared/actions';
@@ -462,7 +464,7 @@ function cacheMailMessages(snapshot: AccountSnapshot, folder: string, messages: 
   const result = messages.map(message => {
     const id = createHash('sha256').update(JSON.stringify([accountId, imapConnectionIdentity(account), folder, message.uidValidity, message.uid])).digest('hex');
     const previous = liveMail.get(id)?.message;
-    const merged: ImapMessage = { ...message, id, accountId, accountName: account.name, folder, ...(previous?.bodyLoaded ? { bodyText: previous.bodyText, bodyLoaded: true, truncated: previous.truncated } : {}) };
+    const merged: ImapMessage = { ...message, id, accountId, accountName: account.name, folder, display: previous?.display ?? { ...defaultMailDisplay }, ...(previous?.bodyLoaded ? { bodyText: previous.bodyText, bodyHtml: previous.bodyHtml, htmlTruncated: previous.htmlTruncated, inlineImages: previous.inlineImages, bodyLoaded: true, truncated: previous.truncated } : {}) };
     liveMail.delete(id); liveMail.set(id, { accountId, folder, message: merged, epoch });
     return merged;
   });
@@ -575,11 +577,42 @@ async function listWorkspaceMail(args: MailCapabilityArgs<'mail.list_messages'>,
 async function loadMailMessage(messageId: unknown, context: OperationContext) {
 
     const entry = cachedMail(messageId);
+    if (entry.message.bodyLoaded) return entry.message;
     const body = await fetchImapMessageBody(mailAccount(entry.accountId), entry.folder, entry.message.uidValidity, entry.message.uid);
     context.signal.throwIfAborted(); assertCachedCurrent(entry);
     entry.message = { ...entry.message, ...body };
     panels.get('mail')?.webContents.send('mail:message-changed', entry.message);
     return entry.message;
+}
+function mailDisplayResult(emailId: string): MailDisplayResult {
+  const message = cachedMail(emailId).message;
+  const display = message.display ?? { ...defaultMailDisplay };
+  const htmlAvailable = !!message.bodyHtml?.trim();
+  const effectiveFormat = display.format === 'text' || !htmlAvailable ? 'text' : 'html';
+  return { emailId, display, effectiveFormat, htmlAvailable, htmlTruncated: message.htmlTruncated === true,
+    ...(!htmlAvailable && display.format === 'html' ? { message: 'Diese Mail enthält keine verfügbare HTML-Ansicht. Sie wird als Klartext angezeigt.' } : {}) };
+}
+async function setMailDisplay(emailId: string, input: MailDisplayPatch, context: OperationContext): Promise<MailDisplayResult> {
+  const patch = mailDisplayPatchSchema.parse(input);
+  await loadMailMessage(emailId, context);
+  const entry = cachedMail(emailId);
+  const previous = entry.message.display ?? { ...defaultMailDisplay };
+  if (patch.remoteImages === true && !previous.remoteImages && context.origin === 'agent') {
+    const allowed = await confirmCapability(context, 'Externe Bilder dieser Mail laden?', 'Bilder werden von externen Servern geladen. Der Absender kann dabei deine IP-Adresse und den Abrufzeitpunkt erfahren. Die Freigabe gilt nur für diese Nachricht.');
+    context.signal.throwIfAborted(); assertCachedCurrent(entry);
+    if (!allowed) return { ...mailDisplayResult(emailId), cancelled: true, message: 'Externe Bilder wurden nicht geladen; die Ansicht wurde nicht geändert.' };
+  }
+  context.signal.throwIfAborted(); assertCachedCurrent(entry);
+  entry.message = { ...entry.message, display: { ...(entry.message.display ?? defaultMailDisplay), ...patch } };
+  panels.get('mail')?.webContents.send('mail:message-changed', entry.message);
+  if (context.origin === 'agent') await openRealMail(emailId);
+  return mailDisplayResult(emailId);
+}
+async function openMailLink(emailId: string, rawUrl: unknown): Promise<void> {
+  cachedMail(emailId);
+  const url = getExternalChatUrl(rawUrl);
+  if (!url) throw new Error('Dieser Mail-Link kann nicht geöffnet werden.');
+  await shell.openExternal(url);
 }
 async function saveMailAttachment(messageId: unknown, index: unknown, context: OperationContext) {
 
@@ -757,6 +790,10 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open_folder'], async ({ accountId, folder, refresh }, context) => { requireMailboxAccess(context); const snapshot = accountSnapshot(accountId); const folders = await loadMailFolders(accountId); if (!folders.some(item => item.path === folder && item.selectable)) throw new Error('Mailordner nicht gefunden.'); await dispatchAction({ type: 'open_window', kind: 'mail' }); assertCurrent(snapshot); panels.get('mail')?.webContents.send('mail:show-real', { accountId, folder, refresh }); return { accountId, folder, openRequested: true }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.filter'], async args => { await dispatchAction({ type: 'open_window', kind: 'mail' }); if (activeMailView) panels.get('mail')?.webContents.send('mail:show-real', { accountId: activeMailView.accountId, folder: activeMailView.folder }); panels.get('mail')?.webContents.send('mail:filter', args); return { viewUpdateRequested: true, ...args }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.read'], async ({ emailId }, rawContext) => { const context = rawContext as OperationContext; const id = authorizedMailId(emailId, context); return { untrusted: true, email: await snapshotEmailReference(id, context.sessionId ?? getState().activeSessionId, context.signal) }; });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_display'], ({ emailId, display }, context) => setMailDisplay(authorizedMailId(emailId, context as OperationContext), display, context));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.display_status'], async ({ emailId }, context) => {
+    const id = authorizedMailId(emailId, context as OperationContext); await loadMailMessage(id, context); return mailDisplayResult(id);
+  });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open'], ({ emailId }, context) => openRealMail(authorizedMailId(emailId, context as OperationContext)));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_read'], async ({ emailId, read }, context) => { const id = authorizedMailId(emailId, context as OperationContext); await changeMailRead(id, read, context); return { emailId: id, read }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.download_attachment'], ({ emailId, index }, context) => saveMailAttachment(authorizedMailId(emailId, context as OperationContext), index, context));
@@ -820,6 +857,13 @@ function registerIpc(): void {
     if (entry.accountId !== accountId || entry.folder !== folder) throw new Error('Die Nachricht gehört zu einem anderen Mailordner.');
     return entry.message;
   });
+  ipcMain.handle('mail:message:display', (event, emailId: unknown, display: unknown) => {
+    verifyPanel(event, ['mail']); const args = mailCapabilitySchemas['mail.set_display'].parse({ emailId, display });
+    return setMailDisplay(authorizedMailId(args.emailId, uiOperationContext(event)), args.display, uiOperationContext(event));
+  });
+  ipcMain.handle('mail:message:open-link', (event, emailId: unknown, url: unknown) => {
+    verifyPanel(event, ['mail']); if (typeof emailId !== 'string') throw new Error('Ungültige Mailreferenz.'); return openMailLink(emailId, url);
+  });
   ipcMain.handle('mail:message:body', (event, messageId: unknown) => { verifyPanel(event, ['mail']); return loadMailMessage(messageId, uiOperationContext(event)); });
   ipcMain.handle('mail:draft:create', async (event, accountId: unknown, messageId: unknown) => {
     verifyPanel(event, ['mail']);
@@ -845,7 +889,7 @@ function validateAction(action: UiAction): void {
 }
 function getContext(context: OperationContext) {
   const ids = new Set([...(context.referenceIds ?? []), ...(activeMailView?.messageId ? [activeMailView.messageId] : [])]);
-  return { activeDraftId: getState().activeDraftId, mailView: activeMailView, referencedEmails: [...ids].slice(-20).map(id => { try { return emailReferenceSummary(id); } catch { return { id, unavailable: true }; } }), loadedMailCount: liveMail.size, draftCount: getState().drafts.length, mailToolAccess: realMailAllowed() };
+  return { activeDraftId: getState().activeDraftId, mailView: activeMailView ? { ...activeMailView, ...(activeMailView.messageId && liveMail.has(activeMailView.messageId) ? { display: mailDisplayResult(activeMailView.messageId) } : {}) } : null, referencedEmails: [...ids].slice(-20).map(id => { try { return emailReferenceSummary(id); } catch { return { id, unavailable: true }; } }), loadedMailCount: liveMail.size, draftCount: getState().drafts.length, mailToolAccess: realMailAllowed() };
 }
 return {
   initialize, registerCapabilities, registerIpc, validateAction, getContext,

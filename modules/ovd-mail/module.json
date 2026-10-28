@@ -3,7 +3,7 @@
   "id": "ovd-mail",
   "title": "Mail",
   "version": "0.1.0",
-  "description": "E-Mails mit gemeinsamen Filtern serverseitig zählen, nach Empfangszeit sortieren, suchen, lesen und öffnen; Mailentwürfe vorbereiten, versenden und angenommene Nachrichten getrennt im Gesendet-Ordner ablegen; Entwürfe, offene Ablagen und Versandverlauf getrennt prüfen.",
+  "description": "E-Mails mit gemeinsamen Filtern serverseitig zählen, nach Empfangszeit sortieren, suchen, lesen, als HTML oder Klartext anzeigen und öffnen; Mailentwürfe vorbereiten, versenden und angenommene Nachrichten getrennt im Gesendet-Ordner ablegen; Entwürfe, offene Ablagen und Versandverlauf getrennt prüfen.",
   "keywords": [
     "mail",
     "email",
@@ -55,6 +55,8 @@
     "mail.list_messages",
     "mail.read",
     "mail.open",
+    "mail.set_display",
+    "mail.display_status",
     "mail.set_read",
     "mail.download_attachment",
     "accounts.test",

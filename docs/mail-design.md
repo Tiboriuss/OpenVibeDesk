@@ -13,7 +13,7 @@ The initial protocol foundation is **IMAP for reading and synchronization** and 
 | Area | Present today | Still part of the target design |
 | --- | --- | --- |
 | Accounts | Multiple editable account groups, separate IMAP/SMTP checks, TLS and OS credential storage. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
-| Reading | Account/folder navigation, paged metadata, text reading, message details, attachment downloads and explicit read/unread changes. | Isolated HTML display, inline image handling and richer previews. |
+| Reading | Account/folder navigation, paged metadata, HTML/text reading, bounded inline images, per-message remote-image controls, message details, attachment downloads and explicit read/unread changes. | Broader sender-format compatibility and richer previews. |
 | Organizing | Server folder browsing and local view filters. | Stars/flags, move/archive/trash/restore/delete actions, folder editing and a unified inbox. |
 | Composing | Separate plain-text draft window, account selection, To/CC/BCC, attachments and a reply to the sender or `Reply-To`. | Recipient chips, reply-all, forwarding, signatures and rich-text composition. |
 | Sending | SMTP, confirmed manual send, separate Sent-copy filing/reconciliation and protection against repeating accepted or uncertain sends. | Complete delivery-state handling and wider provider synchronization. |
@@ -145,7 +145,7 @@ The target reader shows:
 
 Additional headers and technical details belong in an expandable details section.
 
-**Current implementation:** the text reader exposes message metadata, attachments, reply and read/unread actions. Opening a real message alone does **not** change its read state. Forwarding, archiving and deleting remain target actions.
+**Current implementation:** the HTML/text reader exposes message metadata, attachments, reply and read/unread actions. Opening a real message alone does **not** change its read state. Forwarding, archiving and deleting remain target actions.
 
 ### HTML email
 
@@ -159,7 +159,15 @@ Support both text and HTML, treating HTML as untrusted external content:
 
 HTML email requires suitable isolation and sanitization because it can contain active content and external resources. See [RFC 8621, HTML Email Display](https://www.rfc-editor.org/rfc/rfc8621.html#section-9.2).
 
-**Current implementation:** Mail displays text. An isolated HTML renderer and controlled image loading have not been implemented.
+**Current implementation:** the [Mail body service](../modules/ovd-mail/backend/mail-service.ts) loads plain-text and HTML alternatives independently without loading unrelated attachments. HTML is bounded to 128 KiB and the plain-text view/reference to 20,000 characters. HTML-only mail also gets a converted text fallback. The reader offers **HTML** and **Text**, with automatic HTML selection when a usable alternative exists; absent HTML falls back to text. Partial HTML and partial text have separate indicators. Opening or changing the view does not mark a message read.
+
+The [HTML builder](../modules/ovd-mail/frontend/mail-html.ts) uses [DOMPurify](https://github.com/cure53/DOMPurify), pinned in [package.json](../package.json), plus a restricted inline-CSS allowlist. Scripts, event handlers, forms, frames, plugins, SVG/MathML, external stylesheets and sender style blocks are removed. The result goes into [HtmlMailBody](../modules/ovd-mail/frontend/HtmlMailBody.tsx), a `srcdoc` iframe with `sandbox="allow-same-origin"` and no script, form, popup or top-navigation permission. The child document also has a restrictive Content Security Policy. `allow-same-origin` lets the parent manage sizing and intentional link clicks; it does not grant the mail permission to execute scripts. Frame navigation remains blocked. This is a constrained mail renderer, not a claim that all sender layouts render identically to a browser or other client.
+
+Remote HTTP(S) images start as placeholders. The visible **Load external images** control (currently **Externe Bilder laden**) enables them only for that message in the current loaded-mail session; **Hide external images** (**Externe Bilder ausblenden**) blocks subsequent rendering again. Loading can expose the user's IP address and access time to the sender. It does not create a permanent account-wide image grant. Referenced embedded CID images are resolved separately: PNG, JPEG, GIF and WebP signatures only, at most ten reads, 512 KiB per image and 2 MiB total retained bytes. Unavailable or unsupported images remain placeholders rather than making otherwise readable mail fail.
+
+The assistant uses the same [display contract](../shared/mail-display.ts) through `mail.set_display` and `mail.display_status`, discovered through the normal module flow. It can choose `auto`, `html` or `text`, inspect the effective view, or request external images for one selected/referenced message. An assistant request to enable remote images follows the saved `ask`/`never` confirmation mode; the assistant cannot change that mode itself. Refusal leaves the view unchanged. Plain-text snapshots and replies continue through the existing reference path; raw HTML and embedded image bytes are not copied into model context or durable chat history.
+
+Mail links are activated intentionally, validated as HTTP(S) or `mailto` in the main process, and opened through the default external application. Unsafe schemes, embedded web credentials and control characters are rejected. Stylesheets and advanced CSS are intentionally stripped; HTML composition remains future work.
 
 ## 4. Composing and replying
 
@@ -392,14 +400,14 @@ Keep boundaries understandable:
 - Store credentials in the **OS credential store**, not as plaintext database values.
 - Validate TLS and certificates for IMAP and SMTP.
 - Treat mail content and attachments as untrusted data.
-- Isolate external HTML when HTML display is introduced.
-- Do not load remote images automatically without the relevant user setting.
+- Keep external HTML in the sanitized, sandboxed reader and preserve its restrictive document policy.
+- Do not load remote images without the per-message user action or the corresponding confirmed assistant request.
 - Avoid unnecessary logging of passwords, message bodies or complete messages.
 - Include the local database, attachments and backups in the privacy design.
 
 **Transport encryption** protects the connection to the mail server; it does not automatically provide end-to-end message encryption. S/MIME or OpenPGP can be added later.
 
-**Current implementation:** credentials use the OS store and TLS checks are active. HTML display is absent rather than an already completed isolated renderer. The local workspace database is not encrypted; drafts, explicit reference snapshots and chat answers can contain mail content. This needs to remain visible in product documentation and in the design of a future persistent mail cache.
+**Current implementation:** credentials use the OS store and TLS checks are active. HTML is sanitized and rendered in a constrained iframe; remote images are blocked until enabled for the selected message. Raw HTML and embedded image bytes stay outside model context and chat snapshots. The local workspace database is not encrypted; drafts, explicit reference snapshots and chat answers can contain mail content. This needs to remain visible in product documentation and in the design of a future persistent mail cache.
 
 ## 12. Integration with the OpenVibeDesk assistant
 
