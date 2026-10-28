@@ -26,6 +26,7 @@ import { WorkspaceCapabilityRegistry, type CapabilityContext } from './workspace
 app.enableSandbox();
 protocol.registerSchemesAsPrivileged([{ scheme: 'ovd-module', privileges: { standard: true, secure: true } }]);
 if (app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'ai-workspace'));
+const appIconPath = path.join(app.getAppPath(), 'assets', 'brand', 'app-icon.png');
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
 let currentState: WorkspaceState;
@@ -186,7 +187,7 @@ async function openPanel(kind: WindowKind): Promise<void> {
   const actualHeight = Math.max(360, Math.min(saved?.height ?? height, area.height));
   const x = saved ? Math.max(area.x, Math.min(saved.x, area.x + area.width - actualWidth)) : area.x + 100 + panels.size * 70;
   const y = saved ? Math.max(area.y, Math.min(saved.y, area.y + area.height - actualHeight)) : area.y + 80 + panels.size * 60;
-  const win = new BrowserWindow({ x, y, width: actualWidth, height: actualHeight,
+  const win = new BrowserWindow({ x, y, width: actualWidth, height: actualHeight, icon: appIconPath,
     minWidth: 450, minHeight: 360, title: `OpenVibeDesk · ${panelTitle(kind)}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   panels.set(kind, win);
@@ -214,7 +215,7 @@ async function openPanel(kind: WindowKind): Promise<void> {
 async function openDock(): Promise<void> {
   const area = screen.getPrimaryDisplay().workArea;
   const height = dockHeight();
-  dock = new BrowserWindow({ x: area.x + 12, y: Math.round(area.y + (area.height - height) / 2),
+  dock = new BrowserWindow({ x: area.x + 12, y: Math.round(area.y + (area.height - height) / 2), icon: appIconPath,
     width: 78, height, minWidth: 78, minHeight: 200, frame: false, transparent: true, resizable: false,
     movable: true, alwaysOnTop: currentState.settings.dockAlwaysOnTop, skipTaskbar: true, hasShadow: false, backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
@@ -565,7 +566,7 @@ async function openNativeModuleView(moduleId: string, viewId: string): Promise<v
   const key = `${moduleId}:${viewId}`, existing = moduleWindows.get(key)?.window;
   if (existing && !existing.isDestroyed()) { if (existing.isMinimized()) existing.restore(); existing.show(); existing.focus(); return; }
   const area = screen.getPrimaryDisplay().workArea;
-  const win = new BrowserWindow({ x: area.x + 130, y: area.y + 100, width: Math.min(800, area.width), height: Math.min(620, area.height), minWidth: 450, minHeight: 360,
+  const win = new BrowserWindow({ x: area.x + 130, y: area.y + 100, width: Math.min(800, area.width), height: Math.min(620, area.height), minWidth: 450, minHeight: 360, icon: appIconPath,
     title: `OpenVibeDesk · ${view.title}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   moduleWindows.set(key, { moduleId, viewId, window: win });
@@ -620,6 +621,7 @@ if (hasInstanceLock) app.on('second-instance', () => {
 });
 
 if (hasInstanceLock) app.whenReady().then(async () => {
+  if (process.platform === 'darwin') app.dock?.setIcon(appIconPath);
   await initializeStore();
   const loaded = loadState() ?? initialState();
   currentState = normalizeSessions({ ...loaded, settings: normalizeSettings(loaded.settings), agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });

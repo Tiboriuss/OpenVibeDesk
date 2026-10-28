@@ -57,6 +57,7 @@
       "dist/**",
       "dist-electron/**",
       "modules/**/module.json",
+      "assets/brand/**",
       "package.json"
     ],
     "asar": true,
@@ -64,14 +65,17 @@
       "**/*.node"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/brand/app-icon.ico"
     },
     "linux": {
       "target": "AppImage",
+      "icon": "assets/brand/app-icon.png",
       "category": "Utility"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "assets/brand/app-icon.icns"
     }
   }
 }

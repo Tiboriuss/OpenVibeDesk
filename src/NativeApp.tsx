@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Power } from 'lucide-react';
+import { BrandMark } from './BrandMark';
 import { ChatView } from './ChatView';
 import { SessionsView } from './SessionsView';
 import { WindowChrome } from './WindowChrome';
@@ -269,7 +270,7 @@ export function NativeApp() {
     const dockItems = workspaceNavigation(moduleState.modules, state?.settings.navigationOrder);
     return <div className="dock-native"><div className="dock-grip" title="Dock verschieben">⋮⋮</div>{dockItems.map(item => {
       const Icon = moduleIcon(item.icon);
-      return <button key={item.id} title={item.title} aria-label={item.title} onClick={() => { if (item.action) void action(item.action); else if (item.view) void window.workspace.openModuleView(item.moduleId, item.view).catch(reason => setError(String(reason))); }}><Icon /></button>;
+      return <button key={item.id} title={item.title} aria-label={item.title} onClick={() => { if (item.action) void action(item.action); else if (item.view) void window.workspace.openModuleView(item.moduleId, item.view).catch(reason => setError(String(reason))); }}>{item.id === 'assistant' ? <BrandMark inverse size={30} /> : <Icon />}</button>;
     })}<span className="dock-native-divider" /><button title="App beenden" aria-label="App beenden" onClick={() => void window.workspace.quit()}><Power /></button>{(error || moduleState.error) && <span className="dock-module-error" role="alert" title={error || moduleState.error}>!</span>}</div>;
   }
   if (!state) return <div className="native-loading">Loading workspace…</div>;

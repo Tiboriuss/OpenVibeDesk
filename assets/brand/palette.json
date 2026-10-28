@@ -1,0 +1,12 @@
+{
+  "name": "OpenVibeDesk",
+  "colors": {
+    "navy": "#17243B",
+    "beakPurple": "#48379F",
+    "accent": "#6455C7",
+    "lavender": "#EBE9FF",
+    "surface": "#F4F6FA",
+    "white": "#FFFFFF"
+  },
+  "fontFamily": "Arial, Helvetica, sans-serif"
+}

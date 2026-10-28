@@ -2,9 +2,11 @@
 
 OpenVibeDesk ist ein frühes Projekt. Issues und Pull Requests sind willkommen; beschreibe bei größeren Änderungen zuerst das Ziel und den geplanten Ansatz.
 
+Für sichtbare Produktnamen, Logos, Farben und neue Oberflächen gilt der [Markenleitfaden](docs/brand.md). Die gemeinsamen Originaldateien unter `assets/brand/` verwenden; das OVD-Signet mit O als linkem Auge, dem V als einzigem violetten Schnabel und D als rechtem Auge nicht pro Modul neu zeichnen.
+
 ## Entwicklung
 
-Installiere Node.js 22.13 oder neuer und pnpm 11.25.0. Unter Windows:
+Installiere Node.js 22.13 oder neuer und pnpm 11.25.0. Im Projektordner:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -17,7 +19,7 @@ Prüfe Änderungen zunächst praktisch in der App. Bei Bedarf lässt sich der Bu
 pnpm build
 ```
 
-Bitte beschreibe das Verhalten vor und nach der Änderung und wie du es praktisch geprüft hast. Beiträge für Linux und macOS sind willkommen; ihre praktische Unterstützung ist noch nicht bestätigt.
+Bitte beschreibe das Verhalten vor und nach der Änderung und wie du es praktisch geprüft hast. Die Entwicklung unter macOS ist praktisch erprobt. Weitere Plattform- und Installationsprüfungen stehen aus; Beiträge für Windows und Linux sind willkommen.
 
 Benutzerdaten, API-Schlüssel, `.env`-Dateien, Datenbanken und generierte Build-Artefakte gehören nicht ins Repository. Nutze für Tests ausschließlich Beispieldaten und temporäre Zugangsdaten. Halte die Electron-Prozessgrenzen ein: keine Node-Integration im Renderer und keine allgemeinen IPC-Brücken.
 

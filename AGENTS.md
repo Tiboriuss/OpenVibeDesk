@@ -29,6 +29,7 @@
 - Die echte Mailansicht folgt `docs/mail-design.md`, die Einstellungen `docs/settings-design.md`. Beide Leitfäden sind dauerhafte Produktvorgaben; sie beschreiben auch noch nicht umgesetzte Ausbaustufen.
 - Echte Konten und Inhalte stehen im Mittelpunkt. Keine separaten sichtbaren Demo- oder Beispielmodi als Ersatz für die eigentliche Oberfläche einführen.
 - Oberfläche und Bedienung konsistent halten: kompakte Titelleisten, schlanke Ansichten, verständliche Beschriftungen, zugängliche Icons und eine nutzbare Darstellung in schmalen Fenstern.
+- Die visuelle Identität folgt dem [Markenleitfaden](docs/brand.md) und den gemeinsamen Originaldateien unter `assets/brand/`. Produktname OpenVibeDesk; im OVD-Signet ist O das linke Auge, V allein der violette Schnabel und D das rechte Auge. Keine zusätzlichen Schnäbel, Verläufe, Glows oder 3D-Effekte ergänzen; Farben, Varianten, Freiraum und Kontrast nach dem Leitfaden verwenden.
 
 # Bestehende Abläufe erhalten
 
