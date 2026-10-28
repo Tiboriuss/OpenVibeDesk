@@ -1,5 +1,7 @@
 # Architecture and implementation plan
 
+For the prioritized implementation backlog and acceptance gates, see the [maturation plan](maturation-plan.md). This document describes the architecture and current implementation.
+
 [Documentation](README.md) · [Contributing](../CONTRIBUTING.md#building-modules) · [Desktop app decision](decisions/0001-local-desktop.md)
 
 ## Processes and trust boundaries

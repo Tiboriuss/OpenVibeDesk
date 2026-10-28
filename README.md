@@ -8,7 +8,7 @@ OpenVibeDesk brings chat, mail, files, and custom integrations into a local desk
 
 This is an early, single-user development version. Development and practical use have been exercised on **macOS**. Windows and Linux build targets exist; broader platform, installer, and release validation is still pending. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-[Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
 
 ## Available features
 
@@ -72,12 +72,14 @@ The internal package name `ai-workspace` and storage identifiers are retained to
 
 ## Next steps
 
-| Area | Current state | Next work |
+The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistant, Mail, Files and MCP modules, with dependencies and practical acceptance criteria. It adds no new product modules.
+
+| Priority | Focus | Next work |
 | --- | --- | --- |
-| Desktop and chat | Usable foundation | Improve usability, accessibility, and reliability. |
-| Mail | HTML/text reading, draft recovery and separate Sent filing | Add OAuth, synchronization, offline caching and further everyday mail actions. |
-| Modules and MCP | Shared registration and selective tool discovery | Exercise the module contract further; add MCP resources, prompts, and OAuth. |
-| Distribution | Local development and packaging scripts | Validate platforms, signed packages, data migrations, and updates. |
+| First | Trustworthy existing workflows | Prevent action replay on answer regeneration; bound complete agent context; add long-content continuation, aggregate memory budgets and visible save recovery. |
+| Foundation | Storage and module lifecycle | Add migrations, backup/restore, durable operation records and complete external-module reference/settings contracts; assess current MCP compatibility early. |
+| Daily use | Existing modules and interface | Complete everyday mail actions, synchronization and composition; refine Chat, Files, MCP, settings and accessibility. |
+| Release | Reproducible distribution | Validate signed macOS packages and updates first; make broader platform claims only after practical verification. |
 
 The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.
 

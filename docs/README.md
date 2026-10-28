@@ -11,6 +11,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | [Getting started](getting-started.md) | Prerequisites, local startup, first-run configuration, data locations, and troubleshooting. |
 | [Contributing](../CONTRIBUTING.md) | Development, practical validation, and the contract for custom modules. |
 | [Architecture](architecture.md) | Process boundaries, persistence, assistant integration, references, and current technical limits. |
+| [Maturation plan](maturation-plan.md) | Prioritized work on existing modules, verified gaps, dependencies, current technical references and practical acceptance gates. |
 | [Repository working rules](../AGENTS.md) | Product principles and requirements that apply to changes. |
 | [ADR 0001: local desktop application](decisions/0001-local-desktop.md) | Why the app uses Electron and local storage without a dedicated backend server. |
 

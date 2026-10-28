@@ -485,6 +485,8 @@ Before introducing a large persistent mailbox, extend the existing simple storag
 
 ## 14. Development sequence and practical checks
 
+The [maturation plan](maturation-plan.md) defines the current cross-module delivery order, dependencies and acceptance gates. The stages below retain the Mail design's original grouping.
+
 This sequence preserves the original product priorities. Several foundations already exist; it is not a claim that every item in a row is implemented.
 
 | Stage | Scope | Intended result |
