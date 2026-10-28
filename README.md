@@ -1,91 +1,90 @@
 # OpenVibeDesk
 
-![OpenVibeDesk – ein Desktop-Workspace mit integriertem Assistenten](assets/brand/readme-header.svg)
+![OpenVibeDesk — a desktop workspace with an integrated assistant](assets/brand/readme-header.svg)
 
-**Ein Desktop-Workspace, den du per Oberfläche und Assistent bedienen kannst.**
+**A desktop workspace you can operate through its interface and its assistant.**
 
-OpenVibeDesk verbindet Chat, Mail, Dateien und eigene Integrationen in einer lokalen Desktop-App. Der Assistent kann Informationen abrufen und die passenden Fenster steuern: zum Beispiel eine Mail suchen, sie im Mailfenster öffnen und einen Entwurf an ihren Absender vorbereiten. Oberfläche und Assistent verwenden dafür dieselben validierten Funktionen.
+OpenVibeDesk brings chat, mail, files, and custom integrations into a local desktop app. The assistant can retrieve information and control the relevant windows: for example, find an email, open it in the mail window, and prepare a draft addressed to its sender. The interface and assistant use the same validated capabilities.
 
-Das Projekt ist eine frühe Entwicklungsfassung für eine einzelne Person. Die Entwicklung und praktische Nutzung wurden unter **macOS** erprobt. Windows und Linux sind als Buildziele angelegt; breitere Plattform- und Installationsprüfungen stehen noch aus.
+This is an early, single-user development version. Development and practical use have been exercised on **macOS**. Windows and Linux build targets exist; broader platform, installer, and release validation is still pending. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-## Was bereits funktioniert
+[Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
 
-| Bereich | Aktueller Umfang |
+## Available features
+
+| Area | Current scope |
 | --- | --- |
-| **Assistant** | Streaming, Markdown, Chatverwaltung, Abzweigungen, Mail-/Chat-/Dateireferenzen, Zeit- und Rechenwerkzeuge sowie ein konfigurierbarer Agentenlauf. |
-| **Mail** | IMAP-Konten, Ordner, Serversuche, kombinierbare Filter und Zählungen, Textansicht, Anhänge, lokale Entwürfe und SMTP-Versand. |
-| **Dateien** | Ordnernavigation mit Pfadleiste, Filter und Sortierung, Textvorschau, Drag & Drop in den Chat und Anhänge für Mailentwürfe. |
-| **MCP** | Lokale Server über Stdio und entfernte Server über Streamable HTTP, gezielte Werkzeugfreigaben und ein kompaktes Aktivitätsprotokoll. |
+| **Assistant** | Streaming, Markdown, session management, chat branches, mail/chat/file references, time and calculation tools, and configurable agent execution. |
+| **Mail** | IMAP accounts, folders, server search, combined filters and counts, plain-text reading, attachments, local drafts, and SMTP sending. |
+| **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
+| **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
 
-Mail, Chat, Dateien und Einstellungen öffnen sich als eigene Fenster. Das Dock und seine Reihenfolge lassen sich anpassen. In den Einstellungen bleiben zusammengehörige Optionen kompakt gruppiert und über die globale Suche auffindbar.
+Mail, chat, files, and settings open in separate windows. The dock and its module order are configurable. Settings use compact groups and global search.
 
-## Lokal starten
+## Run locally
 
-Voraussetzungen: **Node.js 22.13 oder neuer** und **pnpm 11.25.0**. Beide Befehle müssen im Terminal verfügbar sein.
-
-Im Projektordner:
+Install **Node.js 22.13 or newer** and **pnpm 11.25.0**, then run these commands in a checkout of this repository:
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` baut das Projekt und startet Electron direkt. Eine Installation der App ist dafür nicht nötig.
+`pnpm dev` builds the project and launches Electron without installing the app. It does not start a hot-reload server; restart it after source changes. If `pnpm` is missing, see [setup and troubleshooting](docs/getting-started.md#install-the-development-tools).
 
-1. Unter **Einstellungen → KI & Verbindung** einen OpenAI-kompatiblen Endpunkt und bei Bedarf einen API-Schlüssel hinterlegen. Der Endpunkt muss Streaming unterstützen; für Workspace-Aktionen wird außerdem Tool-Calling benötigt.
-2. Ein intelligentes und ein einfaches Modell auswählen. Der Chat verwendet je Modell die gespeicherte Thinking-Stufe, soweit der Anbieter sie unterstützt.
-3. Optionale Module unter **Einstellungen → Module** verwalten. Mailkonten werden unter **E-Mail** eingerichtet; IMAP und SMTP stehen pro Konto zusammen. MCP-Server werden unter **MCP** gespeichert, verbunden und anschließend für einzelne Werkzeuge freigegeben.
+Configure an OpenAI-compatible endpoint and models in **Settings → AI & connection** (currently **Einstellungen → KI & Verbindung**). Streaming is required; workspace actions also require tool calling. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
 
-Für einen lokalen Modellserver ist HTTP auf Loopback-Adressen möglich. Entfernte KI-Endpunkte benötigen HTTPS. Die Workspace-Werkzeuge lassen sich ausschalten, wenn der gewählte Endpunkt kein Tool-Calling unterstützt.
+| Command | Purpose |
+| --- | --- |
+| `pnpm typecheck` | Check main-process and renderer TypeScript. |
+| `pnpm build` | Compile TypeScript and build the renderer. |
+| `pnpm test` | Run the existing focused tests. |
+| `pnpm pack:mac` | Build a macOS DMG under `release/`. |
+| `pnpm pack:win` | Build a Windows NSIS installer under `release/`. |
+| `pnpm pack:linux` | Build a Linux AppImage under `release/`. |
 
-Weitere lokale Befehle:
+The build targets do not imply verified cross-compilation, signing, or production-ready distribution. See [development and validation](CONTRIBUTING.md#development).
 
-```sh
-pnpm typecheck
-pnpm build
-pnpm pack:mac
-```
+## Modules and a small AI context
 
-Die Paketbefehle `pack:mac`, `pack:win` und `pack:linux` erzeugen DMG-, NSIS- beziehungsweise AppImage-Artefakte unter `release/`. Signierung und eine vollständig geprüfte Release-Verteilung stehen noch aus. Funktionen prüfen wir zunächst praktisch; gezielte vorhandene Tests können mit `pnpm test` ausgeführt werden.
+The **Assistant is the required module**, `ovd-assistant`. [Mail](modules/ovd-mail/), [Files](modules/ovd-files/), and [MCP](modules/ovd-mcp/README.md) are optional modules with their own domain logic, interfaces, and registration.
 
-## Module und schlanker KI-Kontext
+The assistant initially receives short module descriptions and two discovery tools:
 
-Der **Assistant ist das Pflichtmodul** `ovd-assistant`. Mail (`ovd-mail`), Dateien (`ovd-files`) und MCP (`ovd-mcp`) liegen als optionale Module mit eigener Fachlogik, Oberfläche und Registrierung im Repository.
+1. `find_modules` finds modules relevant to the task.
+2. `get_module_tools` loads the specific tools needed before calling them.
 
-Der Assistent bekommt anfangs kurze Modulbeschreibungen und zwei Entdeckungswerkzeuge:
+Complete tool catalogs are loaded only as needed. References carry a stable resource ID and a bounded snapshot; more content can be retrieved explicitly.
 
-1. `find_modules` findet passende Module für den Auftrag.
-2. `get_module_tools` lädt gezielt deren benötigte Funktionen. Erst danach wird das Fachwerkzeug aufgerufen.
+Custom modules are discovered at startup under `<userData>/modules/`. Their exact file contents require local approval before execution. Connected MCP servers with approved tools use the same discovery mechanism. See the [module contract](CONTRIBUTING.md#building-modules), [sample notes module](examples/notes-module/README.md), and [sample MCP server](examples/mcp-server/README.md).
 
-So wächst der anfängliche Kontext nicht mit jedem vollständigen Werkzeugkatalog. Referenzen enthalten eine stabile ID und eine begrenzte Momentaufnahme; weitere Inhalte werden bei Bedarf gezielt nachgeladen.
+## Data and current limitations
 
-Eigene Modulordner werden beim Start aus dem OVD-Benutzerdatenordner erkannt. Unter macOS liegt er derzeit in `~/Library/Application Support/ai-workspace/`. Fremdmodule benötigen die Freigabe ihres konkreten Dateistands. Verbundene MCP-Server mit freigegebenen Werkzeugen nutzen dieselbe Modulsuche.
+- **Local storage:** Settings, drafts, and chats are stored on the computer. The workspace database is currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
+- **AI provider:** Messages, selected references, and requested tool results are sent to the configured provider. A local desktop app can use either a local or remote model endpoint.
+- **Mail:** OAuth, HTML rendering, full synchronization, and a durable offline cache are not implemented. SMTP server acceptance does not guarantee delivery or a copy in the Sent folder.
+- **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
+- **Extensions:** MCP OAuth, resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
 
-Einstiegspunkte: [Modulvertrag](CONTRIBUTING.md#eigene-module), [Notizmodul als Beispiel](examples/notes-module/README.md), [MCP-Modul](modules/ovd-mcp/README.md) und [MCP-Beispielserver](examples/mcp-server/README.md).
+Sending and other protected actions use the shared confirmation flow. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can skip individual confirmations for requested assistant actions. Tool permissions and approval of third-party module code remain separate.
 
-## Daten und aktueller Stand
+The internal package name `ai-workspace` and storage identifiers are retained to preserve existing data and credentials. See [data locations](docs/getting-started.md#local-data) and the [architecture](docs/architecture.md).
 
-- **Lokal gespeichert:** Einstellungen, Entwürfe und Chats bleiben auf dem Rechner. Die lokale Chat-/Workspace-Datenbank ist derzeit **nicht verschlüsselt**. API-Schlüssel, Mailpasswörter und MCP-Geheimnisse liegen im Zugangsdaten-Speicher des Betriebssystems.
-- **KI-Anbieter:** Nachrichten, ausgewählte Referenzen und angeforderte Werkzeugergebnisse werden an den konfigurierten Anbieter gesendet. Eine lokale Desktop-App bedeutet nicht automatisch ein lokales KI-Modell.
-- **Mail:** OAuth, eine HTML-Mailansicht, vollständige Synchronisierung und ein dauerhafter Offline-Cache fehlen noch. Versand nutzt SMTP; eine Serverannahme garantiert weder Zustellung noch eine Ablage im Gesendet-Ordner.
-- **Dateien:** UTF-8-Texte bis 2 MiB sind seitenweise lesbar. PDF, Office und andere Binärformate liefern vorerst Metadaten. Dateizugriff ist innerhalb der Betriebssystemrechte frei möglich; Dokumente ist ein Startpunkt, keine Ordnergrenze.
-- **Erweiterungen:** MCP-OAuth, Ressourcen, Prompts und der ältere SSE-Transport fehlen noch. Lokale MCP-Server und freigegebene Fremdmodule laufen mit normalen Benutzerrechten und sind keine Betriebssystem-Sandbox.
+## Next steps
 
-Versand und andere bestätigungspflichtige Aktionen verwenden den gemeinsamen Freigabeablauf. Der ausdrücklich gespeicherte Modus **„Ohne Abfragen“** kann einzelne Bestätigungen für beauftragte Assistentenaktionen überspringen. Werkzeugrechte und die Freigabe fremden Modulcodes bleiben davon getrennt.
-
-Der interne Paketname `ai-workspace` und bestehende Speicherkennungen bleiben erhalten, damit lokale Daten und Schlüssel weiterverwendet werden können. Technische Details und Grenzen stehen in der [Architektur](docs/architecture.md).
-
-## Nächste Etappen
-
-| Bereich | Stand | Nächster Ausbau |
+| Area | Current state | Next work |
 | --- | --- | --- |
-| Desktop & Chat | Nutzbare Grundlage | Bedienung, Barrierefreiheit und Zuverlässigkeit weiter verbessern. |
-| Mail | Lesen und Schreiben als Basis vorhanden | OAuth, HTML-Ansicht, Synchronisierung und Offline-Cache. |
-| Module & MCP | Gemeinsame Registrierung und gezielter Werkzeugzugriff vorhanden | Modulvertrag weiter erproben; MCP-Ressourcen, Prompts und OAuth ergänzen. |
-| Veröffentlichung | Lokale Entwicklung und Buildskripte vorhanden | Plattformprüfungen, signierte Pakete, Datenmigrationen und Updates. |
+| Desktop and chat | Usable foundation | Improve usability, accessibility, and reliability. |
+| Mail | Basic reading and sending | Add OAuth, HTML rendering, synchronization, and offline caching. |
+| Modules and MCP | Shared registration and selective tool discovery | Exercise the module contract further; add MCP resources, prompts, and OAuth. |
+| Distribution | Local development and packaging scripts | Validate platforms, signed packages, data migrations, and updates. |
 
-## Mitwirken
+The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) beschreibt Entwicklung und Modulbeiträge. Die dauerhaften Produktvorgaben stehen im [Settings-Konzept](docs/settings-design.md), [Mail-Leitfaden](docs/mail-design.md) und [Markenleitfaden](docs/brand.md). Die gelieferten CI-Assets liegen unverändert unter [assets/brand](assets/brand/), darunter die [horizontale Kombination](assets/brand/ovd-horizontal-primary.svg) und die [Bildmarke](assets/brand/ovd-symbol-primary.svg).
+## Contributing and branding
 
-**Lizenz:** Der Code steht unter [MIT](LICENSE). Für die mitgelieferte Manrope-Schrift gilt die [SIL Open Font License 1.1](assets/brand/fonts/OFL.txt); ihre Herkunft steht in [SOURCE.txt](assets/brand/fonts/SOURCE.txt).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and module authoring, and [AGENTS.md](AGENTS.md) for repository working rules. The [documentation index](docs/README.md) links all guides, examples, and the architecture decision record.
+
+Use the supplied [brand assets](assets/brand/) and [brand guide](docs/brand.md), including the [horizontal logo](assets/brand/ovd-horizontal-primary.svg) and [symbol](assets/brand/ovd-symbol-primary.svg).
+
+**License:** Project code is licensed under [MIT](LICENSE). The bundled Manrope font uses the [SIL Open Font License 1.1](assets/brand/fonts/OFL.txt); its provenance is recorded in [SOURCE.txt](assets/brand/fonts/SOURCE.txt).

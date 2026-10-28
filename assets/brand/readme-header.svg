@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="header-title header-desc">
-<title id="header-title">OpenVibeDesk</title><desc id="header-desc">Dein Workspace. Dein Assistent. Mail, Dateien und Werkzeuge in einer App.</desc>
+<title id="header-title">OpenVibeDesk</title><desc id="header-desc">Your workspace. Your assistant. Mail, files, and tools in one app.</desc>
 <rect width="1200" height="300" rx="24" fill="#F9F9FE"/>
 <g transform="translate(92 56) scale(0.75)">
 <g transform="scale(0.6)">
@@ -26,6 +26,6 @@
 <path id="w-12" fill="#6850F5" fill-rule="evenodd" d="M722.25 32.5C729.014 37.058 733.254 43.579 735.469 51.406C737.568 63.303 737.568 63.303 735.5 66.75C733.498 67.417 731.744 67.31 729.63 67.307C728.714 67.307 727.798 67.307 726.855 67.307C725.852 67.304 724.849 67.302 723.846 67.299C722.822 67.298 721.798 67.297 720.775 67.297C718.08 67.295 715.384 67.29 712.689 67.284C709.939 67.279 707.189 67.277 704.439 67.275C699.043 67.269 693.646 67.261 688.25 67.25C688.904 71.829 691.055 75.209 694.61 78.109C699.242 81.076 703.759 82.041 709.172 81.062C713.317 80.061 716.152 78.374 719.125 75.344C720.5 74 720.5 74 722 74C724.279 75.131 726.381 76.338 728.5 77.75C728.84 77.959 728.84 77.959 730.562 79.016C732.5 80.25 732.5 80.25 733.75 81.5C733.062 84.938 729.158 87.805 726.515 89.828C717.613 95.737 707.514 97.483 697 95.75C687.676 93.395 680.1 88.662 675 80.375C669.949 70.904 668.821 60.651 671.765 50.312C675.288 41.142 681.282 34.037 690.281 29.969C701.166 25.697 712.177 26.372 722.25 32.5ZM692 46.75C688.25 51.62 688.25 51.62 688.25 54.75C689.018 55.518 691.817 55.033 693.013 55.035C693.656 55.034 694.298 55.034 694.96 55.033C695.613 55.034 696.266 55.034 696.939 55.034C698.325 55.034 699.71 55.034 701.095 55.032C703.224 55.031 705.353 55.032 707.482 55.034C708.823 55.034 710.165 55.034 711.507 55.033C712.149 55.034 712.791 55.034 713.452 55.035C717.942 55.029 717.942 55.029 718.5 54.75C718.5 51.263 717.088 48.935 715 46.25C707.764 39.918 699.017 40.736 692 46.75Z"/>
 </g>
 </g>
-<text x="92" y="225" fill="#222844" font-family="Arial,Helvetica,sans-serif" font-size="25">Dein Workspace. Dein Assistent.</text>
-<text x="92" y="262" fill="#606579" font-family="Arial,Helvetica,sans-serif" font-size="20">Mail, Dateien und Werkzeuge. Zusammen in einer App.</text>
+<text x="92" y="225" fill="#222844" font-family="Arial,Helvetica,sans-serif" font-size="25">Your workspace. Your assistant.</text>
+<text x="92" y="262" fill="#606579" font-family="Arial,Helvetica,sans-serif" font-size="20">Mail, files, and tools. Together in one app.</text>
 </svg>

@@ -1,34 +1,45 @@
-# MCP als optionales OVD-Modul
+# MCP as an optional OVD module
 
-`module.json` registriert Einstellungen und Verwaltungsfunktionen. Das Backend besitzt Konfiguration, Geheimnisspeicher, Verbindungen, Werkzeugkatalog und Ausführung. Die Oberfläche verwendet dieselben Dienste über typisierte IPC-Methoden. Das Modul fügt keinen eigenen Dockeintrag und keine MCP-Sonderlogik im Chat hinzu.
+[Documentation](../../docs/README.md) · [Architecture](../../docs/architecture.md) · [Building modules](../../CONTRIBUTING.md#building-modules)
 
-## Einrichtung
+[`module.json`](module.json) contributes settings and management capabilities. The backend owns configuration, secrets, connections, the tool inventory and execution. The UI uses the same services through typed IPC methods. MCP adds no dock entry and requires no MCP-specific dispatch logic in the chat.
 
-Unter **Einstellungen → MCP** einen Server anlegen:
+## Setup
 
-- **Stdio:** ausführbares Programm, einzelne Argumente und optional Arbeitsordner. Es wird keine zusätzliche Shell gestartet. Zugangsdaten als geheime Umgebungswerte eingeben, statt sie in Programmargumente zu schreiben.
-- **Streamable HTTP:** HTTPS-URL oder lokaler HTTP-Endpunkt; bei Bedarf Bearer-Token. URL-Zugangsdaten und Weiterleitungen werden nicht akzeptiert.
+Add a server under **Settings → MCP** (currently **Einstellungen → MCP**):
 
-Nach dem Speichern verbinden und benötigte Werkzeuge auswählen. Die Freigaben separat speichern. Neue Werkzeuge erhalten keine automatische Freigabe. „Beim Appstart verbinden“ ist optional und zunächst aus. Konfigurations- oder Rechteänderungen durch den Assistenten werden im Formular vorbereitet; die endgültige Freigabe erfolgt durch den Nutzer.
+- **Stdio:** enter an executable, its individual arguments and an optional working directory. OVD launches it without an additional shell. Store credentials as secret environment values rather than putting them in command-line arguments. The process inherits the SDK's limited default environment plus the explicitly configured values, rather than OVD's entire environment.
+- **Streamable HTTP:** use HTTPS, or HTTP on `localhost`, `127.0.0.1` or `[::1]`. Enter a Bearer token separately if required. Credentials in the URL, query parameters, fragments and redirects are rejected.
 
-Tokens und Umgebungswerte liegen im OS-Schlüsselspeicher. `servers.json` unter `<userData>/module-data/ovd-mcp/` enthält öffentliche Konfiguration und Freigaben. Änderungen werden atomar gespeichert. Ungespeicherte Formulare bleiben bei Kategorienwechsel und Suche erhalten und sind in den gemeinsamen Schließschutz integriert.
+Save, connect, select the required tools, then save their permissions separately. New tools are denied by default. Changing the executable, arguments, working directory or HTTP target clears the saved tool allowlist. Automatic connection at app startup is optional and off by default; saved opt-in connections start in the background. The assistant can prepare public configuration and permissions in the form, but only the user can save them. It cannot save a configuration or grant itself tools.
 
-## Gezielte Werkzeugentdeckung
+Bearer tokens and configured environment values live in the OS credential store and are write-only from the settings UI. Public configuration, token-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection.
 
-Eine verbundene Quelle mit freigegebenen Werkzeugen erscheint als virtuelle Modulquelle `ovd-mcp.<serverId>`. Name und Beschreibung stammen aus der eigenen Konfiguration. Der Modellkontext erhält kurze Metadaten; `find_modules` findet die Quelle und `get_module_tools` bietet nur die für einen Auftrag ausgewählten Schemas an. Das vollständige Serverinventar wird nicht an jede KI-Anfrage angehängt.
+## Lazy tool discovery
 
-Der allgemeine Vertrag steht in `shared/module-tool-provider.ts`. Der Host prüft das aktuelle Angebot; das MCP-Modul prüft zusätzlich Verbindung, Freigabe und Eingaben. Werkzeugschemata sind auf 12.000 JSON-Zeichen begrenzt. Unterstützt werden Objekt-Schemas mit lokalen Referenzen; ungeeignete Schemas werden mit einem Grund in der Werkzeugliste angezeigt. Namen sind an Verbindung und Katalogstand gebunden. Veraltete Angebote werden vor einem Aufruf zurückgewiesen.
+A connected server with permitted, supported tools appears as the virtual module `ovd-mcp.<serverId>`. Its name and description come from the user's configuration. The model receives short source metadata; `find_modules` locates the source and `get_module_tools` loads only the schemas needed for the current task. The complete server inventory is not attached to every AI request.
 
-Serverbeschreibungen, Schemas und Ergebnisse sind nicht vertrauenswürdige Daten. Serveranweisungen werden nicht als Systemprompt übernommen. Hinweise wie `readOnlyHint` gelten nicht als Berechtigungsnachweis. Der Host berücksichtigt den OVD-Bestätigungsmodus; „Ohne Abfragen“ erteilt keine neuen Server- oder Werkzeugrechte.
+The shared contract is [`ModuleToolProvider`](../../shared/module-tool-provider.ts). The host checks source availability and the actual schema offered to the model. The MCP service also checks the live connection, current permission and arguments before execution. Tool names bind the connection, configuration, permissions and catalog revision; an old offer cannot silently acquire a different meaning after any of them changes.
 
-Ergebnisse werden als begrenzter Text beziehungsweise strukturierte Daten zurückgegeben. Nicht-textuelle Inhalte werden als solche kenntlich gemacht. Fehler, Abbruch und unklarer Ausgang bleiben unterscheidbar; mögliche externe Änderungen werden bei einem Verbindungsfehler nicht automatisch wiederholt. Das Protokoll enthält höchstens 100 Metadateneinträge der aktuellen App-Sitzung. Deaktivieren oder Beenden schließt Verbindungen und lokale Serverprozesse.
+Object input schemas are limited to 12,000 serialized JSON characters. JSON Schema Draft-07, 2019-09 and 2020-12 are supported, with local references only. Asynchronous schemas and unsupported dialects are rejected. Original schemas remain unchanged in the tool offer; unsupported tools show a reason in the UI. Inventory loading is limited to 500 tools or 25 server pages and reports a warning when that limit is reached. UI inventory pages include schemas; the assistant's `mcp.tools` management result contains metadata only. It must use `get_module_tools` to load executable definitions.
 
-## Als Vorlage verwenden
+Server descriptions, schemas and results are untrusted data. Server instructions are not imported as a system prompt. Annotations such as `readOnlyHint` are hints, not permission grants. Assistant calls use OVD's confirmation mode, including the user's explicitly saved **Without confirmations** option (**Ohne Abfragen**). That option grants no new server or tool permissions. A direct UI tool call still uses the same permission and argument validation.
 
-- `backend/store.ts`: öffentliche Konfiguration und geschützter Geheimnisspeicher.
-- `backend/service.ts`: MCP-Client, gemeinsamer Aufrufdienst und dynamischer Provider.
-- `backend/capabilities.ts` und `backend/index.ts`: validierte Verwaltung für Oberfläche und Assistent.
-- `frontend/`: kompakte modulare Settingsoberfläche.
-- [`examples/mcp-server/`](../../examples/mcp-server/README.md): ein separat startbarer Framework-Server mit drei Werkzeugen.
+## Outcomes and cleanup
 
-MCP ist hier zunächst eine Werkzeuganbindung. OAuth, alter HTTP/SSE-Transport, MCP-Ressourcen, Prompts, Sampling und Elicitation sind noch nicht integriert. Die Transporte verwenden das [offizielle TypeScript-SDK](https://ts.sdk.modelcontextprotocol.io/client).
+Results contain bounded text or structured data and explicitly flag truncation. Text chunks are at most 12,000 characters and the result stays below the common 28,000-character JSON budget. Non-text content is represented as an unsupported-content notice. Known configured secrets are redacted from returned data; tool metadata that echoes them is not offered for execution.
+
+`isError: true` is a failed tool result. Cancellation, failure and an uncertain outcome remain distinct. A timeout or transport failure after a call may have been sent returns `uncertain`; OVD does not automatically replay the call. The audit contains at most 100 metadata entries from the current app session: server, tool, time, duration and outcome, with no arguments, results or secret values.
+
+Disconnecting, disabling the module or quitting closes client connections and local server processes. HTTP cleanup attempts session deletion before closing the transport, with a bounded cleanup wait. Disconnecting cannot undo an external action that has already run.
+
+## Implementation map
+
+- [`backend/store.ts`](backend/store.ts): public configuration and OS credential-store access.
+- [`backend/service.ts`](backend/service.ts): MCP clients, transport lifecycle, validation, the shared call service and dynamic tool provider.
+- [`backend/capabilities.ts`](backend/capabilities.ts) and [`backend/index.ts`](backend/index.ts): validated management for the UI and assistant.
+- [`shared/mcp.ts`](../../shared/mcp.ts): settings, inventory, permissions, audit and result contracts.
+- [`frontend/`](frontend/): compact settings UI.
+- [`examples/mcp-server/`](../../examples/mcp-server/README.md): a separate framework server with three tools.
+
+This first integration supports tools. OAuth, legacy HTTP/SSE transport, MCP resources, prompts, sampling and elicitation are not integrated. The transports use the [official TypeScript SDK v1 client](https://ts.sdk.modelcontextprotocol.io/client); the installed version is pinned in [`package.json`](../../package.json).

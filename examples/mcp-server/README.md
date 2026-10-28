@@ -1,15 +1,19 @@
-# Ein kleines Framework über MCP anbinden
+# Connect a small framework through MCP
 
-Dieser eigenständige MCP-Server zeigt, wie eine Anwendung ihre Funktionen für OVD bereitstellt. Er gehört nicht zu den automatisch gestarteten Komponenten. Die drei Werkzeuge zeigen Status, listen Aufgaben und erstellen eine Aufgabe in einem flüchtigen Speicher. Ein Neustart setzt diese Beispieldaten zurück.
+[Documentation](../../docs/README.md) · [MCP module](../../modules/ovd-mcp/README.md) · [Building modules](../../CONTRIBUTING.md#building-modules)
 
-Nach `pnpm install` im OVD-Repository:
+This standalone MCP server demonstrates how an application can expose its functions to OVD. It is not started automatically. Its three tools report framework status, list tasks and create a task in memory. Restarting the server clears that example data.
 
-1. In **Einstellungen → MCP** einen Server hinzufügen, etwa „Beispiel-Framework“ mit der Beschreibung „Aufgaben anlegen und suchen“.
-2. Transport **Stdio** wählen. Als Programm `node` eintragen, gegebenenfalls dessen absoluten Pfad.
-3. Als ein Argument den absoluten Pfad zu `examples/mcp-server/server.cjs` eintragen und speichern.
-4. Verbinden und die gewünschten Werkzeuge in der Werkzeugliste freigeben.
-5. Im Chat beispielsweise „Erstelle im Beispiel-Framework eine Aufgabe: Angebot prüfen“ schreiben.
+Install the repository dependencies with `pnpm install`, then:
 
-OVD entdeckt die Verbindung als Werkzeugquelle und lädt nur die für den Auftrag benötigten Schemas. Nicht freigegebene Werkzeuge werden nicht angeboten. Der Server erhält keine OVD-Workspace-API und keine automatische Befugnis, OVD-Fenster zu steuern.
+1. Add a server under **Settings → MCP** (currently **Einstellungen → MCP**), for example with the name “Example framework” and description “Create and find tasks”.
+2. Select **Stdio**. Enter `node` as the executable, or its absolute path if it is not on the app's `PATH`.
+3. Add the absolute path to [`server.cjs`](server.cjs) as one argument, then save.
+4. Connect, select the required tools in the inventory and save the tool permissions.
+5. Ask the assistant, for example: “Create a task in the example framework: Review the proposal.”
 
-Eigene Frameworks können denselben Einstieg durch ihre tatsächlichen Dienste ersetzen. Dafür muss weder der OVD-Chat noch sein Systemprompt geändert werden. Das Beispiel verwendet das [offizielle TypeScript-SDK](https://ts.sdk.modelcontextprotocol.io/client) mit Stdio-Transport; entfernte Server können stattdessen Streamable HTTP verwenden.
+The tools are `framework_status`, `tasks_list` and `tasks_create`. The example stores at most 50 tasks; titles contain 1–200 characters. [`server.cjs`](server.cjs) uses the repository's SDK and Zod dependencies and does not need a separate installation in this directory.
+
+OVD discovers the connection as a tool source and loads only the schemas required for the task. Tools without permission are not offered. The server receives no OVD workspace API and no automatic authority to control OVD windows. Like other configured Stdio servers, however, it is a local process with the current user's OS permissions; the example is not a sandbox.
+
+Replace the example handlers with your framework's actual services without changing OVD's chat or system prompt. This server uses the [official TypeScript SDK v1](https://ts.sdk.modelcontextprotocol.io/client) over Stdio; a remote server can expose Streamable HTTP instead. The current OVD integration's supported transports and limits are documented in the [MCP module](../../modules/ovd-mcp/README.md).

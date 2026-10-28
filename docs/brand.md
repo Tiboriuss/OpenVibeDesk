@@ -1,104 +1,114 @@
-# OpenVibeDesk · Markenleitfaden
+# OpenVibeDesk Brand Guide
 
-Maßgeblich ist das vom Nutzer gelieferte **CI-Paket 1.0 vom 28. Oktober 2026**. Die [CI-PDF](../assets/brand/reference/OpenVibeDesk-CI.pdf), [LIESMICH](../assets/brand/reference/LIESMICH.txt), [Design-Tokens](../assets/brand/source/tokens.json) und unveränderten SVG-Dateien bilden die gemeinsame Grundlage für App, Repository und Dokumentation.
+[Documentation index](README.md) · [Repository README](../README.md)
 
-Das Paket beschreibt seine Herkunft ausdrücklich: Die Bildmarke wurde aus einer bereitgestellten PNG-Vorlage als Bézier-Geometrie rekonstruiert, die Wortmarke konturbasiert vektorisiert und geglättet. Es handelt sich um eine **originalnahe Vektorrekonstruktion**, nicht um wiedergefundene ursprüngliche Vektordateien. Schutzräume, Mindestgrößen, Manrope und die UI-Regeln sind die im Paket neu definierten Empfehlungen. Frühere, aus einer Textbeschreibung abgeleitete Logorekonstruktionen und Farbwerte sind ersetzt.
+The authoritative source is the user-supplied **CI package 1.0 dated October 28, 2026**. The [CI PDF](../assets/brand/reference/OpenVibeDesk-CI.pdf), [package README](../assets/brand/reference/README.txt), [logo preview](../assets/brand/reference/logo-preview.png), [design tokens](../assets/brand/source/tokens.json), and unchanged SVG files provide the shared foundation for the app, repository, and documentation. The PDF and package README are English reference editions; translating the documentation does not change the supplied logo masters, font, or tokens.
 
-## Name und Logo-Master
+The package states its provenance explicitly: the symbol was reconstructed from a supplied PNG reference as Bézier geometry, and the wordmark was vectorized from its outlines and smoothed. This is a **close vector reconstruction**, not a recovery of the original vector artwork. Clear space, minimum sizes, Manrope, and the UI rules are recommendations newly defined in the package. Earlier logo reconstructions and colors inferred from a text description have been replaced.
 
-Der Produktname lautet **OpenVibeDesk**, als ein Wort mit den Großbuchstaben O, V und D. Die Kurzform **OVD** ist nach der ersten vollständigen Nennung möglich. Technische Speicher- und Paketkennungen bleiben von sichtbaren Namensänderungen getrennt.
+## Product name and logo masters
 
-Die gelieferte Bildmarke enthält die asymmetrischen Formen **O, V und D**, nach innen versetzte **Pupillen** und ein **freistehendes Dreieck** als eigenen Farbakzent. In der Primärvariante sind O, D, Pupillen und das obere V Navy; das darunterliegende Dreieck ist Violet. Diese Bestandteile, ihre Innenräume und Abstände werden gemeinsam aus dem gelieferten Master übernommen. Pupillen und Dreieck weder entfernen noch durch ein neu gezeichnetes V ersetzen.
+Write the product name as **OpenVibeDesk**, one word with capital O, V, and D. **OVD** may be used after the first full mention. Keep technical storage and package identifiers separate from changes to the visible product name.
 
-Auch die Wortmarke liegt vollständig als Pfadgrafik vor. Der sichtbare Schriftzug wird **nicht neu als Text gesetzt**: Seine ursprüngliche Schrift lässt sich laut Paket nicht sicher bestimmen. Manrope ist die ergänzende Systemschrift für Oberfläche und Dokumente, keine Ersatzvorlage für die Wortmarke.
+The supplied symbol contains asymmetric **O, V, and D** shapes, inward-positioned **pupils**, and a **detached triangle** as a separate accent. In the primary version, O, D, the pupils, and the upper V are Navy; the triangle below is Violet. Use these parts, their negative spaces, and their spacing together from the supplied master. Do not remove the pupils or triangle, or replace them with a newly drawn V.
 
-## Verbindliche Assets und Varianten
+The wordmark is also supplied entirely as paths. **Do not typeset the visible wordmark again**: the package cannot reliably identify its original typeface. Manrope is the complementary system font for interfaces and documents, not a replacement template for the wordmark.
 
-Die 20 gelieferten SVGs liegen direkt unter [`assets/brand/`](../assets/brand/). Sie sind maßgebliche Originaldateien des gelieferten CI-Pakets und bleiben unverändert. Kompatibilitätsdateien und erzeugte Plattformicons sind davon abgeleitete Exporte, keine zusätzlichen Logo-Master.
+## Authoritative assets and variants
 
-| Einsatz | Primärdatei | Weitere gelieferte Varianten |
+The 20 supplied SVGs live directly in [`assets/brand/`](../assets/brand/). They are the authoritative files from the supplied CI package and remain unchanged. Compatibility files and generated platform icons are derived exports, not additional logo masters.
+
+| Use | Primary file | Other supplied variants |
 | --- | --- | --- |
-| Wort-Bild-Marke, übereinander | [`ovd-logo-primary.svg`](../assets/brand/ovd-logo-primary.svg) | `ovd-logo-inverse.svg`, `ovd-logo-mono-navy.svg`, `ovd-logo-mono-white.svg` |
-| Horizontale Kombination | [`ovd-horizontal-primary.svg`](../assets/brand/ovd-horizontal-primary.svg) | `ovd-horizontal-inverse.svg`, `ovd-horizontal-mono-navy.svg`, `ovd-horizontal-mono-white.svg` |
-| Bildmarke allein | [`ovd-symbol-primary.svg`](../assets/brand/ovd-symbol-primary.svg) | `ovd-symbol-inverse.svg`, `ovd-symbol-mono-navy.svg`, `ovd-symbol-mono-white.svg` |
-| Wortmarke allein | [`ovd-wordmark-primary.svg`](../assets/brand/ovd-wordmark-primary.svg) | `ovd-wordmark-inverse.svg`, `ovd-wordmark-mono-navy.svg`, `ovd-wordmark-mono-white.svg` |
-| App-Kacheln | [`ovd-app-violet.svg`](../assets/brand/ovd-app-violet.svg) | [`ovd-app-light.svg`](../assets/brand/ovd-app-light.svg), [`ovd-app-lavender.svg`](../assets/brand/ovd-app-lavender.svg), [`ovd-app-navy.svg`](../assets/brand/ovd-app-navy.svg) |
+| Stacked symbol and wordmark | [`ovd-logo-primary.svg`](../assets/brand/ovd-logo-primary.svg) | [`ovd-logo-inverse.svg`](../assets/brand/ovd-logo-inverse.svg), [`ovd-logo-mono-navy.svg`](../assets/brand/ovd-logo-mono-navy.svg), [`ovd-logo-mono-white.svg`](../assets/brand/ovd-logo-mono-white.svg) |
+| Horizontal combination | [`ovd-horizontal-primary.svg`](../assets/brand/ovd-horizontal-primary.svg) | [`ovd-horizontal-inverse.svg`](../assets/brand/ovd-horizontal-inverse.svg), [`ovd-horizontal-mono-navy.svg`](../assets/brand/ovd-horizontal-mono-navy.svg), [`ovd-horizontal-mono-white.svg`](../assets/brand/ovd-horizontal-mono-white.svg) |
+| Symbol only | [`ovd-symbol-primary.svg`](../assets/brand/ovd-symbol-primary.svg) | [`ovd-symbol-inverse.svg`](../assets/brand/ovd-symbol-inverse.svg), [`ovd-symbol-mono-navy.svg`](../assets/brand/ovd-symbol-mono-navy.svg), [`ovd-symbol-mono-white.svg`](../assets/brand/ovd-symbol-mono-white.svg) |
+| Wordmark only | [`ovd-wordmark-primary.svg`](../assets/brand/ovd-wordmark-primary.svg) | [`ovd-wordmark-inverse.svg`](../assets/brand/ovd-wordmark-inverse.svg), [`ovd-wordmark-mono-navy.svg`](../assets/brand/ovd-wordmark-mono-navy.svg), [`ovd-wordmark-mono-white.svg`](../assets/brand/ovd-wordmark-mono-white.svg) |
+| App tiles | [`ovd-app-violet.svg`](../assets/brand/ovd-app-violet.svg) | [`ovd-app-light.svg`](../assets/brand/ovd-app-light.svg), [`ovd-app-lavender.svg`](../assets/brand/ovd-app-lavender.svg), [`ovd-app-navy.svg`](../assets/brand/ovd-app-navy.svg) |
 
-**Primary** kombiniert Navy und Violet auf hellen Flächen. **Inverse** kombiniert Weiß und den helleren Akzent `#B8AAFF` auf Navy. **Mono Navy** ist vollständig Navy; **Mono White** vollständig Weiß, etwa auf Navy oder Violet. Passende Varianten verwenden und Farben nicht automatisch invertieren oder pro Anwendung austauschen.
+**Primary** combines Navy and Violet on light surfaces. **Inverse** combines White and the lighter accent `#B8AAFF` on Navy. **Mono Navy** uses Navy throughout; **Mono White** uses White throughout, for example on Navy or Violet. Choose the appropriate variant. Do not automatically invert colors or substitute colors for each application.
 
-Die SVGs enthalten Füllpfade ohne Konturlinien, eingebettete Rasterbilder oder externe Schrift- und Netzwerkabhängigkeiten. Innenräume und die Flächen außerhalb des Zeichens sind transparent; die ausdrücklich gestalteten App-Kacheln haben ihren eigenen Hintergrund. Die knapp gesetzte `viewBox` enthält den notwendigen Schutzraum nicht automatisch.
+The SVGs contain filled paths without strokes, embedded raster images, or external font and network dependencies. Negative spaces and areas outside the artwork are transparent; the explicitly designed app tiles have their own backgrounds. The tightly fitted `viewBox` does not automatically include the required clear space.
 
-[`readme-header.svg`](../assets/brand/readme-header.svg) ist ein abgeleiteter Repository-Kopfbereich mit der gelieferten horizontalen Kombination. Er ist kein Screenshot der Anwendung. Logoabbildungen erhalten den Alternativtext „OpenVibeDesk“; dekorative Wiederholungen neben einem bereits lesbaren Namen bleiben für Screenreader ausgeblendet.
+[`readme-header.svg`](../assets/brand/readme-header.svg) is a derived repository header using the supplied horizontal combination. It is not an application screenshot. Give logo images the alternative text "OpenVibeDesk"; hide decorative repetitions from screen readers when the name is already readable beside them.
 
-## Schutzraum und Mindestgrößen
+## Clear space and minimum sizes
 
-**x entspricht dem Durchmesser einer Pupille in der skalierten Bildmarke.** Rund um Bildmarke und die vollständige Wort-Bild-Kombination bleibt mindestens **1 x** frei. Keine Texte, Ränder oder anderen Zeichen in diesen Bereich setzen. Bei der alleinstehenden Wortmarke beträgt der Schutzraum je Seite **8,52 % ihrer Breite**.
+**x is the diameter of one pupil in the scaled symbol.** Leave at least **1 x** around the symbol and the complete symbol-and-wordmark combination. Keep text, edges, and other artwork outside this area. For the standalone wordmark, clear space on each side is **8.52% of its width**.
 
-| Variante | Digitale Mindestbreite | Empfohlene Mindestbreite im Druck |
+| Variant | Digital minimum width | Recommended print minimum width |
 | --- | --- | --- |
-| Bildmarke | 48 px | 12 mm |
-| Wort-Bild-Marke | 180 px | 45 mm |
-| Horizontale Kombination | 240 px | 60 mm |
-| Wortmarke allein | 140 px | 35 mm |
-| App-Kachel | 64 px | Nicht festgelegt |
+| Symbol | 48 px | 12 mm |
+| Stacked logo | 180 px | 45 mm |
+| Horizontal combination | 240 px | 60 mm |
+| Wordmark only | 140 px | 35 mm |
+| App tile | 64 px | Not specified |
 
-Die Maße beziehen sich auf die sichtbare Grafik ohne Schutzraum. Druckwerte sind eigenständige Empfehlungen; ein Probedruck entscheidet. Die Bildmarke innerhalb einer 64-Pixel-App-Kachel ist ungefähr 49 Pixel breit. Für kleinere Favicons oder Betriebssystemicons ist eine gesondert optimierte und visuell geprüfte Fassung nötig; die allgemeinen Mindestmaße werden dadurch nicht aufgehoben.
+Sizes refer to the visible artwork, excluding clear space. Print sizes are independent recommendations; check a physical proof. The symbol inside a 64-pixel app tile is approximately 49 pixels wide. Smaller favicons or operating system icons require a separately optimized and visually reviewed version; this does not override the general minimum sizes.
 
-Das Logo nicht stauchen, strecken, drehen oder beschneiden. Keine Einzelteile verschieben, Buchstabenabstände ändern oder die Wortmarke neu setzen. Keine Konturlinien, Verläufe, Glows, Schatten, plastischen Materialien oder 3D-Effekte ergänzen. Auf unruhigen Hintergründen eine ruhige, zur Variante passende Trägerfläche mit ausreichendem Schutzraum verwenden.
+Do not compress, stretch, rotate, or crop the logo. Do not move individual parts, change letter spacing, or typeset a replacement wordmark. Do not add strokes, gradients, glows, shadows, dimensional materials, or 3D effects. On busy backgrounds, use a quiet supporting surface appropriate to the variant, with sufficient clear space.
 
-## Farbrollen und Kontrast
+## Color roles and contrast
 
-Die kanonischen Farbwerte und Maßregeln stehen in [`source/tokens.json`](../assets/brand/source/tokens.json), die erzeugten CSS-Variablen in [`ovd-tokens.css`](../assets/brand/ovd-tokens.css). Keine zweite manuell gepflegte Palette daneben anlegen.
+Canonical color values and sizing rules are in [`source/tokens.json`](../assets/brand/source/tokens.json); generated CSS variables are in [`ovd-tokens.css`](../assets/brand/ovd-tokens.css). Do not maintain a second manual palette alongside them.
 
-| Rolle | sRGB-Wert | Verwendung |
+| Role | sRGB value | Use |
 | --- | --- | --- |
-| Navy | `#222844` | Primärlogo, Überschriften und dunkle Markenflächen. |
-| Violet | `#6850F5` | Eigenständiger Logoakzent und primäre Aktionen. |
-| Lavender | `#E8E5FD` | Sanfte Flächen, Auswahl und Referenzen. |
-| Paper | `#F9F9FE` | Ruhiger Haupthintergrund. |
-| White | `#FFFFFF` | Karten, Inhaltsflächen und inverse Logoanteile. |
-| Ink | `#12182D` | Gut lesbarer Haupttext. |
-| Muted | `#606579` | Sekundärer Text. |
-| Inverse Accent | `#B8AAFF` | Heller Akzent auf Navy. |
+| Navy | `#222844` | Primary logo, headings, and dark brand surfaces. |
+| Violet | `#6850F5` | Separate logo accent and primary actions. |
+| Lavender | `#E8E5FD` | Soft surfaces, selection, and references. |
+| Paper | `#F9F9FE` | Quiet main background. |
+| White | `#FFFFFF` | Cards, content surfaces, and inverse logo parts. |
+| Ink | `#12182D` | Readable primary text. |
+| Muted | `#606579` | Secondary text. |
+| Inverse Accent | `#B8AAFF` | Lighter accent on Navy. |
 
-Für normalen UI-Text mindestens **4,5:1** vorsehen. Die im Paket genannten Kontraste wurden anhand der relativen sRGB-Luminanz berechnet:
+Provide at least **4.5:1** contrast for normal UI text. The package's contrast ratios use relative sRGB luminance:
 
-| Vordergrund / Hintergrund | Kontrast | Verwendung |
+| Foreground / background | Contrast | Use |
 | --- | --- | --- |
-| Navy / White | 14,43:1 | Normaler Text. |
-| White / Violet | 5,18:1 | Text auf primären Aktionen. |
-| Inverse Accent / Navy | 7,03:1 | Heller Akzenttext auf dunklem Grund. |
-| Violet / Lavender | **4,21:1** | Für normalen UI-Text nicht ausreichend. |
+| Navy / White | 14.43:1 | Normal text. |
+| White / Violet | 5.18:1 | Text on primary actions. |
+| Inverse Accent / Navy | 7.03:1 | Light accent text on a dark surface. |
+| Violet / Lavender | **4.21:1** | Insufficient for normal UI text. |
 
-Auf Lavender normalen Text in **Navy oder Ink** setzen; Violet dort nicht als normale Textfarbe verwenden. Zustände, Transparenz, Fokus und neue Hintergrundkombinationen gesondert prüfen. Eine korrekte Logofarbe allein belegt keine Barrierefreiheit der Anwendung. Erfolg, Fehler, Abbruch und unklarer Ausgang zusätzlich durch Text oder Icon unterscheiden. Für den Druck CMYK-Werte erst mit dem Zielprofil der Druckerei ableiten; die leuchtende Bildschirmfarbe kann abweichen.
+Use **Navy or Ink** for normal text on Lavender; do not use Violet there as a normal text color. Check states, transparency, focus, and new background combinations separately. Correct logo colors alone do not establish application accessibility. Distinguish success, failure, cancellation, and uncertain outcomes with text or icons as well. Derive print CMYK values with the printer's target profile; the bright screen color may reproduce differently.
 
-## Typografie und UI-Maße
+## Typography and UI dimensions
 
-Die ergänzende Systemschrift ist **Manrope** in den Gewichten **400, 500, 600, 700 und 800**. Verwendet wird die konkret mitgelieferte Datei [`Manrope-Variable.ttf`](../assets/brand/fonts/Manrope-Variable.ttf) mit ihrer [SIL Open Font License 1.1](../assets/brand/fonts/OFL.txt) und dem [Herkunftshinweis](../assets/brand/fonts/SOURCE.txt). Keine externe Schriftanfrage und keinen ungeprüften Austausch gegen eine andere Manrope-Distribution einführen.
+The complementary system font is **Manrope**, using weights **400, 500, 600, 700, and 800**. Use the supplied [`Manrope-Variable.ttf`](../assets/brand/fonts/Manrope-Variable.ttf), its [SIL Open Font License 1.1](../assets/brand/fonts/OFL.txt), and its [source notice](../assets/brand/fonts/SOURCE.txt). Do not introduce external font requests or replace it with another Manrope distribution without review.
 
-Die Größenskala aus dem CI-Dokument:
+The CI document defines this type scale:
 
-| Rolle | Schriftgrad / Zeilenhöhe | Gewicht |
+| Role | Font size / line height | Weight |
 | --- | --- | --- |
 | H1 | 40 / 48 px | 800 |
 | H2 | 28 / 36 px | 700 |
-| Fließtext | 16 / 24 px | 400 |
+| Body | 16 / 24 px | 400 |
 | Label | 14 / 20 px | 600 |
 
-Text linksbündig setzen, Hierarchie klar halten und ausreichend Abstand lassen. Kompakte Produktansichten, größere Texteinstellungen und zugängliche Icons folgen ergänzend den bestehenden [Produktgrundsätzen](../AGENTS.md), dem [Settings-Konzept](settings-design.md) und dem [Mail-Leitfaden](mail-design.md). Die Beispieloberfläche im CI-Dokument ist eine Gestaltungsempfehlung und keine zusätzliche Funktionsspezifikation.
+Left-align text, maintain a clear hierarchy, and leave adequate spacing. Compact product views, larger text settings, and accessible icons also follow the existing [product principles](../AGENTS.md), [settings design](settings-design.md), and [mail design](mail-design.md). The example interface in the CI document is a visual recommendation, not an additional functional specification.
 
-Das Abstandsmaß folgt einem **4-Pixel-Raster** mit 4, 8, 12, 16, 24, 32, 48 und 64 Pixeln. Die empfohlenen Radien betragen **8 Pixel für Controls**, **16 Pixel für Karten** und ungefähr **22 % der Kachelgröße für App-Kacheln**. Allgemeine Workspace- und Referenztexte bleiben unabhängig von einzelnen Modulen.
+Spacing follows a **4-pixel grid**: 4, 8, 12, 16, 24, 32, 48, and 64 pixels. Recommended radii are **8 pixels for controls**, **16 pixels for cards**, and approximately **22% of the tile size for app tiles**. General workspace and reference labels remain independent of individual modules.
 
-## Quellen und Reproduktion
+## Sources and reproduction
 
-Editierbare Geometrie, Wortmarkenpfade und Buildskripte liegen unter [`assets/brand/source/`](../assets/brand/source/). Die Bildmarke besitzt sechs Bézier-Pfade auf einer Basis von 717 × 266 Einheiten, die Wortmarke dreizehn Pfade auf 866 × 122 Einheiten. Varianten werden aus denselben Quellen zusammengesetzt; keine SVG-Variante einzeln nachzeichnen.
+Editable geometry, wordmark paths, and build scripts live in [`assets/brand/source/`](../assets/brand/source/). The symbol has six Bézier paths on a 717 × 266-unit canvas; the wordmark has thirteen paths on an 866 × 122-unit canvas. Compose variants from those same sources rather than redrawing individual SVG variants.
 
-Der SVG-Build benötigt Python ab 3.9 und ausschließlich die Standardbibliothek. Die Skripte sind unverändert aus dem CI-Paket übernommen. Weil die gelieferten SVGs im Repository direkt unter `assets/brand/` liegen, ist das Ausgabeverzeichnis ausdrücklich anzugeben. Aus der Repositorywurzel:
+The SVG build requires Python 3.9 or later and only the standard library. `build_assets.py`, the master SVGs, the font, and the JSON sources remain unchanged from the supplied package. Since this repository stores SVGs directly in `assets/brand/`, specify the output directory explicitly. From the repository root:
 
 ```sh
 python3 assets/brand/source/build_assets.py --out assets/brand
 ```
 
-Gleiche JSON-Quellen erzeugen byte-identische SVGs. [`SHA256SUMS.txt`](../assets/brand/SHA256SUMS.txt) enthält die gelieferten Prüfsummen für die 20 Varianten. Die Basisgeometrie und Design-Tokens bleiben die einzige Quelle für bewusste zukünftige Anpassungen; keine zusätzliche Rekonstruktion aus Vorschau oder Textbeschreibung einführen.
+The same JSON sources produce byte-identical SVGs. [`SHA256SUMS.txt`](../assets/brand/SHA256SUMS.txt) contains the supplied checksums for all 20 variants. Geometry and design tokens remain the single source for deliberate future changes; do not introduce another reconstruction from a preview or text description.
 
-Der optionale PDF-Neubau und seine Abhängigkeiten sind in [LIESMICH](../assets/brand/reference/LIESMICH.txt) beschrieben. Das originale PDF-Skript setzt die Paketordnerstruktur voraus; es ist kein zusätzlicher App-Buildschritt. Screenshots für Veröffentlichungen zeigen echte Oberflächen mit synthetischen Daten und enthalten keine persönlichen Mail-, Chat- oder Zugangsdaten.
+The optional English PDF generator has been adapted to this repository layout. Install the dependencies in [`source/requirements.txt`](../assets/brand/source/requirements.txt), then run:
+
+```sh
+python3 assets/brand/source/build_ci.py
+```
+
+The default output is [`reference/OpenVibeDesk-CI.pdf`](../assets/brand/reference/OpenVibeDesk-CI.pdf). Use `--out /path/to/guide.pdf` to select another destination. The generator reads the existing master SVGs and supplied local font; it does not rebuild or modify them. See the [package README](../assets/brand/reference/README.txt) for details. This documentation build is separate from the app build.
+
+Published screenshots must show real interfaces with synthetic data and exclude personal mail, chats, and credentials. External references retained from the supplied package are [Manrope on Google Fonts](https://github.com/google/fonts/tree/main/ofl/manrope) and [WCAG 2.2 contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html).

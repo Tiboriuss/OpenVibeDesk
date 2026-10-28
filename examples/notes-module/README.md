@@ -1,16 +1,20 @@
-# Eigenes Notizmodul
+# Build a notes module
 
-Dieses kleine, eigenständige Beispiel benötigt keine zusätzlichen Pakete. Es gehört nicht zu den standardmäßig geladenen OVD-Modulen.
+[Documentation](../../docs/README.md) · [Building modules](../../CONTRIBUTING.md#building-modules) · [Architecture](../../docs/architecture.md)
 
-1. Den ganzen Ordner `notes-module` in einen Benutzer-Modulordner von OVD kopieren; der Ordnername ist frei wählbar.
-2. OVD neu starten.
-3. Unter **Einstellungen → Module** das Modul **Notizen** prüfen und aktivieren. OVD fragt vor der ersten Ausführung nach einer Freigabe für den lokalen Modulcode.
-4. Über **Notizen** im Dock Notizen hinzufügen oder suchen. Derselbe Ablauf ist über den OVD-Assistenten möglich, zum Beispiel „Speichere eine Notiz: Präsentation am Freitag vorbereiten“.
+This small, self-contained example needs no additional packages. It is not one of OVD's automatically loaded built-in modules.
 
-`module.json` beschreibt nur Metadaten, Beiträge und Funktionsschemas. Der Host lädt `backend.cjs` nach der Aktivierung in einem eigenen Prozess und ruft `activate({ moduleId, dataDirectory })` auf. Das Ergebnis enthält die namensgebundenen Funktionen in `tools`; jede Funktion erhält `(args, { signal })`. Der Code prüft seine Eingaben zusätzlich zum Manifest, beachtet Abbrüche, begrenzt gelistete Ergebnisse zusätzlich auf 24 KB pro Seite und schreibt Änderungen atomar in `notes.json` innerhalb des vom Host bereitgestellten Datenverzeichnisses.
+1. Copy the entire `notes-module` directory into `<userData>/modules/`; the containing directory name is your choice. See the [module setup instructions](../../CONTRIBUTING.md#building-modules) for the user-data location.
+2. Restart OVD.
+3. Review and enable the **Notes** module (currently **Notizen**) under **Settings → Modules** (**Einstellungen → Module**). OVD requests approval for the local module code's fingerprint before its first execution.
+4. Open **Notes** in the dock to add or search notes. The assistant can use the same functions, for example: “Save a note: Prepare the presentation for Friday.”
 
-`notes.html` und `settings.html` laufen jeweils in einem isolierten iframe. HTML, CSS und JavaScript sind vollständig in den Dateien enthalten. Die Oberfläche ruft Funktionen über `parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*')` auf und empfängt `ovd:result` mit derselben `requestId`, `ok` sowie `result` oder `error`. Beide Seiten prüfen die Absenderfenster. Modulansichten erhalten keinen direkten Zugriff auf die Workspace-API.
+[`module.json`](module.json) contains metadata, contributions and tool schemas only. After approval and activation, the host loads [`backend.cjs`](backend.cjs) in a separate process and calls `activate({ moduleId, dataDirectory })`. The result supplies named handlers in `tools`; each receives `(args, { signal })`.
 
-Ein eigener Prozess ist keine Betriebssystem-Sandbox. Die Freigabe gilt für vertrauenswürdigen lokalen Code. Die deklarierte Berechtigung `storage.module-data` beschreibt den beabsichtigten Zugriff des Beispiels; der Host stellt dafür das eigene Datenverzeichnis bereit.
+The backend validates inputs in addition to the manifest schema, honors cancellation, limits listed note data to 24 KiB per page, and writes updates atomically to `notes.json` in the host-provided data directory. It stores at most 500 notes of up to 2,000 characters each. Listing uses `query`, `offset` and `limit` (default 20, maximum 50), with `hasMore` and `nextOffset` for continuation. The example deliberately provides searching/reading and adding notes; it does not expose editing or deletion.
 
-Das Beispiel legt höchstens 500 Notizen mit jeweils 2000 Zeichen ab und bietet bewusst nur Suchen/Lesen und Hinzufügen an. Zum Deaktivieren **Einstellungen → Module** verwenden. Die Notizdaten bleiben im Modul-Datenverzeichnis erhalten.
+[`notes.html`](notes.html) and [`settings.html`](settings.html) run in separate isolated iframes. Their HTML, CSS and JavaScript are self-contained. The UI calls tools with `parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*')` and receives `ovd:result` with the matching `requestId`, `ok`, and either `result` or `error`. Both sides check the sender window. Module views have no direct access to the workspace API.
+
+A separate process is not an OS sandbox. Approval is for trusted local code. The declared `storage.module-data` permission describes the example's intended access; the host supplies a dedicated data directory, but the module process still has the current user's OS permissions.
+
+Disable the module under **Settings → Modules**. Its note data remains in the module data directory.

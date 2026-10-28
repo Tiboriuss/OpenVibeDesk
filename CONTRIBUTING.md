@@ -1,84 +1,137 @@
-# Mitwirken
+# Contributing
 
-OpenVibeDesk ist ein frühes Projekt. Issues und Pull Requests sind willkommen; beschreibe bei größeren Änderungen zuerst das Ziel und den geplanten Ansatz.
+[Repository overview](README.md) · [Documentation](docs/README.md) · [Repository working rules](AGENTS.md)
 
-Für sichtbare Produktnamen, Logos, Farben und neue Oberflächen gilt der [Markenleitfaden](docs/brand.md) auf Grundlage des gelieferten CI-Pakets. Die 20 unveränderten `ovd-*.svg`-Dateien unter `assets/brand/` verwenden; Bildmarke mit Pupillen, oberem Navy-V und eigenem violettem Dreieck sowie die Wortmarkenpfade nicht neu zeichnen. Maßgebliche Tokens liegen in `assets/brand/source/tokens.json`; die lokale Manrope-Schrift wird mit ihrer SIL-OFL-Lizenz eingebunden.
+OpenVibeDesk is an early project. Issues and pull requests are welcome; explain the goal and proposed approach before making a substantial change.
 
-## Entwicklung
+Keep repository documentation in **English**, distinguish implemented behavior from design targets, and update links when headings or paths change. Visible names, logos, colors, and interfaces follow the [brand guide](docs/brand.md). Use the 20 supplied `ovd-*.svg` masters in [assets/brand](assets/brand/) without redrawing the pupils, upper V, separate violet triangle, or outlined wordmark. [Design tokens](assets/brand/source/tokens.json) are the canonical values; bundle Manrope with its [SIL OFL license](assets/brand/fonts/OFL.txt).
 
-Installiere Node.js 22.13 oder neuer und pnpm 11.25.0. Im Projektordner:
+## Development
 
-```powershell
+Install Node.js 22.13 or newer and pnpm 11.25.0. The [getting-started guide](docs/getting-started.md) covers installation and first-run setup. From the repository directory:
+
+```sh
 pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-Prüfe Änderungen zunächst praktisch in der App. Bei Bedarf lässt sich der Build lokal prüfen:
+The development command builds once and opens Electron. Restart it after source changes. Relevant commands are declared in [package.json](package.json):
 
-```powershell
-pnpm build
-```
-
-Bitte beschreibe das Verhalten vor und nach der Änderung und wie du es praktisch geprüft hast. Die Entwicklung unter macOS ist praktisch erprobt. Weitere Plattform- und Installationsprüfungen stehen aus; Beiträge für Windows und Linux sind willkommen.
-
-Benutzerdaten, API-Schlüssel, `.env`-Dateien, Datenbanken und generierte Build-Artefakte gehören nicht ins Repository. Nutze für Tests ausschließlich Beispieldaten und temporäre Zugangsdaten. Halte die Electron-Prozessgrenzen ein: keine Node-Integration im Renderer und keine allgemeinen IPC-Brücken.
-
-## Eigene Module
-
-Der OVD-Assistent ist das Pflichtmodul `ovd-assistant`. Fachmodule registrieren sich über ihr Manifest; der Chat benötigt dafür keine modulspezifischen Prompts oder Werkzeuglisten. Mail liegt mit Backend und Oberfläche unter `modules/ovd-mail/`, der Dateimanager unter `modules/ovd-files/` und die MCP-Anbindung unter `modules/ovd-mcp/`. Alle drei sind optionale Module. Ein kopierbares Fremdmodul steht in [`examples/notes-module/`](examples/notes-module/README.md).
-
-| Vorlage | Zeigt |
+| Command | Use |
 | --- | --- |
-| `ovd-mail` | Fachoberflächen, Kontoeinstellungen, gemeinsame Dienste und Mailreferenzen |
-| `ovd-files` | Dateinavigation, Inhaltsseiten und allgemeine Modulreferenzen |
-| [`ovd-mcp`](modules/ovd-mcp/README.md) | Verbindungseinstellungen, Geheimnisspeicher und dynamische Werkzeugquellen |
-| `sample-notes` | Eigenständiges Prozessmodul mit HTML-Oberfläche, ohne Kernänderung installierbar |
+| `pnpm typecheck` | Check TypeScript in the main process and renderer. |
+| `pnpm build` | Compile the application. |
+| `pnpm test` | Run the existing focused tests when relevant. |
+| `pnpm pack:mac` | Produce a macOS DMG in `release/`. |
+| `pnpm pack:win` | Produce a Windows NSIS installer in `release/`. |
+| `pnpm pack:linux` | Produce a Linux AppImage in `release/`. |
 
-Eigene Module werden beim Start aus `<userData>/modules/<modulordner>/module.json` gelesen; unter macOS liegt der Benutzerordner derzeit in `~/Library/Application Support/ai-workspace/`. Eingebaute Module liegen unter `<appPath>/modules/`. Nach dem Kopieren OVD neu starten und **Einstellungen → Module** öffnen. Fremdmodule brauchen eine ausdrückliche Freigabe ihres Dateifingerprints; geänderte Dateien erfordern eine neue Freigabe. Deaktivieren beendet die Bereitstellung der Beiträge und Funktionen, löscht aber keine Moduldaten. Freigaben und deaktivierte IDs stehen in `<userData>/module-settings.json`, eigene Daten in `<userData>/module-data/<moduleId>/`.
+Validate the affected workflow in the app first. Describe the behavior before and after the change and how you checked it. macOS development has been exercised in practice; further platform and installer checks remain. Packaging scripts alone do not establish that every target can be built or run on every host.
 
-Ein Fremdmodul enthält mindestens:
+Do not add routine test suites or GitHub Actions workflows. Use focused existing tests or temporary checks when they establish something necessary. For application changes, check both the interface and assistant path through the shared capabilities. Documentation changes should be checked for correct commands, links, and consistency with the code.
+
+Do not commit user data, API keys, `.env` files, databases, or generated application build outputs. Use synthetic data and temporary test credentials; never send real mail or modify a real mailbox to validate a change. Preserve Electron's process boundaries: no renderer Node integration and no unrestricted IPC bridge. See the [architecture](docs/architecture.md).
+
+## Building modules
+
+The OVD Assistant is the required `ovd-assistant` module. Domain modules register through a manifest; the chat must not need module-specific prompts or hardcoded tool catalogs. Built-in examples are:
+
+| Example | Demonstrates |
+| --- | --- |
+| [Mail](modules/ovd-mail/) | Domain views, account settings, shared services, and mail references. |
+| [Files](modules/ovd-files/) | File navigation, paged content, and generic module references. |
+| [MCP](modules/ovd-mcp/README.md) | Connection settings, credential storage, and dynamic tool sources. |
+| [Sample notes module](examples/notes-module/README.md) | A standalone process module with HTML views, installable without core changes. |
+
+### Installation and approval
+
+Custom modules are discovered at startup from `<userData>/modules/<module-folder>/module.json`. On macOS, `userData` is currently `~/Library/Application Support/ai-workspace/`. Built-in modules are discovered under `<appPath>/modules/`.
+
+After copying a module, restart OVD and open **Settings → Modules** (currently **Einstellungen → Module**). Third-party modules require explicit approval of their current file fingerprint. Changed files require new approval. Disabling a module removes its contributions and capabilities without deleting its data.
+
+Approvals and disabled IDs are stored in `<userData>/module-settings.json`; module-owned data belongs under `<userData>/module-data/<moduleId>/`. See [local data](docs/getting-started.md#local-data).
+
+### Manifest and contributions
+
+A process module contains at least:
 
 ```text
-mein-modul/
+my-module/
   module.json
   backend.cjs
-  ansicht.html       # optional
-  einstellungen.html # optional
+  view.html       # Optional view contribution.
+  settings.html   # Optional settings contribution.
 ```
 
-`module.json` folgt [`ModuleManifest`](shared/modules.ts) und dem validierten Schema in [`electron/modules.ts`](electron/modules.ts):
+Start from the [sample manifest](examples/notes-module/module.json). The contract is defined by [ModuleManifest](shared/modules.ts) and the [validated manifest schema](electron/modules.ts):
 
-- `apiVersion: 1`, eindeutige `id`, `title`, semantische `version`, kurze `description` und passende `keywords` für die Modulsuche. Fremdmodule dürfen keine `ovd-`-IDs, Pflichtmodule oder internen Hostadapter beanspruchen.
-- `runtime: { "type": "process", "entry": "backend.cjs" }` startet ein vorbereitetes JavaScriptbackend. Abhängigkeiten vorher bündeln; OVD installiert beim Laden keine Pakete.
-- `tools` beschreibt jede Funktion mit Namen, verständlicher Beschreibung, optionalem Aktivitätslabel und begrenztem Objekt-JSON-Schema ohne `$ref`. Namen beginnen mit der eigenen Modul-ID, etwa `mein-modul.list`. `capabilities` führt dieselben Namen auf. Der Host erzeugt daraus anbietertaugliche Werkzeugnamen; Backend und Oberfläche verwenden weiterhin die Manifestnamen.
-- `permissions` beschreibt die beabsichtigten Zugriffe. `confirmation` an einer Funktion nutzt vor dem Aufruf die zentrale Bestätigung des Hosts. Standardmäßig wird gefragt; bei ausdrücklich gespeichertem „Ohne Abfragen“ wird für beauftragte Assistentenaktionen automatisch zugestimmt. Die Dateifingerprint-Freigabe neuen oder geänderten Modulcodes bleibt davon getrennt. Versand, destruktive Änderungen und geschützte Einstellungen brauchen einen prüfbaren Bestätigungsablauf.
-- `contributions.views` und `.settings` verweisen mit `entry` auf lokale HTML-Dateien; `.navigation` verweist auf eine im Modul deklarierte Ansicht. IDs müssen innerhalb des jeweiligen Beitragstyps eindeutig sein. Settings mit Beschreibung und Suchwörtern in das [Settings-Konzept](docs/settings-design.md) einordnen.
+- Set `apiVersion: 1`, a unique `id`, `title`, semantic `version`, a short `description`, and relevant discovery `keywords`. Third-party modules cannot claim `ovd-` IDs, required-module status, or internal host adapters.
+- Use `runtime: { "type": "process", "entry": "backend.cjs" }` for a prepared JavaScript backend. Bundle dependencies beforehand; OVD does not install packages when loading a module.
+- Describe each function in `tools` with its name, useful description, optional activity label, and bounded object JSON Schema without `$ref`. Names start with the module ID, such as `my-module.list`. `capabilities` must list exactly the same names. The host derives provider-compatible names; the backend and module interface continue to use the manifest names.
+- Declare intended access in `permissions`. A tool's `confirmation` uses the host's shared approval flow. By default the user is asked. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can approve requested assistant actions automatically; approval of new or changed module code remains separate. Sending, destructive changes, and protected settings need an understandable, reviewable confirmation flow.
+- Point `contributions.views` and `.settings` at local HTML files through `entry`; `.navigation` references a view declared by the module. IDs must be unique within each contribution type. Process-module views and settings must also use distinct IDs across those two types. Integrate descriptions and search terms with the [settings design](docs/settings-design.md).
 
-Der Backendvertrag lautet:
+### Backend lifecycle
 
 ```js
 exports.activate = async ({ moduleId, dataDirectory }) => ({
   tools: {
-    'mein-modul.list': async (args, { signal }) => ({ items: [] })
+    'my-module.list': async (args, { signal }) => ({ items: [] })
   },
-  dispose: async () => { /* Verbindungen und Ressourcen schließen */ }
+  dispose: async () => { /* Close connections and release resources. */ }
 });
 ```
 
-Alle Manifestfunktionen müssen genau einmal implementiert sein. UI und Assistent rufen dieselben Funktionen auf; jede über die Oberfläche verfügbare Fachfunktion braucht diesen Zugang. Eingaben zusätzlich fachlich validieren, Ressourcen-IDs prüfen, Geheimnisse aus Ergebnissen halten, Abbrüche beachten und begrenzte JSON-Ergebnisse mit klaren Fehlern und Suchgrenzen liefern. Änderungen sicher speichern und Seiteneffekte nicht automatisch wiederholen. `activate` hat zehn Sekunden, einzelne Aufrufe höchstens 60 Sekunden; Argumente sind auf 16 KiB und Ergebnisse auf 32 KiB begrenzt. OVD lässt höchstens 16 gleichzeitige Aufrufe pro Modul zu.
+Implement every manifest tool exactly once. Interface actions and the assistant must use the same functions; every implemented domain action available in the interface needs an assistant entry point. Validate domain inputs and resource IDs, exclude secrets from results, respect cancellation, and return bounded JSON with clear errors and search limits. Persist changes safely and never automatically repeat side effects after an uncertain result.
 
-Abfragen möglichst aus wenigen kombinierbaren Fachwerkzeugen aufbauen: Listen und Zählen verwenden dieselben validierten Filter. Eine Zählung darf nicht bloß die geladene Seite zählen. Ergebnisse nennen `scope`, `observedAt`, `countExact` und `complete`; bei unvollständiger Zählung ist `count` eine Untergrenze. Empfangszeit und Absenderdatum unterscheiden, relative Kalenderzeiträume in der lokalen IANA-Zeitzone mit exklusivem Ende auflösen. Die Systemzeit kommt bereits als kleiner Hostkontext mit jeder Anfrage; Zeit- und Rechenwerkzeuge werden wie andere Funktionen gezielt nachgeladen. Fachmodule sollen keine eigene Uhrzeit aus Chatdaten erraten oder ein separates Werkzeug für jede einzelne Frage benötigen.
+The [process runtime](electron/module-runtime.ts) currently enforces these bounds:
 
-HTML-Ansichten laufen in einem isolierten iframe ohne Node- oder Workspace-API. Sie senden `parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*')` und empfangen `ovd:result` mit derselben `requestId`, `ok` sowie `result` oder `error`. Dabei `event.source === parent` prüfen. Der Host akzeptiert nur das zugehörige Absenderfenster und Funktionen des eigenen Moduls. Assets des Beispiels sind inline eingebettet; beliebige externe Inhalte werden nicht geladen.
+| Boundary | Limit |
+| --- | --- |
+| Activation | 10 seconds |
+| Individual invocation | 60 seconds |
+| Encoded arguments | 16 KiB |
+| Encoded result | 32 KiB |
+| Pending invocations per module | 16 |
 
-Der separate Backendprozess bietet Fehlerisolation, **keine Betriebssystem-Sandbox**. Freigegebener Code läuft mit den normalen Benutzerrechten; `permissions` ist keine erzwungene Beschränkung von Dateisystem oder Netzwerk. Modulautoren verantworten diese Zugriffe. Das Manifest ist auf 64 KiB, ein Modul auf 16 MiB, 200 Dateien und zwölf Verzeichnisebenen begrenzt; symbolische Verweise sind nicht erlaubt.
+These process-module boundaries are distinct from the configurable [agent execution budgets](shared/agent-settings.ts). Do not treat a timed-out external write as a confirmed failure that is safe to repeat.
 
-Den Kontextverbrauch bei jeder Erweiterung mitbedenken: Zunächst sieht der Assistent höchstens 20 kurze Modulbeschreibungen und nur `find_modules`/`get_module_tools`. Funktionssuche mit engem `query` und Seitenbegrenzung ermöglichen; der Agent hält höchstens zwölf ausgewählte Werkzeuge für den laufenden Auftrag. Beschreibungen müssen ausreichen, um eine Funktion gezielt zu finden. Keine vollständigen Kataloge, Nutzerdaten oder Schemas in die Modulbeschreibung oder dauerhafte Chatnachrichten schreiben.
+### Queries, time, and result completeness
 
-Eingebaute Adapter mit dynamischen Werkzeugen können den allgemeinen `ModuleToolProvider` aus `shared/module-tool-provider.ts` registrieren. Er bietet kurze virtuelle Quellen, seitenweise Schemaauswahl und einen exakten aktuellen Lookup. Quell-IDs liegen unter der eigenen Modul-ID, Werkzeuge sind an ihre aktuelle Konfigurations-/Schemaversion gebunden. Der Host berücksichtigt den Parentstatus und laufende Aufrufe. Der Provider prüft selbst Berechtigungen und Argumente unmittelbar vor der Ausführung. Externe Serveranweisungen werden nicht zu Systemanweisungen. MCP nutzt diesen Vertrag, ohne einen Sonderfall im Agentenloop einzuführen.
+Prefer a small set of composable domain tools. Listing and counting must share validated filters. A count must not simply count the loaded page. Include `scope`, `observedAt`, `countExact`, and `complete` where applicable; when an exact count is unavailable, `count` is a lower bound.
 
-Referenzen enthalten eine stabile Ressourcen-ID und eine begrenzte Momentaufnahme mit erkennbarem Umfang und Stand. Das zuständige Modul bietet zusätzlich einen gezielten Inhaltsabruf mit Fortsetzung an; auch einzelne lange Inhalte müssen vollständig erreichbar bleiben. Öffnen und Lesen einer Ressource sind getrennte Funktionen. Verschachtelte Referenzen werden nicht automatisch mit aufgelöst.
+Distinguish received time from the sender's date. Resolve relative calendar periods in the local IANA timezone with an exclusive end, using the shared [time utilities](shared/time.ts). Each request already includes a small current-time context from the host. Time and [calculation tools](shared/calculation.ts) are discovered on demand like other tools. Do not infer today's date from old chat messages or create a separate tool for every possible user question.
 
-Der allgemeine Vertrag in `shared/references.ts` transportiert beim Ziehen ausschließlich `{moduleId,type,id}`. Eingebaute Hostadapter registrieren die Auflösung im `ModuleReferenceRegistry`; Dateilisten oder Renderer dürfen keinen fremden Text als vertrauenswürdige Momentaufnahme einreichen. Sichtbare Auswahl, Entfernen, Senden, lokale Wiederherstellung und Chat-Abzweigungen erhalten die Referenzen. Die reine Deklaration von `referenceTypes` führt keinen Modulcode aus und ersetzt keinen Resolver.
+### HTML views
 
-Praktisch prüfen: Modul kopieren, Freigabe und Neustart, eigene Ansicht und Einstellungen, denselben Auftrag im Assistenten, Abbruch, erforderliche Bestätigung sowie Deaktivieren. Vorhandene Mailreferenzen, Drag & Drop und lokale Daten müssen erhalten bleiben. Keine echten Mails für eine Funktionsprüfung versenden; keine routinemäßigen neuen Testdateien oder GitHub Actions hinzufügen.
+HTML views run in an isolated iframe without Node or the workspace API. They send:
+
+```js
+parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*');
+```
+
+They receive `ovd:result` with the same `requestId`, `ok`, and either `result` or `error`. Check `event.source === parent` when handling replies. The host accepts only the corresponding sender window and that module's own tools. The sample uses inline assets; arbitrary external content is not loaded. See the [view host](src/ModuleViewHost.tsx) and [sample view](examples/notes-module/notes.html).
+
+### Execution model and package limits
+
+A separate backend process provides crash isolation, **not an operating-system sandbox**. Approved code runs with the user's normal permissions. Manifest `permissions` do not enforce filesystem or network restrictions; module authors are responsible for those accesses.
+
+The [loader](electron/modules.ts) limits a manifest to 64 KiB and a module to 16 MiB, 200 files, and 12 directory levels. Symbolic links are not allowed.
+
+### Discovery and context budgets
+
+The assistant initially sees up to 20 short module descriptions and only `find_modules` and `get_module_tools`. Support narrow queries and paginated discovery. The active tool count is configurable: **12 by default**, within the current **1–24** range in [agent settings](shared/agent-settings.ts). Schema and history budgets are configurable too. Descriptions must be sufficient to discover a tool without placing full catalogs, user data, or schemas in module summaries or durable chat messages.
+
+Built-in adapters with dynamic tools can register the generic [ModuleToolProvider](shared/module-tool-provider.ts). It exposes short virtual sources, paginated schema selection, and lookup of the exact current offer. Source IDs are namespaced under the parent module; tool offers are tied to the current configuration/schema version. The host tracks parent status and in-flight calls. The provider must recheck permissions and arguments immediately before execution. External server instructions do not become system instructions. [MCP](modules/ovd-mcp/README.md) uses this contract without a special branch in the agent loop.
+
+### Resource references
+
+References carry a stable resource ID and a bounded snapshot with an explicit scope and timestamp. The responsible module also needs a targeted content-reading tool with continuation so even long individual resources remain fully accessible. Opening a resource and reading its content are separate functions. Nested references are not resolved automatically.
+
+The shared [reference contract](shared/references.ts) carries only `{moduleId,type,id}` during drag and drop. Built-in host adapters register resolution through [ModuleReferenceRegistry](electron/module-references.ts); renderers cannot submit arbitrary text as a trusted snapshot. Preserve selection, removal, sending, local restoration, and chat branching. Declaring `referenceTypes` alone does not execute module code or install a resolver.
+
+### Validate a module
+
+Exercise installation, approval and restart, the view and settings, the equivalent assistant task, cancellation, required confirmation, and disabling. Preserve existing mail references, drag and drop, drafts, attachments, and local data. Use synthetic fixtures or a designated test mailbox without sending real messages.
+
+Continue with the [architecture](docs/architecture.md), [notes module example](examples/notes-module/README.md), or [MCP server example](examples/mcp-server/README.md).
