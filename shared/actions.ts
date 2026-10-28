@@ -6,9 +6,10 @@ export const uiActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('focus_window'), windowId: z.string() }),
   z.object({ type: z.literal('read_email'), emailId: z.string() }),
   z.object({ type: z.literal('create_draft'), replyTo: z.string().optional() }),
-  z.object({ type: z.literal('update_draft'), draftId: z.string(), patch: z.object({ to: z.string().max(500).optional(), subject: z.string().max(1000).optional(), body: z.string().max(100000).optional() }) }),
+  z.object({ type: z.literal('update_draft'), draftId: z.string(), patch: z.object({ to: z.string().max(500).optional(), cc: z.string().max(500).optional(), bcc: z.string().max(500).optional(), accountId: z.string().max(100).optional(), subject: z.string().max(1000).optional(), body: z.string().max(100000).optional() }).strict() }),
   z.object({ type: z.literal('open_file_manager') }),
   z.object({ type: z.literal('attach_file'), draftId: z.string(), file: z.object({ path: z.string(), name: z.string(), size: z.number().nonnegative() }) }),
+  z.object({ type: z.literal('remove_attachment'), draftId: z.string(), index: z.number().int().nonnegative() }),
   z.object({ type: z.literal('request_user_input'), prompt: z.string().max(2000) })
 ]);
 export type UiAction = z.infer<typeof uiActionSchema>;
@@ -22,14 +23,14 @@ export function initialState(): WorkspaceState {
     { id: 'm1', folder: 'Inbox', threadId: 't1', from: 'Mara Schneider <mara@example.org>', to: 'you@example.org', subject: 'Launch-Checkliste für Freitag', date: '2026-10-26T09:18:00.000Z', bodyText: 'Hallo, kannst du die Launch-Checkliste bis Freitag durchsehen? Bitte antworte mir mit den offenen Punkten.\n\nDanke!\nMara', attachments: [{ name: 'checkliste.pdf', size: 48120 }], read: false },
     { id: 'm2', folder: 'Inbox', threadId: 't2', from: 'Jonas Weber <jonas@example.org>', to: 'you@example.org', subject: 'Design-Feedback', date: '2026-10-25T14:04:00.000Z', bodyText: 'Die neue Oberfläche sieht gut aus. Können wir die Navigation im nächsten Review besprechen?', attachments: [], read: true },
     { id: 'm3', folder: 'Inbox', threadId: 't3', from: 'Team <team@example.org>', to: 'you@example.org', subject: 'Notizen zum Workspace', date: '2026-10-24T08:41:00.000Z', bodyText: 'Hier sind die Notizen aus unserem letzten Gespräch zum lokalen Workspace.', attachments: [], read: true }
-  ], drafts: [], chat: [{ id: 'welcome', role: 'assistant', text: 'Zieh eine E-Mail hierher oder frage mich, einen Antwortentwurf zu öffnen. Ich arbeite gerade mit Mock-Daten.', timestamp: '2026-10-27T00:00:00.000Z' }] };
+  ], drafts: [], chat: [{ id: 'welcome', role: 'assistant', text: 'Füge eine Referenz hinzu oder beschreibe, was du im Workspace erledigen möchtest.', timestamp: '2026-10-27T00:00:00.000Z' }] };
 }
 
 function openWindow(state: WorkspaceState, kind: WindowKind): WorkspaceState {
   const existing = state.windows.find(w => w.kind === kind);
   const z = Math.max(0, ...state.windows.map(w => w.z)) + 1;
   if (existing) return { ...state, windows: state.windows.map(w => w.id === existing.id ? { ...w, minimized: false, z } : w) };
-  const sizes: Record<WindowKind, [number, number]> = { mail: [650, 520], chat: [530, 560], draft: [590, 520], files: [560, 440], settings: [650, 540], sessions: [560, 520] };
+  const sizes: Record<WindowKind, [number, number]> = { mail: [650, 520], chat: [530, 560], draft: [590, 520], files: [740, 580], settings: [650, 540], sessions: [560, 520] };
   const [width, height] = sizes[kind];
   const win: WorkspaceWindow = { id: kind, kind, title: { mail: 'Mail', chat: 'Assistant', draft: 'Draft', files: 'Files', settings: 'Settings', sessions: 'Chats' }[kind], x: 130 + state.windows.length * 36, y: 95 + state.windows.length * 28, width, height, z, minimized: false };
   return { ...state, windows: [...state.windows, win] };
@@ -63,6 +64,11 @@ export function applyUiAction(state: WorkspaceState, raw: unknown): ActionResult
     case 'attach_file': {
       if (!state.drafts.some(d => d.id === action.draftId)) throw new Error('Draft not found');
       return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: [...d.attachments, action.file], updatedAt: new Date().toISOString() } : d) }, message: 'File attached' };
+    }
+    case 'remove_attachment': {
+      const draft = state.drafts.find(d => d.id === action.draftId);
+      if (!draft || action.index >= draft.attachments.length) throw new Error('Attachment not found');
+      return { state: { ...state, drafts: state.drafts.map(d => d.id === action.draftId ? { ...d, attachments: d.attachments.filter((_, index) => index !== action.index), updatedAt: new Date().toISOString() } : d) }, message: 'Attachment removed' };
     }
     case 'request_user_input': return { state, message: 'User input requested', requestedInput: action.prompt };
   }

@@ -30,11 +30,12 @@ export function loadState(): WorkspaceState | null {
 }
 
 export function saveState(state: WorkspaceState): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
+  const operation = writeQueue.then(async () => {
     db.run('INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', ['workspace', JSON.stringify(state)]);
     const temporary = `${filePath}.tmp`;
     await fs.writeFile(temporary, Buffer.from(db.export()));
     await fs.rename(temporary, filePath);
   });
-  return writeQueue;
+  writeQueue = operation.catch(() => {});
+  return operation;
 }

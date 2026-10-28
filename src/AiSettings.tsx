@@ -1,9 +1,20 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Bot, KeyRound, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { ChevronDown, KeyRound, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { matchesSettingsEntry, settingsEntries } from './settings-registry';
+import { preparationValues, SettingsPreparationNotice, useSettingsPreparation, type SettingsSuggestion } from './settings-preparation';
 import './ai-settings.css';
 
 type Thinking = 'off' | 'low' | 'medium' | 'high';
-type AiConfiguration = { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; hasApiKey: boolean; configured: boolean };
+type AiConfiguration = { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; realMailAccess: boolean; confirmationMode: 'ask' | 'never'; hasApiKey: boolean; configured: boolean };
+type AiGroups = { connection: boolean; models: boolean; workspace: boolean };
+const groupStorageKey = 'openvibedesk.settings.aiGroups';
+function loadGroups(): AiGroups {
+  const defaults = { connection: false, models: false, workspace: false };
+  try {
+    const value = JSON.parse(localStorage.getItem(groupStorageKey) ?? '{}');
+    return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, typeof value?.[key] === 'boolean' ? value[key] : fallback])) as AiGroups;
+  } catch { return defaults; }
+}
 
 function ModelField({ id, label, value, onChange, models }: { id: string; label: string; value: string; onChange(value: string): void; models: string[] }) {
   const [manual, setManual] = useState(false);
@@ -22,13 +33,16 @@ function ThinkingField({ id, label, value, onChange }: { id: string; label: stri
   return <div className="ai-field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={event => onChange(event.target.value as Thinking)}><option value="off">Aus</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option></select><p>Diese Stufe wird bei Auswahl dieses Modells verwendet. Die Unterstützung hängt vom Anbieter und Modell ab.</p></div>;
 }
 
-export function AiSettings() {
+export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { searchQuery?: string; onClearSearch?(): void; preparation?: SettingsSuggestion }) {
   const [configuration, setConfiguration] = useState<AiConfiguration | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [smartModel, setSmartModel] = useState('');
   const [simpleModel, setSimpleModel] = useState('');
   const [smartThinking, setSmartThinking] = useState<Thinking>('off');
   const [simpleThinking, setSimpleThinking] = useState<Thinking>('off');
+  const [workspaceTools, setWorkspaceTools] = useState(true);
+  const [realMailAccess, setRealMailAccess] = useState(false);
+  const [confirmationMode, setConfirmationMode] = useState<'ask' | 'never'>('ask');
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<string[]>([]);
   const [discovering, setDiscovering] = useState(false);
@@ -36,9 +50,52 @@ export function AiSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [openGroups, setOpenGroups] = useState<AiGroups>(loadGroups);
+  const urlInput = useRef<HTMLInputElement>(null);
   const discoveryId = useRef(0);
   const urlChanged = !!configuration && baseUrl.trim().replace(/\/+$/, '') !== configuration.baseUrl.replace(/\/+$/, '');
   const connectionChanged = urlChanged || apiKey.length > 0;
+  const dirty = !!configuration && (connectionChanged || smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking || workspaceTools !== configuration.workspaceTools || realMailAccess !== configuration.realMailAccess || confirmationMode !== configuration.confirmationMode);
+  const prepared = useSettingsPreparation(preparation, !!configuration, !dirty && !busy, applyPreparation);
+  useEffect(() => { if (preparation) setOpenGroups({ connection: true, models: true, workspace: true }); }, [preparation]);
+  function applyPreparation(suggestion: SettingsSuggestion) {
+    const values = preparationValues(suggestion);
+    if (typeof values.baseUrl === 'string') setBaseUrl(values.baseUrl);
+    if (typeof values.smartModel === 'string') setSmartModel(values.smartModel);
+    if (typeof values.simpleModel === 'string') setSimpleModel(values.simpleModel);
+    if (typeof values.smartThinking === 'string') setSmartThinking(values.smartThinking as Thinking);
+    if (typeof values.simpleThinking === 'string') setSimpleThinking(values.simpleThinking as Thinking);
+    if (values.confirmationMode === 'ask' || values.confirmationMode === 'never') setConfirmationMode(values.confirmationMode);
+    if (typeof values.workspaceTools === 'boolean') setWorkspaceTools(values.workspaceTools);
+    if (values.workspaceTools === false) setRealMailAccess(false);
+    else if (typeof values.realMailAccess === 'boolean') setRealMailAccess((values.workspaceTools ?? workspaceTools) === true && values.realMailAccess);
+    setOpenGroups({ connection: true, models: true, workspace: true });
+    setError(''); setNotice('KI-Vorschlag vorbereitet. Bitte prüfen und selbst speichern. Schlüssel wurden nicht übernommen.');
+  }
+  function resetCurrentChanges() {
+    if (!configuration || busy) return;
+    setBaseUrl(configuration.baseUrl); setSmartModel(configuration.smartModel); setSimpleModel(configuration.simpleModel);
+    setSmartThinking(configuration.smartThinking); setSimpleThinking(configuration.simpleThinking);
+    setWorkspaceTools(configuration.workspaceTools); setRealMailAccess(configuration.realMailAccess); setConfirmationMode(configuration.confirmationMode); setApiKey('');
+    setError(''); setNotice('Eigene Änderungen verworfen. Der Vorschlag wartet auf deine Übernahme.');
+  }
+  const searching = searchQuery.trim().length > 0;
+  const matches = (name: keyof AiGroups) => matchesSettingsEntry(settingsEntries.find(entry => entry.id === `ai.${name}`)!, searchQuery);
+  const groupOpen = (name: keyof AiGroups) => searching ? matches(name) : openGroups[name];
+  const onGroupToggle = (name: keyof AiGroups, open: boolean) => {
+    if (!searching) setOpenGroups(current => current[name] === open ? current : { ...current, [name]: open });
+  };
+
+  useEffect(() => {
+    try { localStorage.setItem(groupStorageKey, JSON.stringify(openGroups)); } catch { /* Keep the in-memory selection. */ }
+  }, [openGroups]);
+
+  useLayoutEffect(() => {
+    const preventLoss = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.workspace.setAiSettingsStatus(busy ? 'busy' : dirty ? 'dirty' : 'clean');
+    if (dirty || busy) window.addEventListener('beforeunload', preventLoss);
+    return () => window.removeEventListener('beforeunload', preventLoss);
+  }, [dirty, busy]);
 
   async function discover() {
     const id = ++discoveryId.current;
@@ -52,18 +109,28 @@ export function AiSettings() {
     let active = true;
     window.workspace.getAiSettings().then(value => {
       if (!active) return;
-      setConfiguration(value); setBaseUrl(value.baseUrl); setSmartModel(value.smartModel); setSimpleModel(value.simpleModel); setSmartThinking(value.smartThinking); setSimpleThinking(value.simpleThinking);
+      const access = !!(value.workspaceTools && value.realMailAccess);
+      setConfiguration({ ...value, realMailAccess: access, confirmationMode: value.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(value.baseUrl); setSmartModel(value.smartModel); setSimpleModel(value.simpleModel); setSmartThinking(value.smartThinking); setSimpleThinking(value.simpleThinking); setWorkspaceTools(value.workspaceTools); setRealMailAccess(access); setConfirmationMode(value.confirmationMode === 'never' ? 'never' : 'ask');
       if (value.configured) void discover();
     }).catch(reason => { if (active) setError(`Einstellungen konnten nicht geladen werden: ${String(reason)}`); });
     return () => { active = false; discoveryId.current++; };
   }, []);
 
   async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(''); setNotice('');
+    event.preventDefault(); setError(''); setNotice('');
+    if (!urlInput.current?.checkValidity()) {
+      onClearSearch?.();
+      setOpenGroups(current => ({ ...current, connection: true }));
+      setError('Bitte eine gültige Endpunkt-URL eingeben.');
+      requestAnimationFrame(() => urlInput.current?.focus());
+      return;
+    }
+    setBusy(true);
     try {
-      await window.workspace.saveAiSettings({ baseUrl: baseUrl.trim(), smartModel: smartModel.trim(), simpleModel: simpleModel.trim(), smartThinking, simpleThinking, ...(apiKey ? { apiKey } : {}) });
+      await window.workspace.saveAiSettings({ baseUrl: baseUrl.trim(), smartModel: smartModel.trim(), simpleModel: simpleModel.trim(), smartThinking, simpleThinking, workspaceTools, realMailAccess: workspaceTools && realMailAccess, confirmationMode, ...(apiKey ? { apiKey } : {}) });
       const updated = await window.workspace.getAiSettings();
-      setConfiguration(updated); setBaseUrl(updated.baseUrl); setSmartModel(updated.smartModel); setSimpleModel(updated.simpleModel); setSmartThinking(updated.smartThinking); setSimpleThinking(updated.simpleThinking); setApiKey('');
+      const access = !!(updated.workspaceTools && updated.realMailAccess);
+      setConfiguration({ ...updated, realMailAccess: access, confirmationMode: updated.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(updated.baseUrl); setSmartModel(updated.smartModel); setSimpleModel(updated.simpleModel); setSmartThinking(updated.smartThinking); setSimpleThinking(updated.simpleThinking); setWorkspaceTools(updated.workspaceTools); setRealMailAccess(access); setConfirmationMode(updated.confirmationMode === 'never' ? 'never' : 'ask'); setApiKey('');
       setNotice('KI-Einstellungen gespeichert.');
       void discover();
     } catch (reason) { setError(`Speichern fehlgeschlagen: ${String(reason)}`); }
@@ -72,17 +139,26 @@ export function AiSettings() {
 
   async function removeKey() {
     setBusy(true); setError(''); setNotice('');
-    try { await window.workspace.clearAiKey(); setConfiguration(current => current && ({ ...current, hasApiKey: false })); setApiKey(''); setNotice('API-Schlüssel entfernt.'); void discover(); }
+    try { await window.workspace.clearAiKey(); setConfiguration(current => current && ({ ...current, hasApiKey: false })); setNotice('API-Schlüssel entfernt.'); void discover(); }
     catch (reason) { setError(`Schlüssel konnte nicht entfernt werden: ${String(reason)}`); }
     finally { setBusy(false); }
   }
 
-  return <section className="settings-card ai-settings" aria-labelledby="ai-settings-heading">
-    <div className="settings-card-heading"><Bot size={19} /><div><h2 id="ai-settings-heading">KI-Verbindung</h2><p>OpenAI-kompatibler Endpunkt für deinen Chat</p></div></div>
+  return <section className="ai-settings" aria-label="KI-Einstellungen">
     {!configuration && !error && <p className="ai-loading">Einstellungen werden geladen …</p>}
-    {configuration && <form className="ai-form" onSubmit={event => void save(event)}>
-      <div className="ai-field"><label htmlFor="ai-base-url">Endpunkt-URL</label><input id="ai-base-url" type="url" required autoComplete="off" spellCheck={false} value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" /><p>Basis-URL des Anbieters, üblicherweise mit <code>/v1</code>.</p></div>
+    <SettingsPreparationNotice suggestion={prepared.pending} blocked={dirty || busy} onApply={prepared.accept} onDismiss={prepared.dismiss} />
+    {prepared.pending && dirty && <button className="ai-inline-button" type="button" disabled={busy} onClick={resetCurrentChanges}>Eigene Änderungen verwerfen</button>}
+    {configuration && <form className="ai-form" noValidate onSubmit={event => void save(event)}><fieldset className="ai-fields" disabled={busy}>
+      <details className="ai-section" hidden={searching && !matches('connection')} open={groupOpen('connection')} onToggle={event => onGroupToggle('connection', event.currentTarget.open)}>
+      <summary><span><strong>Verbindung</strong><small>{configuration.configured ? (() => { try { const url = new URL(configuration.baseUrl); return url.host || 'Endpunkt gespeichert'; } catch { return 'Endpunkt gespeichert'; } })() : 'Nicht eingerichtet'} · {configuration.hasApiKey ? 'Schlüssel hinterlegt' : 'Kein Schlüssel'}{connectionChanged ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="ai-section-content">
+      <div className="ai-field"><label htmlFor="ai-base-url">Endpunkt-URL</label><input ref={urlInput} id="ai-base-url" type="url" required autoComplete="off" spellCheck={false} value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" /><p>Basis-URL des Anbieters, üblicherweise mit <code>/v1</code>.</p></div>
       <div className="ai-field"><div className="ai-label-line"><label htmlFor="ai-api-key">API-Schlüssel</label><span className={`ai-key-status ${configuration.hasApiKey && !urlChanged ? 'is-saved' : ''}`}><KeyRound size={12} />{urlChanged ? 'Je Endpunkt gespeichert' : configuration.hasApiKey ? 'Gespeichert' : 'Nicht hinterlegt'}</span></div><input id="ai-api-key" type="password" autoComplete="new-password" spellCheck={false} value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={configuration.hasApiKey && !urlChanged ? 'Leer lassen, um den Schlüssel zu behalten' : 'Optional, falls dein Anbieter einen Schlüssel verlangt'} /><p>{urlChanged ? 'Schlüssel sind je Endpunkt getrennt gespeichert.' : configuration.hasApiKey ? 'Ein neuer Wert ersetzt den gespeicherten Schlüssel des gewählten Endpunkts.' : 'Für lokale Endpunkte ohne Authentifizierung kann das Feld leer bleiben.'}</p></div>
+      {configuration.hasApiKey && !urlChanged && <button className="ai-remove" type="button" disabled={busy} onClick={() => void removeKey()}><Trash2 size={14} /> Gespeicherten Schlüssel entfernen</button>}
+      </div></details>
+      <details className="ai-section" hidden={searching && !matches('models')} open={groupOpen('models')} onToggle={event => onGroupToggle('models', event.currentTarget.open)}>
+      <summary><span><strong>Modelle</strong><small>Intelligent: {configuration.smartModel || 'nicht festgelegt'} · Einfach: {configuration.simpleModel || 'nicht festgelegt'}{smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="ai-section-content">
       <div className="ai-models-heading"><div><strong>Modelle</strong><p>{discovering ? 'Modelle werden geladen …' : models.length ? `${models.length} Modelle gefunden` : 'Keine Modelle geladen'}</p></div><button className="ai-refresh" type="button" disabled={busy || discovering || connectionChanged} onClick={() => void discover()}><RefreshCw size={14} /> Aktualisieren</button></div>
       {connectionChanged && <p className="ai-model-hint">Speichere zuerst die geänderte URL und den Schlüssel, um deren Modelle zu laden.</p>}
       {discoveryError && !connectionChanged && <p className="ai-model-hint" role="status">{discoveryError}</p>}
@@ -92,9 +168,16 @@ export function AiSettings() {
       <ModelField id="ai-simple-model" label="Einfaches Modell" value={simpleModel} onChange={setSimpleModel} models={connectionChanged ? [] : models} />
       <ThinkingField id="ai-simple-thinking" label="Thinking für einfaches Modell" value={simpleThinking} onChange={setSimpleThinking} />
       <p className="ai-model-hint">Bei „Aus“ wird kein Thinking-Parameter gesendet. Das Modell kann dennoch intern nachdenken.</p>
-      <div className="ai-actions"><button className="ai-save" type="submit" disabled={busy}>{busy ? 'Bitte warten …' : 'KI-Einstellungen speichern'}</button>{configuration.hasApiKey && !urlChanged && <button className="ai-remove" type="button" disabled={busy} onClick={() => void removeKey()}><Trash2 size={14} /> Schlüssel entfernen</button>}</div>
-      <div className="ai-privacy"><ShieldCheck size={15} /><span>Der Schlüssel liegt im Zugangsdaten-Speicher des Systems. Der Chatverlauf und ausdrücklich referenzierte Chats oder E-Mails werden an den eingestellten Endpunkt gesendet.</span></div>
-    </form>}
+      </div></details>
+      <details className="ai-section" hidden={searching && !matches('workspace')} open={groupOpen('workspace')} onToggle={event => onGroupToggle('workspace', event.currentTarget.open)}>
+      <summary><span><strong>Workspace-Zugriff</strong><small>Werkzeuge {configuration.workspaceTools ? 'aktiviert' : 'deaktiviert'} · Postfach {configuration.workspaceTools && configuration.realMailAccess ? 'allgemein freigegeben' : 'Einzelzugriff'} · {configuration.confirmationMode === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen'}{workspaceTools !== configuration.workspaceTools || realMailAccess !== configuration.realMailAccess || confirmationMode !== configuration.confirmationMode ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Chat kann Informationen im Workspace suchen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => { setWorkspaceTools(event.target.checked); if (!event.target.checked) setRealMailAccess(false); }} /></div>
+      <div className="setting-row ai-mail-access"><div><label htmlFor="ai-real-mail-access">Allgemeinen Postfachzugriff erlauben</label><p id="ai-real-mail-description">Erlaubt zusätzliche Ordner- und Nachrichtenabfragen am IMAP-Server. Gewählte Referenzen und einzelne beauftragte Suchen bleiben auch ohne diese Freigabe möglich; Suchen nutzen den Bestätigungsmodus. Mailinhalte und Ergebnisse können an den KI-Anbieter übermittelt und im Chat gespeichert werden.</p>{!workspaceTools && <p className="ai-mail-disabled">Aktiviere zuerst die Workspace-Werkzeuge.</p>}</div><input id="ai-real-mail-access" className="setting-toggle" type="checkbox" aria-describedby="ai-real-mail-description" disabled={!workspaceTools} checked={workspaceTools && realMailAccess} onChange={event => setRealMailAccess(event.target.checked)} /></div>
+      <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus, auch Mailversand und Kontoentfernung. Bestehende Zugriffsrechte gelten weiter. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
+      </details>
+      <div className="ai-privacy"><ShieldCheck size={15} /><span>Der Schlüssel liegt im Zugangsdaten-Speicher des Systems. Chatverlauf, referenzierte Inhalte und Ergebnisse von Workspace-Werkzeugen, einschließlich gefundener E-Mails, werden an den eingestellten Endpunkt gesendet.</span></div>
+      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Änderungen noch nicht gespeichert' : 'Änderungen werden mit Speichern übernommen.'}</span><button className="ai-save" type="submit" disabled={busy}>{busy ? 'Bitte warten …' : 'KI-Einstellungen speichern'}</button></div>
+    </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}
     {notice && <p className="ai-feedback ai-success" role="status">{notice}</p>}
   </section>;

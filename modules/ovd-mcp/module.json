@@ -1,0 +1,16 @@
+{
+  "apiVersion": 1,
+  "id": "ovd-mcp",
+  "title": "MCP-Verbindungen",
+  "version": "0.1.0",
+  "description": "Verbindet ausdrücklich konfigurierte lokale oder entfernte MCP-Server. Freigegebene Werkzeuge verbundener Server erscheinen als eigene, gezielt auffindbare Module. Server verwalten, verbinden und Aufrufprotokoll ansehen.",
+  "keywords": ["mcp", "server", "verbindung", "werkzeuge", "tools", "integration", "stdio", "http"],
+  "capabilities": ["mcp.servers", "mcp.connect", "mcp.disconnect", "mcp.remove", "mcp.settings", "mcp.tools", "mcp.audit"],
+  "permissions": ["storage.workspace", "credentials.mcp", "network.mcp", "process.mcp", "settings.manage"],
+  "runtime": { "type": "host-adapter", "adapter": "ovd-mcp-v1" },
+  "contributions": {
+    "views": [], "navigation": [],
+    "settings": [{ "id": "mcp", "title": "MCP", "description": "Server und Werkzeugfreigaben", "keywords": ["mcp", "server", "stdio", "http", "werkzeuge", "tools", "verbindungen", "token", "bearer", "umgebung", "env", "argumente", "programm", "executable", "prozess", "verzeichnis", "cwd", "freigabe", "berechtigung", "zugriff", "protokoll", "audit", "starten", "verbinden", "trennen", "autostart"], "renderer": "mcp-settings", "icon": "settings", "order": 70 }],
+    "referenceTypes": []
+  }
+}

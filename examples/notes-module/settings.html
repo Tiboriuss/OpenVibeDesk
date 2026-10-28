@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="de">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Notizmodul</title>
+<style>:root{font:13px system-ui,sans-serif;color:#18253c;background:#fff}*{box-sizing:border-box}body{margin:0;padding:18px}h2{font-size:15px;margin:0 0 12px}p{color:#52637b;line-height:1.6;margin:0 0 12px}details{border:1px solid #d6deea;border-radius:9px;margin-bottom:12px}summary{cursor:pointer;font-weight:650;padding:13px}details>div{padding:0 13px 2px}button{font:inherit;font-weight:600;border:1px solid #d6deea;border-radius:7px;padding:8px 12px;background:#e9e6ff;color:#48379f;cursor:pointer}button:focus-visible,summary:focus-visible{outline:3px solid #9989ed;outline-offset:2px}#status{font-size:12px;margin-top:10px}</style></head>
+<body><h2>Notizen</h2><details open><summary>Lokaler Speicher</summary><div><p>Notizen werden als JSON im eigenen Datenverzeichnis des Moduls gespeichert. Die Oberfläche und der OVD-Assistent verwenden denselben Speicher.</p><p>Dieses Beispiel unterstützt bis zu 500 Notizen mit jeweils 2000 Zeichen. Es verändert keine bestehenden Workspace-Inhalte.</p><button id="check" type="button">Speicher prüfen</button><p id="status" role="status" aria-live="polite"></p></div></details><details><summary>Mit dem Assistenten verwenden</summary><div><p>Zum Beispiel: „Merke dir: Am Freitag die Präsentation vorbereiten.“ Oder: „Suche meine Notiz zur Präsentation.“</p><p>OVD findet zunächst das Notizmodul und lädt erst danach dessen passende Funktionen.</p></div></details>
+<script>
+'use strict';
+let activeRequest, timeout;
+const button = document.getElementById('check'), status = document.getElementById('status');
+button.addEventListener('click', () => {
+  activeRequest = crypto.randomUUID(); button.disabled = true; status.textContent = 'Speicher wird geprüft …';
+  timeout = setTimeout(() => { activeRequest = undefined; button.disabled = false; status.textContent = 'Keine Antwort erhalten. Bitte erneut versuchen.'; }, 70000);
+  parent.postMessage({ type: 'ovd:invoke', requestId: activeRequest, tool: 'sample-notes.list', args: { limit: 1 } }, '*');
+});
+addEventListener('message', event => {
+  if (event.source !== parent || !event.data || event.data.type !== 'ovd:result' || event.data.requestId !== activeRequest) return;
+  clearTimeout(timeout); activeRequest = undefined; button.disabled = false;
+  status.textContent = event.data.ok ? event.data.result.total + (event.data.result.total === 1 ? ' Notiz lokal gespeichert.' : ' Notizen lokal gespeichert.') : event.data.error || 'Der Speicher konnte nicht gelesen werden.';
+});
+</script></body></html>

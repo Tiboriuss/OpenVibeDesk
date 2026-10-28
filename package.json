@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@11.25.0",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "description": "OpenVibeDesk: local-first single-user AI workspace",
   "main": "dist-electron/electron/main.js",
   "scripts": {
@@ -16,8 +18,14 @@
     "pack:mac": "pnpm build && electron-builder --mac dmg"
   },
   "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@napi-rs/keyring": "2.1.2",
+    "ajv": "8.17.1",
+    "imapflow": "^2.9.1",
     "lucide-react": "^1.62.0",
+    "mailparser": "^3.12.4",
+    "nodemailer": "^10.2.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
@@ -26,7 +34,9 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^24.8.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/sql.js": "^1.4.9",
@@ -46,6 +56,7 @@
     "files": [
       "dist/**",
       "dist-electron/**",
+      "modules/**/module.json",
       "package.json"
     ],
     "asar": true,

@@ -1,0 +1,92 @@
+{
+  "apiVersion": 1,
+  "id": "ovd-assistant",
+  "title": "OVD-Assistent",
+  "version": "0.1.0",
+  "description": "Pflichtmodul für Gespräche, das Lesen gespeicherter Chatverläufe, Referenzen, Systemzeit, Kalenderzeiträume, Berechnungen, Workspace-Kontext, Navigation und Einstellungen; findet und steuert Zusatzmodule.",
+  "keywords": [
+    "assistent",
+    "assistant",
+    "chat",
+    "chatverlauf",
+    "kontext",
+    "fenster",
+    "einstellung",
+    "modell",
+    "ki",
+    "workspace",
+    "agent",
+    "agenten",
+    "grenzen",
+    "werkzeuge",
+    "zeit",
+    "datum",
+    "uhrzeit",
+    "zeitzone",
+    "heute",
+    "gestern",
+    "zeitraum",
+    "berechnung",
+    "rechnen",
+    "summe",
+    "durchschnitt",
+    "navigation",
+    "seitenleiste",
+    "reihenfolge"
+  ],
+  "required": true,
+  "capabilities": [
+    "context.get",
+    "time.now",
+    "time.resolve_range",
+    "time.difference",
+    "math.calculate",
+    "windows.list",
+    "windows.open",
+    "windows.control",
+    "chats.list",
+    "chats.read",
+    "chats.create",
+    "chats.use_model",
+    "chats.open",
+    "chats.rename",
+    "chats.reference",
+    "chats.fork",
+    "settings.get",
+    "settings.update",
+    "settings.open",
+    "settings.ai_get",
+    "settings.ai_save",
+    "settings.ai_models",
+    "settings.ai_clear_key",
+    "app.quit",
+    "modules.list",
+    "modules.set_enabled",
+    "settings.agent_get",
+    "settings.agent_save",
+    "navigation.get",
+    "navigation.move"
+  ],
+  "permissions": [
+    "storage.workspace",
+    "windows.manage",
+    "credentials.ai",
+    "network.ai",
+    "settings.manage"
+  ],
+  "runtime": {
+    "type": "host-adapter",
+    "adapter": "ovd-assistant-v1"
+  },
+  "contributions": {
+    "views": [],
+    "navigation": [],
+    "settings": [],
+    "referenceTypes": [
+      {
+        "id": "chat",
+        "title": "Chat"
+      }
+    ]
+  }
+}

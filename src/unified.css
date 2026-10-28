@@ -2,7 +2,7 @@
 :root{--ink:#18253c;--muted:#52637b;--line:#d6deea;--paper:#fff;--canvas:#f4f6fa;--shell:#17243b;--shell-raised:#253551;--accent:#6555c7;--accent-dark:#48379f;--accent-soft:#e9e6ff}
 .native-panel{display:flex;flex-direction:column;background:var(--paper);color:var(--ink)}
 .native-view-body{flex:1;min-height:0;overflow:hidden}
-.window-chrome{height:48px;flex:none;display:flex;align-items:center;gap:10px;padding-left:15px;background:var(--shell);color:#f4f5ff;border-bottom:1px solid #35435e;-webkit-app-region:drag;user-select:none}
+.window-chrome{height:36px;flex:none;display:flex;align-items:center;gap:10px;padding-left:15px;background:var(--shell);color:#f4f5ff;border-bottom:1px solid #35435e;-webkit-app-region:drag;user-select:none}
 .window-chrome-brand{width:25px;height:25px;display:grid;place-items:center;border-radius:8px;color:#fff;background:linear-gradient(145deg,#8875ec,#5c52b0)}
 .window-chrome-title{font-size:12px;letter-spacing:.1px;font-weight:700}
 .window-chrome-actions{display:flex;margin-left:auto;align-self:stretch;-webkit-app-region:no-drag}

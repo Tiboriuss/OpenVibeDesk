@@ -1,4 +1,7 @@
 import type { ChatMessage, ChatSession, ForkChatResult, SessionReference, WorkspaceState } from './model';
+import type { ModuleReference } from './references';
+
+function copyReferences(references: ModuleReference[]): ModuleReference[] { return references.map(reference => ({ ...reference, ...(reference.metadata ? { metadata: { ...reference.metadata } } : {}) })); }
 
 export function normalizeSessions(state: WorkspaceState): WorkspaceState {
   const existing = Array.isArray(state.sessions) ? state.sessions : [];
@@ -45,11 +48,12 @@ export function forkSession(state: WorkspaceState, messageId: string, replacemen
   const original = source.messages[userIndex];
   const text = replacementText === undefined ? original.text : replacementText.trim();
   if (!text.trim() || text.length > 20_000) throw new Error('Bitte eine Nachricht mit höchstens 20.000 Zeichen eingeben.');
-  const messages = source.messages.slice(0, userIndex).map(m => ({ ...m, id: crypto.randomUUID(), ...(m.sessionRef ? { sessionRef: { ...m.sessionRef } } : {}) }));
+  const messages = source.messages.slice(0, userIndex).map(m => ({ ...m, id: crypto.randomUUID(), ...(m.sessionRef ? { sessionRef: { ...m.sessionRef } } : {}), ...(m.references ? { references: copyReferences(m.references) } : {}) }));
   const session: ChatSession = { id: crypto.randomUUID(), title: `${source.title.slice(0, 106)} (Abzweigung)`, createdAt: now, updatedAt: now, historyStart: Math.min(source.historyStart, messages.length), messages };
-  const emailRef = original.emailRef && state.mails.some(m => m.id === original.emailRef) ? original.emailRef : undefined;
+  const emailReference = original.emailReference ? { ...original.emailReference, attachments: original.emailReference.attachments.map(attachment => ({ ...attachment })) } : undefined;
+  const emailRef = emailReference?.id ?? (original.emailRef && state.mails.some(m => m.id === original.emailRef) ? original.emailRef : undefined);
   const sessionRefId = original.sessionRef?.id && original.sessionRef.id !== session.id && state.sessions.some(s => s.id === original.sessionRef?.id) ? original.sessionRef.id : undefined;
-  return { state: { ...state, sessions: [session, ...state.sessions], activeSessionId: session.id, chat: session.messages }, result: { sessionId: session.id, text, ...(emailRef ? { emailRef } : {}), ...(sessionRefId ? { sessionRefId } : {}) } };
+  return { state: { ...state, sessions: [session, ...state.sessions], activeSessionId: session.id, chat: session.messages }, result: { sessionId: session.id, text, ...(emailRef ? { emailRef } : {}), ...(emailReference ? { emailReference } : {}), ...(sessionRefId ? { sessionRefId } : {}), ...(original.references?.length ? { references: copyReferences(original.references) } : {}) } };
 }
 
 export function updateSessionMessages(state: WorkspaceState, id: string, update: (messages: ChatMessage[]) => ChatMessage[], now = new Date().toISOString()): WorkspaceState {
@@ -62,11 +66,15 @@ export function updateSessionMessages(state: WorkspaceState, id: string, update:
   return { ...state, sessions: state.sessions.map(s => s.id === id ? next : s), chat: state.activeSessionId === id ? messages : state.chat };
 }
 
-export function snapshotSessionReference(state: WorkspaceState, id: string, currentId = state.activeSessionId): SessionReference {
+export function snapshotSessionReference(state: WorkspaceState, id: string, currentId = state.activeSessionId, now = new Date().toISOString()): SessionReference {
   if (id === currentId) throw new Error('Der aktuelle Chat kann nicht auf sich selbst verweisen.');
   const session = state.sessions.find(s => s.id === id);
   if (!session) throw new Error('Referenzierter Chat nicht gefunden.');
-  const excerpt = session.messages.filter(m => m.id !== 'welcome' && m.text.trim() && m.status !== 'failed' && m.status !== 'streaming').slice(-40).map(m => `${m.role === 'user' ? 'Nutzer' : 'Assistent'}: ${m.text.slice(0, 8000)}`).join('\n\n').slice(-20000);
+  const messages = session.messages.filter(m => m.id !== 'welcome');
+  const readable = messages.filter(m => m.text.trim() && m.status !== 'failed' && m.status !== 'streaming');
+  const selected = readable.slice(-40);
+  const formatted = selected.map(m => `${m.role === 'user' ? 'Nutzer' : 'Assistent'}: ${m.text.slice(0, 8000)}`).join('\n\n');
+  const excerpt = formatted.slice(-20000);
   if (!excerpt) throw new Error('Dieser Chat enthält noch keinen Text als Referenz.');
-  return { id: session.id, title: session.title.slice(0, 120), excerpt };
+  return { id: session.id, title: session.title.slice(0, 120), excerpt, truncated: selected.length < messages.length || selected.some(m => m.text.length > 8000) || formatted.length > 20000, capturedAt: now, sourceUpdatedAt: session.updatedAt, messageCount: messages.length };
 }

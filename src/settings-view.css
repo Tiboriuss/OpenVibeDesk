@@ -1,0 +1,41 @@
+.settings-view{height:100%;display:grid;grid-template-columns:190px minmax(0,1fr);background:var(--canvas);color:var(--ink)}
+.settings-sidebar{padding:21px 12px;background:#edf0f7;border-right:1px solid var(--line);min-width:0}
+.settings-sidebar-title{display:flex;align-items:center;gap:9px;padding:0 4px}
+.settings-sidebar-title h1{margin:0;font-size:16px;letter-spacing:-.3px}
+.settings-view-icon{width:33px;height:33px;flex:none;display:grid;place-items:center;border-radius:9px;background:var(--accent);color:#fff}
+.settings-search{display:flex;align-items:center;gap:7px;margin-top:18px;padding:0 9px;min-height:37px;background:#fff;border:1px solid #c5d0df;border-radius:8px;color:var(--muted)}
+.settings-search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px #6555c724}
+.settings-search input{width:100%;min-width:0;border:0;outline:0;background:none;color:var(--ink);font-size:11px}
+.settings-search input::-webkit-search-cancel-button{display:none}
+.settings-search button{flex:none;display:grid;place-items:center;width:23px;height:23px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.settings-search button:hover{background:#edf0f6;color:var(--ink)}
+.settings-category-nav{display:flex;flex-direction:column;gap:3px;margin-top:14px}
+.settings-category-nav button{display:flex;align-items:center;gap:9px;width:100%;padding:10px 9px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:12px;font-weight:600;text-align:left;white-space:nowrap}
+.settings-category-nav button svg{flex:none}
+.settings-category-nav button:hover{background:#e2e6ef;color:var(--ink)}
+.settings-category-nav button.active{background:var(--accent-soft);color:var(--accent-dark)}
+.settings-view-content{min-width:0;overflow:auto;padding:24px 26px 28px}
+.settings-view-content>section[hidden]{display:none}
+.settings-content-heading{margin-bottom:19px}
+.settings-content-heading h2{margin:0;font-size:19px;line-height:1.25;letter-spacing:-.3px}
+.settings-content-heading p{margin:5px 0 0;color:var(--muted);font-size:12px;line-height:1.4}
+.settings-result-category{margin:20px 1px 8px;font-size:12px;color:var(--muted)}
+.workspace-settings-group{margin-bottom:8px;border:1px solid var(--line);border-radius:9px;background:#fff;overflow:hidden}
+.workspace-settings-group>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:49px;padding:10px 12px;list-style:none;cursor:pointer}
+.workspace-settings-group>summary::-webkit-details-marker{display:none}
+.workspace-settings-group>summary:hover{background:#f7f8fc}
+.workspace-settings-group>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.workspace-settings-group>summary span{display:flex;flex-direction:column;gap:3px;min-width:0}
+.workspace-settings-group>summary strong{font-size:12px}
+.workspace-settings-group>summary small{color:var(--muted);font-size:11px}
+.workspace-settings-group>summary svg{flex:none;color:var(--muted);transition:transform .15s}
+.workspace-settings-group[open]>summary svg{transform:rotate(180deg)}
+.workspace-settings-content{padding:14px 12px 15px;border-top:1px solid var(--line)}
+.settings-view .workspace-setting-row{border:0;margin:0;padding:0}
+.settings-view .ai-settings{padding:0;margin:0;border:0;border-radius:0;box-shadow:none}
+.settings-reset{display:inline-flex;align-items:center;gap:5px;margin-top:13px;padding:5px 0;border:0;background:none;color:var(--accent-dark);font-size:11px;font-weight:700}
+.settings-reset:hover{text-decoration:underline}
+.settings-save-note{margin:15px 1px 0;color:var(--muted);font-size:11px;line-height:1.45}
+.settings-empty{display:flex;flex-direction:column;align-items:center;gap:7px;padding:30px 15px;color:var(--muted);text-align:center;font-size:12px}
+.settings-empty strong{color:var(--ink);font-size:13px}
+@media(max-width:649px){.settings-view{display:flex;flex-direction:column}.settings-sidebar{flex:none;padding:13px 16px 0;border-right:0;border-bottom:1px solid var(--line)}.settings-sidebar-title h1{font-size:15px}.settings-view-icon{width:30px;height:30px}.settings-search{margin-top:11px}.settings-category-nav{flex-direction:row;gap:4px;margin-top:10px;overflow:auto;padding-bottom:7px}.settings-category-nav button{width:auto;flex:none;gap:6px;padding:8px 9px;font-size:11px}.settings-view-content{flex:1;min-height:0;padding:18px 16px 24px}}

@@ -1,0 +1,24 @@
+.navigation-order-settings[hidden]{display:none}
+.navigation-order-help{margin:0 0 10px;color:var(--muted);font-size:11px;line-height:1.5}
+.navigation-order-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.navigation-order-list>li{display:flex;align-items:center;gap:9px;min-height:47px;padding:6px 8px;background:#fff}
+.navigation-order-list>li+li{border-top:1px solid #e8ecf3}
+.navigation-order-list>li>svg{flex:none;color:var(--accent-dark)}
+.navigation-order-position{width:15px;flex:none;text-align:center;color:#7b879a;font-size:10px;font-variant-numeric:tabular-nums}
+.navigation-order-label{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}
+.navigation-order-label>strong{font-size:11px;line-height:1.35;font-weight:650;overflow-wrap:anywhere}
+.navigation-order-label>small{font-size:10px;line-height:1.3;color:var(--muted);overflow-wrap:anywhere}
+.navigation-order-actions{display:flex;align-items:center;gap:3px;flex:none}
+.navigation-order-actions>button{display:grid;place-items:center;width:29px;height:29px;padding:0;border:1px solid #d6dce8;border-radius:5px;background:#fff;color:var(--accent-dark)}
+.navigation-order-actions>button:hover:not(:disabled){background:var(--accent-soft);border-color:#bdb2df}
+.navigation-order-actions>button:disabled{opacity:.35;cursor:default}
+.navigation-order-actions>button:focus-visible,.navigation-order-footer>button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.navigation-order-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;margin-top:9px}
+.navigation-order-footer>.settings-reset{margin:0;min-height:29px}
+.navigation-order-footer>.settings-reset:disabled{color:var(--muted);opacity:.55;text-decoration:none;cursor:default}
+.navigation-order-footer>small{font-size:10px;color:var(--muted)}
+.navigation-order-extra{font-size:10px;margin:8px 0 0}
+.navigation-order-status{min-height:0;font-size:10px;color:#3b7561;line-height:1.5}
+.navigation-order-status:not(:empty){margin-top:7px}
+.navigation-order-error{padding:8px 9px;margin:8px 0 0;border:1px solid #ebc8cf;border-radius:6px;background:#fff0f2;color:#9b3442;font-size:11px;line-height:1.45;overflow-wrap:anywhere}
+@media(max-width:480px){.navigation-order-list>li{gap:7px;padding:6px}.navigation-order-position{width:12px}.navigation-order-actions>button{width:30px;height:30px}.navigation-order-label>strong{font-size:11px}}

@@ -1,0 +1,17 @@
+{
+  "apiVersion": 1,
+  "id": "ovd-files",
+  "title": "Dateien",
+  "version": "0.1.0",
+  "description": "Kompakter Dateimanager für alle mit den Benutzerrechten zugänglichen lokalen Dateien und Ordner. Frei navigieren, anzeigen, filtern, sortieren, Textdateien lesen und Dateien im Chat referenzieren.",
+  "keywords": ["dateien", "datei", "dateimanager", "file", "files", "explorer", "finder", "dokumente", "documents", "ordner", "folder", "text", "lesen", "referenz", "anhang"],
+  "capabilities": ["files.list", "files.open", "files.read", "files.reference", "files.choose"],
+  "permissions": ["files.local", "storage.workspace", "windows.manage"],
+  "runtime": { "type": "host-adapter", "adapter": "ovd-files-v1" },
+  "contributions": {
+    "views": [{ "id": "files", "title": "Dateien", "renderer": "files", "icon": "folder" }],
+    "navigation": [{ "id": "files", "title": "Dateien", "view": "files", "icon": "folder", "order": 40 }],
+    "settings": [],
+    "referenceTypes": [{ "id": "file", "title": "Datei" }]
+  }
+}

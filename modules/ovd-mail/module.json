@@ -1,0 +1,149 @@
+{
+  "apiVersion": 1,
+  "id": "ovd-mail",
+  "title": "Mail",
+  "version": "0.1.0",
+  "description": "E-Mails mit gemeinsamen Filtern serverseitig zählen, nach Empfangszeit sortieren, suchen, lesen und öffnen; Mailentwürfe vorbereiten und versenden.",
+  "keywords": [
+    "mail",
+    "email",
+    "e-mail",
+    "postfach",
+    "nachricht",
+    "absender",
+    "empfänger",
+    "entwurf",
+    "imap",
+    "smtp",
+    "anhang",
+    "rechnung",
+    "mails",
+    "neueste",
+    "letzte",
+    "auflisten",
+    "übersicht",
+    "mailübersicht",
+    "posteingang",
+    "aktuelle",
+    "zählen",
+    "anzahl",
+    "ungelesen",
+    "heute",
+    "zeitraum",
+    "statistik",
+    "sortieren"
+  ],
+  "capabilities": [
+    "drafts.list",
+    "drafts.get",
+    "drafts.create",
+    "drafts.open",
+    "drafts.update",
+    "drafts.send",
+    "mail.accounts",
+    "mail.list_folders",
+    "mail.open_folder",
+    "mail.filter",
+    "mail.search",
+    "mail.list_messages",
+    "mail.read",
+    "mail.open",
+    "mail.set_read",
+    "mail.download_attachment",
+    "accounts.test",
+    "accounts.save",
+    "accounts.remove",
+    "smtp.list",
+    "smtp.test",
+    "smtp.save",
+    "files.attach",
+    "files.remove_attachment",
+    "mail.query",
+    "mail.count"
+  ],
+  "permissions": [
+    "network.mail",
+    "credentials.mail",
+    "storage.mail",
+    "files.user-selected",
+    "mail.read",
+    "mail.send.confirmation"
+  ],
+  "runtime": {
+    "type": "host-adapter",
+    "adapter": "ovd-mail-v1"
+  },
+  "contributions": {
+    "views": [
+      {
+        "id": "mail",
+        "title": "Mail",
+        "renderer": "mail",
+        "icon": "mail",
+        "order": 10
+      },
+      {
+        "id": "draft",
+        "title": "Entwurf",
+        "renderer": "draft",
+        "icon": "file",
+        "order": 20
+      }
+    ],
+    "navigation": [
+      {
+        "id": "mail",
+        "title": "Mail",
+        "view": "mail",
+        "icon": "mail",
+        "order": 10
+      }
+    ],
+    "settings": [
+      {
+        "id": "mail",
+        "title": "E-Mail",
+        "description": "Konten, Empfang und Versand",
+        "keywords": [
+          "mail",
+          "email",
+          "e-mail",
+          "postfach",
+          "konto",
+          "imap",
+          "smtp",
+          "server",
+          "passwort",
+          "anhang",
+          "versand",
+          "postausgang",
+          "posteingang",
+          "empfang",
+          "port",
+          "verschlüsselung",
+          "tls",
+          "starttls",
+          "benutzername",
+          "login",
+          "senden",
+          "zugang",
+          "bearbeiten",
+          "ändern",
+          "kontoname",
+          "adresse",
+          "konfiguration",
+          "allgemein"
+        ],
+        "renderer": "mail-settings",
+        "icon": "mail",
+        "order": 40
+      }
+    ],
+    "referenceTypes": [
+      {
+        "id": "email",
+        "title": "E-Mail"
+      }
+    ]
+  }
+}

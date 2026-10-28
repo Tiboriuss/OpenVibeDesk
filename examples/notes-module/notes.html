@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Notizen</title>
+<style>
+:root{font:13px system-ui,sans-serif;color:#18253c;background:#f4f6fa}*{box-sizing:border-box}body{margin:0}main{max-width:780px;margin:auto;padding:24px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px}h1{font-size:20px;margin:0 0 5px}p{margin:0;color:#52637b;line-height:1.6}button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid #d6deea;border-radius:7px;padding:8px 12px;background:white;color:#48379f;font-weight:600}button:disabled{opacity:.6;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #9989ed;outline-offset:2px}.note-editor{border:1px solid #d6deea;border-radius:10px;background:white;padding:14px;margin-bottom:22px}label{display:block;font-weight:650;margin-bottom:8px}textarea{display:block;width:100%;resize:vertical;min-height:92px;border:0;outline:0;padding:0;color:#18253c;line-height:1.6}.note-editor>div{display:flex;gap:12px;align-items:center;justify-content:space-between;border-top:1px solid #edf0f5;margin-top:12px;padding-top:10px}small{font-size:11px;color:#52637b}#save{background:#6555c7;color:white;border-color:#6555c7}.search{display:flex;gap:12px;align-items:center;margin-bottom:12px}.search input{flex:1;min-width:0;border:1px solid #d6deea;border-radius:8px;padding:10px;background:white}.search span{color:#52637b;font-size:11px;white-space:nowrap}ul{list-style:none;padding:0;margin:0}li{padding:15px;border:1px solid #d6deea;border-radius:9px;background:white;margin-bottom:9px}li p{color:#18253c;white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:9px}time{font-size:11px;color:#52637b}.feedback{min-height:22px;margin-bottom:9px;font-size:12px}.feedback.error{color:#a52d42}.empty{padding:25px;text-align:center;border:1px dashed #d6deea;border-radius:9px;color:#52637b}#more{width:100%;margin-top:5px}footer{font-size:11px;color:#52637b;line-height:1.6;margin-top:20px}@media(max-width:480px){main{padding:16px}header{align-items:flex-start}.search{flex-wrap:wrap}.search input{flex-basis:100%}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Notizen</h1><p>Gedanken festhalten und später wiederfinden.</p></div><button id="refresh" type="button">Aktualisieren</button></header>
+<section class="note-editor" aria-label="Neue Notiz"><label for="note">Neue Notiz</label><textarea id="note" maxlength="2000" required placeholder="Was möchtest du dir merken?"></textarea><div><small id="length">0 / 2000 Zeichen</small><button id="save" type="button">Notiz speichern</button></div></section>
+<div class="search"><input id="search" type="search" maxlength="120" aria-label="Notizen durchsuchen" placeholder="Notizen durchsuchen …"><span id="count"></span></div>
+<div class="feedback" id="feedback" role="status" aria-live="polite"></div>
+<ul id="notes" aria-label="Gespeicherte Notizen"></ul>
+<div class="empty" id="empty" hidden>Noch keine Notizen vorhanden.</div>
+<button id="more" type="button" hidden>Weitere Notizen laden</button>
+<footer>Die Notizen liegen lokal im Datenverzeichnis dieses Moduls. Du kannst auch den OVD-Assistenten bitten, eine Notiz anzulegen oder zu suchen.</footer>
+</main>
+<script>
+'use strict';
+const pending = new Map();
+function invoke(tool, args) {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('Die Antwort ist ausgeblieben. Bitte die Liste aktualisieren, bevor du die Aktion erneut startest.')); }, 70000);
+    pending.set(requestId, { resolve, reject, timer });
+    parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*');
+  });
+}
+addEventListener('message', event => {
+  if (event.source !== parent || !event.data || event.data.type !== 'ovd:result') return;
+  const request = pending.get(event.data.requestId);
+  if (!request) return;
+  pending.delete(event.data.requestId); clearTimeout(request.timer);
+  if (event.data.ok) request.resolve(event.data.result);
+  else request.reject(new Error(typeof event.data.error === 'string' ? event.data.error : 'Die Notizfunktion ist fehlgeschlagen.'));
+});
+const field = document.getElementById('note'), search = document.getElementById('search');
+const list = document.getElementById('notes'), count = document.getElementById('count');
+const feedback = document.getElementById('feedback'), empty = document.getElementById('empty');
+const more = document.getElementById('more'), save = document.getElementById('save');
+let nextOffset, version = 0, searchTimer;
+function message(text, error = false) { feedback.textContent = text; feedback.className = error ? 'feedback error' : 'feedback'; }
+function append(note) {
+  const item = document.createElement('li');
+  const text = document.createElement('p'); text.textContent = note.text;
+  const date = document.createElement('time'); date.dateTime = note.createdAt;
+  date.textContent = new Date(note.createdAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+  item.append(text, date); list.append(item);
+}
+async function load(appendPage = false) {
+  const requestVersion = ++version;
+  more.disabled = true; message('Notizen werden geladen …');
+  try {
+    const result = await invoke('sample-notes.list', { query: search.value.trim(), offset: appendPage ? nextOffset || 0 : 0, limit: 20 });
+    if (requestVersion !== version) return;
+    if (!appendPage) list.replaceChildren();
+    result.notes.forEach(append); nextOffset = result.nextOffset;
+    count.textContent = result.total + (result.total === 1 ? ' Notiz' : ' Notizen');
+    empty.hidden = list.children.length > 0;
+    empty.textContent = search.value.trim() ? 'Keine passende Notiz gefunden.' : 'Noch keine Notizen vorhanden.';
+    more.hidden = !result.hasMore; message('');
+  } catch (error) { if (requestVersion === version) message(error.message, true); }
+  finally { if (requestVersion === version) more.disabled = false; }
+}
+field.addEventListener('input', () => { document.getElementById('length').textContent = field.value.length + ' / 2000 Zeichen'; });
+save.addEventListener('click', async () => {
+  const text = field.value.trim();
+  if (!text || save.disabled) return;
+  save.disabled = true; field.disabled = true; message('Notiz wird gespeichert …');
+  try {
+    await invoke('sample-notes.add', { text });
+    field.value = ''; document.getElementById('length').textContent = '0 / 2000 Zeichen';
+    clearTimeout(searchTimer); search.value = ''; await load();
+  } catch (error) { message(error.message, true); }
+  finally { save.disabled = false; field.disabled = false; field.focus(); }
+});
+search.addEventListener('input', () => { clearTimeout(searchTimer); version++; searchTimer = setTimeout(() => { void load(); }, 180); });
+document.getElementById('refresh').addEventListener('click', () => { void load(); });
+more.addEventListener('click', () => { void load(true); });
+void load();
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "apiVersion": 1,
+  "id": "sample-notes",
+  "title": "Notizen",
+  "version": "0.1.0",
+  "description": "Lokale Notizen anzeigen und hinzufügen. Die Notizoberfläche und der OVD-Assistent verwenden dieselben Funktionen.",
+  "keywords": ["notiz", "notizen", "notes", "merken", "gedanke"],
+  "capabilities": ["sample-notes.list", "sample-notes.add"],
+  "permissions": ["storage.module-data"],
+  "runtime": { "type": "process", "entry": "backend.cjs" },
+  "tools": [
+    {
+      "name": "sample-notes.list",
+      "label": "Notizen anzeigen",
+      "description": "Lokale Notizen auflisten oder nach Text durchsuchen. Liefert eine begrenzte Seite mit Notizen und einem optionalen Folgeoffset.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "maxLength": 120, "description": "Optionaler Suchtext innerhalb der Notizen." },
+          "offset": { "type": "integer", "minimum": 0, "maximum": 500 },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 50 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "sample-notes.add",
+      "label": "Notiz hinzufügen",
+      "description": "Eine neue lokale Notiz speichern. Der Inhalt bleibt im eigenen Datenverzeichnis dieses Moduls.",
+      "parameters": {
+        "type": "object",
+        "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 2000, "description": "Text der neuen Notiz." } },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "contributions": {
+    "views": [{ "id": "notes", "title": "Notizen", "entry": "notes.html", "icon": "file" }],
+    "navigation": [{ "id": "notes", "title": "Notizen", "view": "notes", "icon": "file", "order": 55 }],
+    "settings": [{ "id": "settings", "title": "Notizen", "description": "Lokaler Speicher und Verwendung des Notizmoduls", "keywords": ["notiz", "notizen", "notes", "speicher", "lokal"], "entry": "settings.html", "icon": "file", "order": 100 }]
+  }
+}

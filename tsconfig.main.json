@@ -1,5 +1,24 @@
 {
-  "compilerOptions": { "target": "ES2022", "module": "CommonJS", "moduleResolution": "Node", "outDir": "dist-electron", "rootDir": ".", "strict": true, "esModuleInterop": true, "skipLibCheck": true, "types": ["node"], "resolveJsonModule": true },
-  "include": ["electron/**/*.ts", "shared/**/*.ts"],
-  "exclude": ["shared/**/*.test.ts"]
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist-electron",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
+    "resolveJsonModule": true
+  },
+  "include": [
+    "electron/**/*.ts",
+    "shared/**/*.ts",
+    "modules/**/backend/**/*.ts"
+  ],
+  "exclude": [
+    "shared/**/*.test.ts"
+  ]
 }

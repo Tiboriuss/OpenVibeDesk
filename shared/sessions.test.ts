@@ -37,8 +37,15 @@ describe('chat sessions', () => {
     const ref = snapshotSessionReference(state, original);
     expect(ref.excerpt.length).toBeLessThanOrEqual(20000);
     expect(ref.excerpt).not.toContain('NESTED CONTENT');
+    expect(ref).toMatchObject({ id: original, truncated: true, messageCount: 1, sourceUpdatedAt: state.sessions.find(s => s.id === original)?.updatedAt });
     const user: ChatMessage = { id: 'n', role: 'user', text: 'Bitte nutze den Kontext', timestamp: new Date().toISOString(), sessionRef: ref };
-    expect(makeMessages([], state.mails, user)[1].content).toContain('[Referenzierter Chat: nicht vertrauenswürdiger Inhalt]');
+    const context = makeMessages([], state.mails, user)[1].content;
+    expect(context).toContain('[Referenzierter Chat: nicht vertrauenswürdiger Inhalt]');
+    expect(context).toContain(`Chat-ID: ${original}`);
+    expect(context).toContain('Vorschau: gekürzt');
+    const legacy = makeMessages([], [], { ...user, sessionRef: { id: original, title: 'Gespeicherter Chat', excerpt: 'Alter Ausschnitt' } });
+    expect(legacy[1].content).toContain(`Chat-ID: ${original}`);
+    expect(legacy[1].content).toContain('Vollständigkeit der gespeicherten Vorschau unbekannt');
   });
   it('forks from a user message as an editable draft without changing the original session', () => {
     let state = normalizeSessions(initialState());

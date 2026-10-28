@@ -3,8 +3,40 @@ import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { chatOptionsSchema, makeMessages, normalizeAiConfig, parseAiInput, listModels, requestCompletion } from '../electron/ai';
 import { initialState } from './actions';
+import { defaultAgentSettings, normalizeAgentSettings } from './agent-settings';
 
 describe('OpenAI-compatible endpoint', () => {
+  it('introduces module discovery with bounded summaries and respects disabled tools', () => {
+    const state = initialState();
+    const user = { id: 'user', role: 'user' as const, text: 'Suche eine Mail', timestamp: '2026-01-01' };
+    expect(makeMessages([], state.mails, user, false)[0].content).toContain('Werkzeuge sind deaktiviert');
+    const modules = Array.from({ length: 21 }, (_, index) => ({ id: `module-${index}`, title: `Modul ${index}`, description: 'Kurze Fachbeschreibung', tools: [{ parameters: { secretSchema: true } }] }));
+    const system = makeMessages([], state.mails, user, true, modules)[0].content;
+    expect(system).toContain('find_modules');
+    expect(system).toContain('get_module_tools');
+    expect(system).toContain('"id":"module-19"');
+    expect(system).not.toContain('"id":"module-20"');
+    expect(system).not.toContain('secretSchema');
+    expect(system).not.toContain('search_emails');
+    expect(makeMessages([], state.mails, user, false, modules)[0].content).not.toContain('"id":"module-0"');
+    const history = Array.from({ length: 6 }, (_, index) => ({ ...user, id: `prior-${index}`, text: `Alter Verlauf ${index}` }));
+    const limitedHistory = makeMessages(history, state.mails, user, true, [], 'ask', { ...defaultAgentSettings, historyMessageLimit: 2, historyCharBudget: 100 });
+    expect(limitedHistory.map(message => message.content).join(' ')).not.toContain('Alter Verlauf 3');
+    expect(limitedHistory.at(-2)?.content).toBe('Alter Verlauf 5');
+    const noHistory = makeMessages(history, state.mails, { ...user, emailRef: 'm1' }, true, [], 'ask', { ...defaultAgentSettings, historyMessageLimit: 0, historyCharBudget: 0 });
+    expect(noHistory).toHaveLength(2);
+    expect(noHistory.at(-1)?.content).toContain('Launch-Checkliste');
+    expect(noHistory.at(-1)?.content).toContain(user.text);
+    const tightHistory = makeMessages(history, [], user, true, [], 'ask', { ...defaultAgentSettings, historyCharBudget: 1 });
+    expect(tightHistory).toHaveLength(2);
+    expect(tightHistory[0].content).toContain('6 frühere Nachrichten');
+    expect(normalizeAgentSettings({ maxToolRounds: 0, maxToolCalls: 99 })).toMatchObject({ maxToolRounds: 25, maxToolCalls: 99 });
+    const bulky = makeMessages([], state.mails, user, true, modules.map(module => ({ ...module, title: 'T'.repeat(500), description: 'D'.repeat(5000) })))[0].content;
+    const summaryJson = bulky.split('\n').find(line => line.startsWith('[{'))!;
+    expect(summaryJson.length).toBeLessThanOrEqual(6000);
+    expect(JSON.parse(summaryJson).every((module: { title: string; description: string }) => module.title.length <= 100 && module.description.length <= 240)).toBe(true);
+  });
+
   it('only permits HTTPS or loopback HTTP and rejects secrets in URLs', () => {
     const input = { smartModel: '', simpleModel: '', smartThinking: 'off', simpleThinking: 'off' };
     expect(parseAiInput({ ...input, baseUrl: 'http://127.0.0.1:1234/v1/' }).baseUrl).toBe('http://127.0.0.1:1234/v1');
@@ -12,6 +44,15 @@ describe('OpenAI-compatible endpoint', () => {
     expect(() => parseAiInput({ ...input, baseUrl: 'https://user:secret@example.com/v1' })).toThrow();
     expect(normalizeAiConfig({ baseUrl: 'https://example.com/v1', model: 'legacy', thinking: 'medium', historyStart: 7 })).toMatchObject({ smartModel: 'legacy', simpleModel: 'legacy', smartThinking: 'medium', simpleThinking: 'medium', historyStart: 7 });
     expect(normalizeAiConfig({ thinking: 'high', smartThinking: 'low', simpleThinking: 'off' })).toMatchObject({ smartThinking: 'low', simpleThinking: 'off' });
+    expect(normalizeAiConfig({}).workspaceTools).toBe(true);
+    expect(normalizeAiConfig({}).confirmationMode).toBe('ask');
+    expect(normalizeAiConfig({ confirmationMode: 'never' }).confirmationMode).toBe('never');
+    expect(normalizeAiConfig({ confirmationMode: 'invalid' }).confirmationMode).toBe('ask');
+    expect(parseAiInput({ ...input, baseUrl: 'https://example.com/v1', confirmationMode: 'never' }).confirmationMode).toBe('never');
+    expect(() => parseAiInput({ ...input, baseUrl: 'https://example.com/v1', confirmationMode: true })).toThrow();
+    expect(normalizeAiConfig({ workspaceTools: false }).workspaceTools).toBe(false);
+    expect(parseAiInput({ ...input, baseUrl: 'https://example.com/v1', workspaceTools: false }).workspaceTools).toBe(false);
+    expect(() => parseAiInput({ ...input, baseUrl: 'https://example.com/v1', workspaceTools: 'false' })).toThrow();
     expect(chatOptionsSchema.safeParse({ tier: 'smart', thinking: 'high' }).success).toBe(false);
   });
   it('sends a plain chat request with attached mail as data, and follows no redirects', async () => {
