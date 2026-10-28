@@ -3,6 +3,7 @@ import { ImapMailView } from './ImapMailView';
 import { MailQueryControls } from './MailQueryControls';
 import type { ImapFolder, ImapMessage, ImapPageCursor, MailAccountSummary, MailSearchResults } from '../../../shared/mail';
 import type { MailCountRequest, MailCountResult, MailQueryRequest, MailQueryResult } from '../../../shared/mail-query';
+import { draftCollection } from '../../../shared/draft-status';
 import type { Draft, MailNavigationTarget } from '../../../shared/model';
 import './mail-workspace.css';
 
@@ -217,7 +218,39 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
     await window.workspace.setMailRead(message.id, !message.read);
     if (currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) setMessages(items => items.map(item => item.id === message.id ? { ...item, read: !message.read } : item));
   };
-  const draftsView = <section className="local-drafts" aria-label="Lokale Entwürfe"><header><h2>Lokale Entwürfe</h2><p>Entwürfe und ihr Versandstatus werden auf diesem Gerät gespeichert.</p></header>{!drafts.length ? <p className="local-drafts-empty">Noch keine Entwürfe vorhanden.</p> : <div className="local-drafts-list">{[...drafts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map(draft => <button type="button" key={draft.id} onClick={() => void window.workspace.setActiveDraft(draft.id).catch(reason => setError(String(reason)))}><span><strong>{draft.subject || '(Kein Betreff)'}</strong><small>{draft.to || 'Kein Empfänger'} · {accounts.find(account => account.id === draft.accountId)?.email || 'Kein Mailkonto'}</small></span><span className={`local-draft-status ${draft.deliveryStatus ?? 'draft'}`}>{draft.deliveryStatus === 'sent' && draft.rejectedRecipients?.length ? 'Teilweise angenommen' : { draft: 'Entwurf', sending: 'Wird gesendet', sent: 'Angenommen', uncertain: 'Versand unklar' }[draft.deliveryStatus ?? 'draft']}</span></button>)}</div>}{error && <p className="imap-error" role="alert">{error}</p>}</section>;
+  const orderedDrafts = [...drafts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const editableDrafts = orderedDrafts.filter(draft => draftCollection(draft) === 'drafts');
+  const outgoingDrafts = orderedDrafts.filter(draft => draftCollection(draft) === 'outbox');
+  const sentDrafts = orderedDrafts.filter(draft => draftCollection(draft) === 'sent');
+  const draftStatus = (draft: Draft): string => {
+    if (!draft.deliveryStatus || draft.deliveryStatus === 'draft') return draft.deliveryError ? 'Entwurf · nicht gesendet' : 'Entwurf';
+    if (draft.deliveryStatus === 'sending') return 'Wird gesendet';
+    if (draft.deliveryStatus === 'uncertain') return 'Versand unklar';
+    const acceptance = draft.rejectedRecipients?.length ? 'Teilweise angenommen' : 'Gesendet';
+    const copy = draft.sentCopy;
+    const filing = !copy ? 'Ablage ungeprüft' : { pending: 'Ablage ausstehend', filing: 'Ablage läuft', filed: 'abgelegt', failed: 'Ablage fehlgeschlagen', uncertain: 'Ablage unklar' }[copy.status];
+    return `${acceptance} · ${filing}`;
+  };
+  const draftRows = (items: Draft[], label: string) => <div className="local-drafts-list" aria-label={label}>
+    {items.map(draft => <button type="button" key={draft.id} onClick={() => void window.workspace.setActiveDraft(draft.id).catch(reason => setError(String(reason)))}>
+      <span><strong>{draft.subject || '(Kein Betreff)'}</strong><small>{draft.to || 'Kein Empfänger'} · {accounts.find(account => account.id === draft.accountId)?.email || 'Kein Mailkonto'}</small></span>
+      <span className={`local-draft-status ${draftCollection(draft)}`}>{draftStatus(draft)}</span>
+    </button>)}
+  </div>;
+  const draftsView = <section className="local-drafts" aria-label="Lokale Entwürfe">
+    <header><h2>Lokale Entwürfe</h2><p>Hier stehen deine noch nicht versendeten Nachrichten. Versand und Ablage werden separat geführt.</p></header>
+    {!editableDrafts.length ? <p className="local-drafts-empty">Keine ungesendeten Entwürfe.</p> : draftRows(editableDrafts, 'Ungesendete Entwürfe')}
+    {!!outgoingDrafts.length && <section className="local-drafts-group" aria-labelledby="local-outgoing-title">
+      <header><h3 id="local-outgoing-title">Versand &amp; Ablage <span>{outgoingDrafts.length}</span></h3><p>Offene oder unklare Vorgänge prüfen. Bereits angenommene Nachrichten werden nicht erneut versendet.</p></header>
+      {draftRows(outgoingDrafts, 'Offener Versand und Ablage')}
+    </section>}
+    {!!sentDrafts.length && <details className="local-sent-history">
+      <summary>Versandverlauf <span>{sentDrafts.length}</span></summary>
+      <p>Abgeschlossene Sendungen bleiben für ihren Status und den Schutz vor erneutem Versand erhalten.</p>
+      {draftRows(sentDrafts, 'Abgeschlossene Sendungen')}
+    </details>}
+    {error && <p className="imap-error" role="alert">{error}</p>}
+  </section>;
 
   return <div className="mail-workspace">
     <div className="mail-workspace-content">
@@ -238,7 +271,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
           onRefresh={() => { if (queryResults && queryRequest) { void queryMail({ ...queryRequest, cursor: undefined }).catch(reason => setError(reason instanceof Error ? reason.message : 'Die Abfrage konnte nicht aktualisiert werden.')); return; } if (searchResults) { void searchMail(searchResults.query); return; } setPendingOpen(undefined); refreshVersion.current++; setRefresh(refreshVersion.current); }}
           onSettings={openSettings} onCompose={accountId ? () => openDraft() : undefined} onReply={message => openDraft(message.id)} onToggleRead={changeRead}
           onDownloadAttachment={async (message, index) => { await window.workspace.downloadMailAttachment(message.id, index); }}
-          onDrafts={() => { clearSearch(); setPendingOpen(undefined); setMode('drafts'); }} draftCount={drafts.length} draftsSelected={mode === 'drafts'} draftsView={draftsView}/>}
+          onDrafts={() => { clearSearch(); setPendingOpen(undefined); setMode('drafts'); }} draftCount={editableDrafts.length} draftsSelected={mode === 'drafts'} draftsView={draftsView}/>}
     </div>
   </div>;
 }

@@ -97,7 +97,7 @@ export function MailDraftModuleView({ draft, onAction, onError }: { draft?: Draf
   const saveStatus = draft && (pendingActions.current.get(draft.id)?.size || currentStatus?.status === 'saved' && currentStatus.contentUpdatedAt !== draft.updatedAt)
     ? { draftId: draft.id, status: 'saving' as const, contentUpdatedAt: draft.updatedAt, savedAt: currentStatus?.savedAt }
     : currentStatus;
-  return <DraftView draft={draft} accounts={accounts} saveState={saveStatus} onSave={saveDraft} onUpdate={patch => draft && void editDraft({ type: 'update_draft', draftId: draft.id, patch })} onAttach={async () => {
+  return <DraftView draft={draft} accounts={accounts} saveState={saveStatus} onSave={saveDraft} onFileSent={draft?.deliveryStatus === 'sent' && draft.sentCopy ? folder => window.workspace.fileSentDraft(draft.id, folder) : undefined} onListSentFolders={draft?.accountId ? () => window.workspace.listMailFolders(draft.accountId!) : undefined} onUpdate={patch => draft && void editDraft({ type: 'update_draft', draftId: draft.id, patch })} onAttach={async () => {
     try { const file = await window.workspace.chooseFile(); if (file && draft) await editDraft({ type: 'attach_file', draftId: draft.id, file }); }
     catch (error) { onError(error instanceof Error ? error.message : String(error)); }
   }} onRemoveAttachment={index => draft && void editDraft({ type: 'remove_attachment', draftId: draft.id, index })} onSend={draft && accounts.some(account => account.id === draft.accountId) ? async () => { await Promise.all(pendingActions.current.get(draft.id) ?? []); return window.workspace.sendDraft(draft.id); } : undefined} />;

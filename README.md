@@ -15,7 +15,7 @@ This is an early, single-user development version. Development and practical use
 | Area | Current scope |
 | --- | --- |
 | **Assistant** | Streaming, Markdown, session management, chat branches, mail/chat/file references, time and calculation tools, and configurable agent execution. |
-| **Mail** | IMAP accounts, folders, server search, combined filters and counts, plain-text reading, attachments, local drafts, and SMTP sending. |
+| **Mail** | IMAP accounts, folders, server search, combined filters and counts, plain-text reading, attachments, local drafts, SMTP sending, and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
 
@@ -60,9 +60,9 @@ Custom modules are discovered at startup under `<userData>/modules/`. Their exac
 
 ## Data and current limitations
 
-- **Local storage:** Settings, drafts, and chats are stored on the computer. The workspace database is currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
+- **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
 - **AI provider:** Messages, selected references, and requested tool results are sent to the configured provider. A local desktop app can use either a local or remote model endpoint.
-- **Mail:** OAuth, HTML rendering, full synchronization, and a durable offline cache are not implemented. SMTP server acceptance does not guarantee delivery or a copy in the Sent folder.
+- **Mail:** OAuth, HTML rendering, full synchronization, and a durable offline cache are not implemented. SMTP server acceptance does not guarantee delivery. Sent-copy filing has its own visible status and retry; a filing failure never triggers another SMTP send.
 - **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
 - **Extensions:** MCP OAuth, resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
 

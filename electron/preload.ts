@@ -99,6 +99,7 @@ const api: WorkspaceApi = {
   getDraftSaveState: draftId => ipcRenderer.invoke('mail:draft:save-state', draftId),
   saveDraft: draftId => ipcRenderer.invoke('mail:draft:save', draftId),
   onDraftSaveState: callback => { const listener = (_event: Electron.IpcRendererEvent, state: import('../shared/drafts').DraftSaveState) => callback(state); ipcRenderer.on('mail:draft:save-state', listener); return () => ipcRenderer.removeListener('mail:draft:save-state', listener); },
+  fileSentDraft: (id, folder) => ipcRenderer.invoke('mail:draft:file-sent', id, folder),
   sendDraft: id => ipcRenderer.invoke('smtp:draft:send', id),
   listMailAccounts: () => ipcRenderer.invoke('mail:accounts:list'),
   onMailAccountsChanged: callback => { const listener = () => callback(); ipcRenderer.on('mail:accounts:changed', listener); return () => ipcRenderer.removeListener('mail:accounts:changed', listener); },

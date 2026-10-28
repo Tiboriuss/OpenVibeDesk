@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import nodemailer from 'nodemailer';
+import MailComposer from 'nodemailer/lib/mail-composer';
 import addressParser from 'nodemailer/lib/addressparser';
 import { AsyncEntry } from '@napi-rs/keyring';
 import { z } from 'zod';
@@ -16,6 +17,13 @@ export type SmtpMessageInput = {
   from: string; to: string; cc?: string; bcc?: string; subject: string; text: string;
   attachments?: { path: string; name: string }[];
   inReplyTo?: string; references?: string[];
+};
+/** Immutable message bytes prepared before SMTP; filing never rebuilds attachments. */
+export type PreparedSmtpMessage = {
+  messageId: string;
+  raw: Buffer;
+  sentRaw: Buffer;
+  envelope: { from: string; to: string[] };
 };
 export type SmtpSendResult =
   | { status: 'sent'; accepted: string[]; rejected: string[]; messageId: string }
@@ -116,9 +124,8 @@ function parseRecipients(input: string): { name: string; address: string }[] {
   return parsed.map(item => ({ name: item.name.slice(0, 500), address: item.address }));
 }
 
-/** Call only after an explicit user action and after verifying the sender belongs to the selected account. */
-export async function sendSmtpMail(rawSettings: unknown, rawMessage: unknown): Promise<SmtpSendResult> {
-  const config = validateSmtpSettings(rawSettings);
+/** Read and compose once, before recording the outgoing attempt or contacting SMTP. */
+export async function prepareSmtpMail(rawMessage: unknown): Promise<PreparedSmtpMessage> {
   const parsed = messageSchema.safeParse(rawMessage);
   if (!parsed.success) throw new Error('Die Nachricht enthält ungültige Angaben.');
   const message = parsed.data;
@@ -163,21 +170,44 @@ export async function sendSmtpMail(rawSettings: unknown, rawMessage: unknown): P
       throw new Error(`Der Anhang „${attachment.name}“ ist nicht mehr verfügbar.`);
     } finally { await handle?.close(); }
   }
+  const generatedMessageId = `<${randomUUID()}@openvibedesk.local>`;
+  const mime = new MailComposer({
+    from: from[0], to, cc, bcc, subject: message.subject, text: message.text,
+    messageId: generatedMessageId, date: new Date(),
+    ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
+    ...(message.references?.length ? { references: message.references } : {}),
+    attachments: files.map(file => ({ filename: file.name, content: file.content })),
+    disableFileAccess: true, disableUrlAccess: true
+  }).compile();
+  // Keep the sender's Bcc information in Sent, but never transmit that header.
+  mime.keepBcc = true;
+  const sentRaw = await mime.build();
+  const split = sentRaw.indexOf('\r\n\r\n');
+  if (split < 0) throw new Error('Die Nachricht konnte nicht vorbereitet werden.');
+  const publicHeaders = sentRaw.subarray(0, split).toString('latin1')
+    .split(/\r\n(?![ \t])/).filter(header => !/^bcc:/i.test(header)).join('\r\n');
+  const raw = Buffer.concat([Buffer.from(publicHeaders, 'latin1'), sentRaw.subarray(split)]);
+  if (raw.length > 40 * 1024 * 1024 || sentRaw.length > 40 * 1024 * 1024) throw new Error('Die vorbereitete Nachricht ist zu groß.');
+  return { messageId: generatedMessageId, raw, sentRaw,
+    envelope: { from: from[0].address, to: [...to, ...cc, ...bcc].map(item => item.address) } };
+}
+
+/** SMTP receives only the already persisted bytes and explicit recipient envelope. */
+export async function sendPreparedSmtpMail(rawSettings: unknown, prepared: PreparedSmtpMessage): Promise<SmtpSendResult> {
+  const config = validateSmtpSettings(rawSettings);
+  if (!messageIdSchema.safeParse(prepared.messageId).success || !Buffer.isBuffer(prepared.raw) ||
+      !prepared.raw.length || prepared.raw.length > 40 * 1024 * 1024 ||
+      !prepared.envelope || parseRecipients(prepared.envelope.from).length !== 1 ||
+      !prepared.envelope.to.length || prepared.envelope.to.length > 100 ||
+      prepared.envelope.to.some(address => parseRecipients(address).length !== 1)) throw new Error('Die vorbereitete Nachricht ist ungültig.');
   const password = await passwordFor(config);
   const transport = makeTransport(config, password);
-  const generatedMessageId = `<${randomUUID()}@openvibedesk.local>`;
   try {
-    const info = await transport.sendMail({
-      from: from[0], to, cc, bcc, subject: message.subject, text: message.text,
-      messageId: generatedMessageId,
-      ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
-      ...(message.references?.length ? { references: message.references } : {}),
-      attachments: files.map(file => ({ filename: file.name, content: file.content }))
-    });
+    const info = await transport.sendMail({ raw: prepared.raw, envelope: prepared.envelope, messageId: prepared.messageId });
     const accepted = (info.accepted ?? []).map(String);
     const rejected = (info.rejected ?? []).map(String);
     if (!accepted.length) return { status: 'failed', message: 'Der SMTP-Server hat keinen Empfänger angenommen.', rejected };
-    return { status: 'sent', accepted, rejected, messageId: info.messageId || generatedMessageId };
+    return { status: 'sent', accepted, rejected, messageId: prepared.messageId };
   } catch (error) {
     const value = error && typeof error === 'object' ? error as { code?: unknown; command?: unknown; rejected?: unknown } : {};
     const code = typeof value.code === 'string' ? value.code : '';
@@ -192,4 +222,11 @@ export async function sendSmtpMail(rawSettings: unknown, rawMessage: unknown): P
     // Cleanup cannot overturn an already known SMTP acceptance result.
     try { transport.close(); } catch { /* The transport is already being discarded. */ }
   }
+}
+
+/** Compatibility entry point for callers that do not retain a Sent copy. */
+export async function sendSmtpMail(rawSettings: unknown, rawMessage: unknown): Promise<SmtpSendResult> {
+  const config = validateSmtpSettings(rawSettings);
+  const prepared = await prepareSmtpMail(rawMessage);
+  return sendPreparedSmtpMail(config, prepared);
 }

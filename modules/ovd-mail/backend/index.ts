@@ -4,14 +4,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import addressParser from 'nodemailer/lib/addressparser';
 import { DraftPersistence } from './draft-persistence';
+import { draftCollection } from '../../../shared/draft-status';
+import { OutgoingStore } from './outgoing-store';
+import { fileSentMessage } from './sent-service';
 import { applyUiAction, type UiAction } from '../../../shared/actions';
 import type { Draft, EmailReference, EmailReferenceSummary, Folder, Mail, MailViewContext, WindowKind, WorkspaceState } from '../../../shared/model';
-import type { ImapMessage, MailSendResult } from '../../../shared/mail';
+import type { ImapMessage, MailSendResult, SentCopyState, SentCopyResult } from '../../../shared/mail';
 import type { WorkspaceCapabilityRegistry, CapabilityContext } from '../../../electron/workspace-capabilities';
 import { mailCapabilitySchemas, mailCapabilityDefinitions, type MailCapabilityArgs } from './capabilities';
 import { validateMailAccount, testImapConnection, saveMailPassword, readMailPassword, deleteMailPassword, listImapFolders, fetchImapMessages, searchImapMessages, fetchImapMessageBody, downloadImapAttachment, setImapMessageRead, imapConnectionIdentity, invalidateMailAccountConnections, resumeMailAccountConnections, type MailAccountConfig } from './mail-service';
 import { initializeMailAccounts, getMailAccounts, addMailAccount, updateMailAccount, removeMailAccount } from './mail-store';
-import { validateSmtpSettings, testSmtpConnection, saveSmtpPassword, readSmtpPassword, deleteSmtpPassword, sendSmtpMail, type SmtpSettings } from './smtp-service';
+import { validateSmtpSettings, testSmtpConnection, saveSmtpPassword, readSmtpPassword, deleteSmtpPassword, prepareSmtpMail, sendPreparedSmtpMail, type SmtpSettings } from './smtp-service';
 import { initializeSmtpSettings, getSmtpSettings, listSmtpSettings, writeSmtpSettings } from './smtp-store';
 import { createMailQueryHost } from './mail-query-host';
 
@@ -50,6 +53,8 @@ export function createMailModule(host: MailModuleHost) {
   let mailAccountsUnavailable = false;
   let smtpSettingsUnavailable = false;
   const sendingDrafts = new Set<string>();
+  const filingDrafts = new Map<string, Promise<SentCopyResult>>();
+  const outgoing = new OutgoingStore(path.join(app.getPath('userData'), 'module-data', 'ovd-mail', 'outgoing'));
   const liveMail = new Map<string, LiveMail>();
   const recentMailSearches = new Map<string, string[]>();
   let activeMailView: MailViewContext | null = null;
@@ -95,7 +100,7 @@ function invalidateAccountCache(id: string): void {
 }
 function ensureAccountCanChange(id: string): void {
   ensureAccountIdle(id);
-  if ((smtpOperations.get(id) ?? 0) || getState().drafts.some(draft => draft.accountId === id && sendingDrafts.has(draft.id))) throw new Error('Für dieses Konto läuft noch ein Versand- oder Verbindungsvorgang. Bitte warte auf dessen Abschluss.');
+  if ((smtpOperations.get(id) ?? 0) || getState().drafts.some(draft => draft.accountId === id && (sendingDrafts.has(draft.id) || filingDrafts.has(draft.id)))) throw new Error('Für dieses Konto läuft noch ein Versand- oder Verbindungsvorgang. Bitte warte auf dessen Abschluss.');
 }
 function effectiveSmtp(config: SmtpSettings): SmtpSettings {
   return config.useImapCredentials ? { ...config, username: mailAccount(config.accountId).username } : config;
@@ -166,7 +171,7 @@ async function checkSmtpSettings(input: unknown, context: OperationContext) {
 async function saveSmtpSettings(input: unknown, context: OperationContext) {
      ensureSmtpSettingsAvailable();
     const { config, password } = smtpInput(input);
-    if (getState().drafts.some(draft => draft.accountId === config.accountId && sendingDrafts.has(draft.id))) throw new Error('Für dieses Konto läuft noch ein Versand. Bitte warte auf dessen Abschluss.');
+    if (getState().drafts.some(draft => draft.accountId === config.accountId && (sendingDrafts.has(draft.id) || filingDrafts.has(draft.id)))) throw new Error('Für dieses Konto läuft noch ein Versand. Bitte warte auf dessen Abschluss.');
     return withSmtpOperation(config, async effective => {
     await testSmtpConnection(effective, password);
     const oldPassword = password ? await readSmtpPassword(config.accountId) : null;
@@ -186,7 +191,7 @@ function sendResult(draftId: string, status: MailSendResult['status'], deliveryS
   return { draftId, status, outcome: status === 'sent' ? 'completed' : status, ok: status === 'sent', sent: status === 'sent', deliveryStatus, ...details };
 }
 function existingSendResult(draft: Draft): MailSendResult | undefined {
-  if (draft.deliveryStatus === 'sent') return sendResult(draft.id, 'sent', 'sent', { message: 'Die Nachricht wurde bereits vom SMTP-Server angenommen. Es wurde kein weiterer Versand gestartet.', alreadySent: true, duplicatePrevented: true, retryBlocked: true, ...(draft.deliveryError ? { warning: draft.deliveryError } : {}), ...(draft.rejectedRecipients?.length ? { rejectedRecipients: draft.rejectedRecipients } : {}) });
+  if (draft.deliveryStatus === 'sent') return sendResult(draft.id, 'sent', 'sent', { ...(draft.sentCopy ? { sentCopy: draft.sentCopy } : {}), message: 'Die Nachricht wurde bereits vom SMTP-Server angenommen. Es wurde kein weiterer Versand gestartet.', alreadySent: true, duplicatePrevented: true, retryBlocked: true, ...(draft.deliveryError ? { warning: draft.deliveryError } : {}), ...(draft.rejectedRecipients?.length ? { rejectedRecipients: draft.rejectedRecipients } : {}) });
   if (draft.deliveryStatus === 'uncertain' || draft.deliveryStatus === 'sending' || sendingDrafts.has(draft.id)) return sendResult(draft.id, 'uncertain', draft.deliveryStatus ?? 'sending', { message: draft.deliveryStatus === 'uncertain' ? 'Der Versandstatus ist unklar. Die Nachricht könnte bereits angenommen worden sein. Bitte vor einem weiteren Versand prüfen.' : 'Der Versand läuft bereits. Es wurde kein weiterer Versand gestartet.', duplicatePrevented: true, retryBlocked: true });
   return undefined;
 }
@@ -233,7 +238,7 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
   }
   sendingDrafts.add(draftId);
   try {
-    setStatus({ deliveryStatus: 'sending', deliveryError: undefined, rejectedRecipients: undefined });
+    setStatus({ deliveryStatus: 'sending', deliveryError: undefined, rejectedRecipients: undefined, sentCopy: undefined });
     try { await saveState(getState()); }
     catch { return { ...failed('Der Versand wurde nicht begonnen, weil der Entwurf nicht gespeichert werden konnte.'), persisted: false }; }
     if (context.signal.aborted) {
@@ -242,9 +247,18 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
       try { await saveState(getState()); } catch { persisted = false; }
       return sendResult(draftId, 'cancelled', 'draft', { cancelled: true, message: 'Der Versand wurde vor der Übergabe an den SMTP-Server gestoppt.', persisted });
     }
-    let result: Awaited<ReturnType<typeof sendSmtpMail>>;
+    let result: Awaited<ReturnType<typeof sendPreparedSmtpMail>>;
     try {
-      result = await sendSmtpMail(config, { from: account.email, to: draft.to, cc: draft.cc, bcc: draft.bcc, subject: draft.subject, text: draft.body, attachments: draft.attachments.map(file => ({ path: file.path, name: file.name })), inReplyTo: draft.inReplyTo, references: draft.references });
+      const prepared = await prepareSmtpMail({ from: account.email, to: draft.to, cc: draft.cc, bcc: draft.bcc, subject: draft.subject, text: draft.body, attachments: draft.attachments.map(file => ({ path: file.path, name: file.name })), inReplyTo: draft.inReplyTo, references: draft.references });
+      await outgoing.save(draft.id, prepared, outgoingIdentity(account));
+      setStatus({ sentCopy: { status: 'pending', messageId: prepared.messageId } });
+      await draftPersistence.save(draft.id);
+      if (context.signal.aborted) {
+        setStatus({ deliveryStatus: 'draft', sentCopy: undefined });
+        await draftPersistence.save(draft.id);
+        return sendResult(draftId, 'cancelled', 'draft', { cancelled: true, message: 'Der Versand wurde vor der Übergabe an den SMTP-Server gestoppt.' });
+      }
+      result = await sendPreparedSmtpMail(config, prepared);
     } catch (error) {
       const outcome = failed(safeSendMessage(error));
       try { await saveState(getState()); return { ...outcome, persisted: true }; }
@@ -262,13 +276,101 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
       setStatus({ deliveryStatus: 'uncertain', deliveryError: result.message });
       outcome = sendResult(draftId, 'uncertain', 'uncertain', { message: result.message, retryBlocked: true });
     }
-    try { await saveState(getState()); return { ...outcome, persisted: true }; }
+    try { await draftPersistence.save(draftId); }
     catch {
       const warning = result.status === 'sent' ? 'Der Server hat die Nachricht angenommen, aber der Status konnte lokal nicht gespeichert werden. Bitte den Gesendet-Ordner prüfen; nicht erneut senden.' : 'Der lokale Versandstatus konnte nicht gespeichert werden. Bitte vor einem weiteren Versand den Gesendet-Ordner prüfen.';
       if (result.status !== 'failed') setStatus({ deliveryError: warning });
-      return { ...outcome, persisted: false, warning: [outcome.warning, warning].filter(Boolean).join(' ') };
+      return { ...outcome, persisted: false, sentCopy: getState().drafts.find(item => item.id === draftId)?.sentCopy, warning: [outcome.warning, warning].filter(Boolean).join(' ') };
     }
+    if (result.status === 'sent') {
+      // SMTP acceptance is final. Filing is an independent operation with its own retry.
+      try {
+        const filing = await fileSentDraft(draftId, undefined, context);
+        const warning = [outcome.warning, filing.warning, ...(filing.sentCopy.status !== 'filed'
+          ? ['Die Nachricht wurde angenommen, aber die Gesendet-Ablage ist noch nicht bestätigt. Nur die Ablage prüfen oder erneut versuchen; nicht erneut senden.'] : [])].filter(Boolean).join(' ');
+        return { ...outcome, persisted: filing.persisted, sentCopy: filing.sentCopy, ...(warning ? { warning } : {}) };
+      } catch {
+        // No filing exception can turn known SMTP acceptance into an unsent result.
+        return { ...outcome, persisted: true, sentCopy: getState().drafts.find(item => item.id === draftId)?.sentCopy,
+          warning: [outcome.warning, 'Die Gesendet-Ablage wurde nicht bestätigt. Die Nachricht wurde angenommen; nicht erneut senden.'].filter(Boolean).join(' ') };
+      }
+    }
+    return { ...outcome, persisted: true };
   } finally { sendingDrafts.delete(draftId); }
+}
+function outgoingIdentity(account: MailAccountConfig): string {
+  return JSON.stringify([account.id, account.email.toLowerCase(), imapConnectionIdentity(account)]);
+}
+function setSentCopy(draftId: string, sentCopy: SentCopyState): void {
+  commit({ ...getState(), drafts: getState().drafts.map(item => item.id === draftId
+    ? { ...item, sentCopy, updatedAt: new Date(Math.max(Date.now(), (Date.parse(item.updatedAt) || 0) + 1)).toISOString() } : item) });
+}
+function filingResult(draftId: string, state: SentCopyState, persisted = true): SentCopyResult {
+  return { draftId, deliveryStatus: 'sent', sent: true, sentCopy: state, persisted,
+    outcome: state.status === 'filed' ? 'completed' : state.status === 'uncertain' ? 'uncertain' : 'failed',
+    ok: state.status === 'filed',
+    ...(state.status === 'filed' ? { message: 'Die Nachricht ist im Gesendet-Ordner abgelegt. Es wurde kein weiterer SMTP-Versand ausgeführt.' }
+      : { error: state.error ?? 'Die Gesendet-Ablage wurde noch nicht bestätigt. Die Nachricht wurde bereits vom SMTP-Server angenommen.' }) };
+}
+function fileSentDraft(draftId: string, folder: string | undefined, context: OperationContext): Promise<SentCopyResult> {
+  const running = filingDrafts.get(draftId);
+  if (running) return running;
+  const operation = performSentFiling(draftId, folder, context);
+  filingDrafts.set(draftId, operation);
+  void operation.finally(() => { if (filingDrafts.get(draftId) === operation) filingDrafts.delete(draftId); }).catch(() => {});
+  return operation;
+}
+async function performSentFiling(draftId: string, folder: string | undefined, context: OperationContext): Promise<SentCopyResult> {
+  const draft = getState().drafts.find(item => item.id === draftId);
+  if (!draft || draft.deliveryStatus !== 'sent') throw new Error('Die Ablage ist nur nach bestätigter SMTP-Annahme möglich. Es wurde keine Nachricht gesendet.');
+  if (!draft.sentCopy) throw new Error('Für diese ältere Nachricht liegt keine unveränderte lokale Versandkopie vor. Bitte den Gesendet-Ordner manuell prüfen. Es wird nicht erneut gesendet.');
+  if (draft.sentCopy.status === 'filed') {
+    // A previous acknowledged APPEND may still have an unsaved local outcome.
+    try { await draftPersistence.save(draftId); }
+    catch { return { ...filingResult(draftId, draft.sentCopy, false), warning: 'Die Ablage wurde bestätigt, aber der lokale Status konnte nicht gespeichert werden. Nicht erneut senden.' }; }
+    await outgoing.remove(draftId).catch(() => {});
+    return filingResult(draftId, draft.sentCopy);
+  }
+  if (draft.sentCopy.appendAttempted && folder && folder !== draft.sentCopy.folder) throw new Error('Nach einem unklaren Ablageversuch kann nur der ursprüngliche Gesendet-Ordner abgeglichen werden.');
+  let current: SentCopyState = { ...draft.sentCopy, status: 'filing', error: undefined, ...(folder ? { folder } : {}) };
+  try {
+    const snapshot = accountSnapshot(draft.accountId);
+    setSentCopy(draftId, current);
+    await draftPersistence.save(draftId);
+    const prepared = await outgoing.read(draftId, current.messageId, outgoingIdentity(snapshot.account));
+    assertCurrent(snapshot);
+    const result = await fileSentMessage(snapshot.account, { messageId: current.messageId, raw: prepared.sentRaw,
+      folder: current.folder, appendAttempted: current.appendAttempted,
+      beforeAppend: async target => {
+        assertCurrent(snapshot); context.signal.throwIfAborted();
+        current = { ...current, folder: target, appendAttempted: true };
+        setSentCopy(draftId, current);
+        await draftPersistence.save(draftId);
+        assertCurrent(snapshot); context.signal.throwIfAborted();
+      }
+    }, context.signal);
+    current = { ...current, status: result.status, ...(result.folder ? { folder: result.folder } : {}),
+      appendAttempted: result.appendAttempted ?? current.appendAttempted,
+      ...(result.uid ? { uid: result.uid } : {}), ...(result.uidValidity ? { uidValidity: result.uidValidity } : {}),
+      ...(result.status === 'filed' ? { filedAt: new Date().toISOString(), error: undefined }
+        : { error: result.error ?? result.message ?? 'Die Gesendet-Ablage wurde nicht bestätigt.' }) };
+  } catch (error) {
+    // A prior durable APPEND marker always keeps recovery reconciliation-only.
+    const recorded = getState().drafts.find(item => item.id === draftId)?.sentCopy ?? current;
+    current = { ...recorded, status: recorded.appendAttempted ? 'uncertain' : 'failed',
+      error: context.signal.aborted ? 'Die Gesendet-Ablage wurde unterbrochen. Die Nachricht wurde bereits angenommen; nicht erneut senden.'
+        : error instanceof Error && /^(Die |Der |Bitte |Für )/.test(error.message) ? error.message.slice(0, 600)
+          : 'Die Gesendet-Ablage konnte nicht bestätigt werden. Bitte Verbindung und lokalen Speicher prüfen. Nicht erneut senden.' };
+  }
+  setSentCopy(draftId, current);
+  try { await draftPersistence.save(draftId); }
+  catch { return { ...filingResult(draftId, current, false), warning: 'Der Ablagestatus konnte lokal nicht gespeichert werden. Nicht erneut senden; beim nächsten Versuch nur die Ablage abgleichen.' }; }
+  if (current.status === 'filed') {
+    // The confirmed outcome is durable before the sizeable prepared MIME is removed.
+    await outgoing.remove(draftId).catch(() => {});
+    if (current.folder) panels.get('mail')?.webContents.send('mail:show-real', { accountId: draft.accountId, folder: current.folder, refresh: true });
+  }
+  return filingResult(draftId, current);
 }
 function accountInput(input: unknown) {
   ensureMailAccountsAvailable();
@@ -601,6 +703,7 @@ async function initialize(): Promise<void> {
   let state = getState();
   if ((state.mailLayoutRevision ?? 0) < 2) state = { ...state, mailLayoutRevision: 2, windows: state.windows.map(win => win.kind === 'mail' ? { ...win, width: Math.max(win.width, 1070), height: Math.max(win.height, 720) } : win) };
   state = { ...state, drafts: state.drafts.map(draft => draft.deliveryStatus === 'sending' ? { ...draft, deliveryStatus: 'uncertain', deliveryError: 'Der Versandstatus ist nach einem Neustart unklar. Bitte vor einem erneuten Versand prüfen.' } : draft) };
+  state = { ...state, drafts: state.drafts.map(draft => draft.sentCopy?.status === 'filing' ? { ...draft, sentCopy: { ...draft.sentCopy, status: draft.sentCopy.appendAttempted ? 'uncertain' as const : 'pending' as const, error: 'Die Ablage wurde unterbrochen. Bitte den Gesendet-Status prüfen; die Nachricht nicht erneut senden.' } } : draft) };
   commit(state);
   draftPersistence.onStateChanged();
 }
@@ -621,7 +724,18 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
     if ('cancelled' in result) return result;
     return { ...querySummary(result), hasMore: result.hasMore, nextCursor: result.nextCursor, messages: result.messages.map(({ id, from, to, subject, date, receivedAt, accountId, accountName, folder, read, attachments }) => ({ id, from: from.slice(0, 160), to: to.slice(0, 160), subject: subject.slice(0, 200), date, receivedAt, accountId, accountName: accountName?.slice(0, 80), folder: folder?.slice(0, 120), ...(folder && folder.length > 120 ? { folderTruncated: true } : {}), read, attachmentCount: attachments.length })) };
   });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.list'], ({ limit }) => ({ drafts: [...getState().drafts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit ?? 20).map(({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus, attachments }) => ({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus: deliveryStatus ?? 'draft', saveState: draftPersistence.getStatus(id), attachments: attachments.map(({ name, size }, index) => ({ index, name, size })) })), activeDraftId: getState().activeDraftId }));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.list'], ({ limit, scope = 'drafts' }) => {
+    const all = getState().drafts;
+    const counts = { drafts: 0, outbox: 0, sent: 0 };
+    for (const draft of all) counts[draftCollection(draft)]++;
+    const matches = all.filter(draft => scope === 'all' || draftCollection(draft) === scope).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const active = all.find(draft => draft.id === getState().activeDraftId);
+    return { scope, counts, total: matches.length, hasMore: matches.length > (limit ?? 20),
+      drafts: matches.slice(0, limit ?? 20).map(({ id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus, sentCopy, attachments }) => ({
+        id, accountId, to, cc, bcc, subject, updatedAt, deliveryStatus: deliveryStatus ?? 'draft', sentCopy, saveState: draftPersistence.getStatus(id),
+        attachments: attachments.map(({ name, size }, index) => ({ index, name, size })) })),
+      activeDraftId: getState().activeDraftId, activeDraftCollection: active ? draftCollection(active) : undefined };
+  });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.create'], (args, context) => createWorkspaceDraft(args, context as OperationContext));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.get'], ({ draftId }) => { const draft = getState().drafts.find(item => item.id === activeDraftId(draftId))!; return { ...draft, saveState: draftPersistence.getStatus(draft.id), body: draft.body.slice(0, 12000), bodyTruncated: draft.body.length > 12000, attachments: draft.attachments.map(({ name, size }, index) => ({ index, name, size })) }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.open'], ({ draftId }) => openDraft(draftId));
@@ -630,6 +744,8 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
     const id = activeDraftId(draftId); await draftPersistence.save(id); return { ...draftPersistence.getStatus(id), saved: true, sent: false };
   });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.save_status'], ({ draftId }) => draftPersistence.getStatus(activeDraftId(draftId)));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.file_sent'], ({ draftId, folder }, context) => fileSentDraft(activeDraftId(draftId), folder, context));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.sent_status'], ({ draftId }) => { const draft = getState().drafts.find(item => item.id === activeDraftId(draftId))!; return { draftId: draft.id, deliveryStatus: draft.deliveryStatus ?? 'draft', sentCopy: draft.sentCopy }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['drafts.send'], ({ draftId }, context) => sendDraft(draftId ?? getState().activeDraftId, context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.search'], async (args, context) => {
     const result = await searchWorkspaceMail(args, context as OperationContext);
@@ -687,6 +803,7 @@ function registerIpc(): void {
     try { await draftPersistence.save(id); } catch { /* The status contains the actionable error; retain editor content. */ }
     return draftPersistence.getStatus(id);
   });
+  ipcMain.handle('mail:draft:file-sent', (event, draftId: unknown, folder: unknown) => { verifyPanel(event, ['draft']); const args = mailCapabilitySchemas['drafts.file_sent'].parse({ draftId, folder }); return fileSentDraft(activeDraftId(args.draftId), args.folder, uiOperationContext(event)); });
   ipcMain.handle('smtp:draft:send', (event, draftId: unknown) => { verifyPanel(event, ['draft']); return sendDraft(draftId, uiOperationContext(event)); });
   ipcMain.handle('mail:accounts:list', event => { verifyPanel(event, ['settings', 'mail', 'draft']); ensureMailAccountsAvailable(); return getMailAccounts(); });
   ipcMain.handle('mail:accounts:test', (event, input: unknown) => { verifyPanel(event, ['settings']); return checkMailAccount(input, uiOperationContext(event)); });
@@ -695,7 +812,7 @@ function registerIpc(): void {
   ipcMain.handle('mail:search', (event, request: import('../../../shared/mail').MailSearchRequest) => { verifyPanel(event, ['mail']); return searchWorkspaceMail(request, uiOperationContext(event)); });
   ipcMain.handle('mail:query', async (event, request: unknown) => { verifyPanel(event, ['mail']); const result = await queryHost.query(request, uiOperationContext(event)); if ('cancelled' in result) throw new Error(result.message); return result; });
   ipcMain.handle('mail:count', async (event, request: unknown) => { verifyPanel(event, ['mail']); const result = await queryHost.count(request, uiOperationContext(event)); if ('cancelled' in result) throw new Error(result.message); return result; });
-  ipcMain.handle('mail:folders:list', (event, accountId: unknown) => { verifyPanel(event, ['mail']); return loadMailFolders(accountId); });
+  ipcMain.handle('mail:folders:list', (event, accountId: unknown) => { verifyPanel(event, ['mail', 'draft']); return loadMailFolders(accountId); });
   ipcMain.handle('mail:messages:list', (event, accountId: unknown, folder: unknown, cursor: unknown) => { verifyPanel(event, ['mail']); return loadMailMessages(accountId, folder, cursor, uiOperationContext(event)); });
   ipcMain.handle('mail:message:cached', (event, accountId: unknown, folder: unknown, messageId: unknown) => {
     verifyPanel(event, ['mail']);
@@ -742,7 +859,7 @@ return {
   getActiveView: () => activeMailView,
   getRecentSearchIds: (sessionId: string) => recentMailSearches.get(sessionId) ?? [],
   getSettingsStatus: () => mailSettingsStatus,
-  getSendingCount: () => sendingDrafts.size,
+  getSendingCount: () => sendingDrafts.size + filingDrafts.size,
   onPanelClosed(kind: WindowKind) { if (kind === 'mail') activeMailView = null; if (kind === 'settings') mailSettingsStatus = 'clean'; },
   agentMails(referenceIds: ReadonlySet<string>): Mail[] {
     const mails = new Map<string, Mail>();

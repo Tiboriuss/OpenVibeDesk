@@ -45,6 +45,30 @@ export interface ImapMessage {
 export interface MailSearchRequest { query: string; accountId?: string; folder?: string; limit?: number; }
 export interface MailSearchResults { query: string; messages: ImapMessage[]; total: number; hasMore: boolean; scope: string; foldersSearched: number; foldersRemaining: number; warnings?: string[]; }
 
+/** Filing is independent of SMTP acceptance and must never trigger another send. */
+export interface SentCopyState {
+  status: 'pending' | 'filing' | 'filed' | 'failed' | 'uncertain';
+  messageId: string;
+  folder?: string;
+  filedAt?: string;
+  error?: string;
+  appendAttempted?: boolean;
+  uid?: number;
+  uidValidity?: string;
+}
+export interface SentCopyResult {
+  draftId: string;
+  deliveryStatus: 'draft' | 'sending' | 'sent' | 'uncertain';
+  sent: boolean;
+  outcome: 'completed' | 'failed' | 'uncertain';
+  ok: boolean;
+  sentCopy: SentCopyState;
+  message?: string;
+  error?: string;
+  warning?: string;
+  persisted?: boolean;
+}
+
 export type MailSendResult = {
   draftId: string;
   status: 'sent' | 'failed' | 'cancelled' | 'uncertain';
@@ -62,4 +86,5 @@ export type MailSendResult = {
   alreadySent?: true;
   duplicatePrevented?: true;
   persisted?: boolean;
+  sentCopy?: SentCopyState;
 };

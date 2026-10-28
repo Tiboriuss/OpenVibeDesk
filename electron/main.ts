@@ -612,7 +612,7 @@ async function initializeModules(): Promise<void> {
     activateBuiltin: async id => { if (id === 'ovd-mail') await initializeMailModule(); if (id === 'ovd-files') await initializeFilesModule(); if (id === 'ovd-mcp') await initializeMcpModule(); },
     beforeDisable: async id => {
       if (id === 'ovd-mail') await mailModule?.flushDrafts();
-      if (id === 'ovd-mail' && mailModule?.getSendingCount()) throw new Error('Bitte warte auf den laufenden Mailversand.');
+      if (id === 'ovd-mail' && mailModule?.getSendingCount()) throw new Error('Bitte warte, bis der laufende Mailversand oder die Gesendet-Ablage abgeschlossen ist.');
       if (id === 'ovd-mail' && mailModule?.getSettingsStatus() !== undefined && mailModule.getSettingsStatus() !== 'clean') throw new Error('Bitte Mail-Einstellungen zuerst speichern oder zurücksetzen.');
       if (id === 'ovd-mcp' && mcpSettingsStatus !== 'clean') throw new Error('Bitte die MCP-Einstellungen zuerst speichern oder zurücksetzen.');
     },
@@ -705,7 +705,7 @@ app.on('before-quit', event => {
   if (readyToQuit || !currentState) return;
   event.preventDefault();
   if (quitting) return;
-  if (mailModule?.getSendingCount()) { dialog.showErrorBox('Versand läuft', 'Bitte warte, bis der laufende Versand abgeschlossen ist, bevor du OpenVibeDesk beendest.'); return; }
+  if (mailModule?.getSendingCount()) { dialog.showErrorBox('Mailvorgang läuft', 'Bitte warte, bis der laufende Versand oder die Gesendet-Ablage abgeschlossen ist, bevor du OpenVibeDesk beendest.'); return; }
   if (!confirmSettingsClose()) return;
   allowSettingsUnload = aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
   quitting = true;

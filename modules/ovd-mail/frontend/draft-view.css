@@ -35,3 +35,15 @@
 .draft-send-button:hover:not(:disabled){background:#382889}.draft-send-button:disabled{background:#eceaf5;color:#77748a}
 .draft-delivery-error{flex:none;margin:6px 0;padding:8px 10px;border-radius:7px;background:#fff0f2;color:#952c3d;font-size:11px;line-height:1.4;overflow-wrap:anywhere}
 .draft-send-note{flex:none;margin:0 0 10px;color:var(--muted);font-size:10px;line-height:1.4}
+
+.draft-sent-copy{flex:none;max-height:34%;overflow:auto;margin:6px 0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--canvas);color:var(--ink);font-size:11px;line-height:1.45}
+.draft-sent-copy-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;font-weight:700}
+.draft-sent-copy-heading>span{display:flex;align-items:center;gap:6px;min-width:0}.draft-sent-copy-heading svg{flex:none}
+.draft-sent-copy-heading small{min-width:0;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;font-weight:400;color:var(--muted)}
+.draft-sent-copy p{margin:5px 0 0;overflow-wrap:anywhere;color:var(--muted)}
+.draft-sent-copy.failed,.draft-sent-copy.uncertain{border-color:#e8c1c8;background:#fff5f6}.draft-sent-copy.failed .draft-sent-copy-heading,.draft-sent-copy.uncertain .draft-sent-copy-heading,.draft-sent-copy .draft-sent-copy-error{color:#952c3d}
+.draft-file-sent-button{display:flex;align-items:center;gap:6px;max-width:100%;margin-top:7px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--accent-dark);font-size:11px;font-weight:700;text-align:left}
+.draft-file-sent-button:hover:not(:disabled){background:var(--accent-soft)}.draft-file-sent-button:disabled{opacity:.6}
+.draft-choose-sent-folder{display:block;margin:5px 0 0;padding:3px 0;border:0;background:transparent;color:var(--accent-dark);font-size:10px;text-decoration:underline;text-underline-offset:2px}
+.draft-sent-folder-label{display:flex;align-items:center;gap:8px;margin-top:6px;color:var(--muted);font-size:10px}.draft-sent-folder-label select{flex:1;min-width:0;padding:5px;border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);font-size:11px}
+.draft-layout.has-sent-copy{overflow-y:auto}.draft-layout.has-sent-copy>.draft-fields,.draft-layout.has-sent-copy>.draft-footer{flex-shrink:0}.draft-layout.has-sent-copy .draft-body{flex:1 0 100px;min-height:100px}
