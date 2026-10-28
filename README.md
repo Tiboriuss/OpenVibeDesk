@@ -8,7 +8,30 @@ OpenVibeDesk brings chat, mail, files, and custom integrations into a local desk
 
 This is an early, single-user development version. Development and practical use have been exercised on **macOS**. Windows and Linux build targets exist; broader platform, installer, and release validation is still pending. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-[Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[Screenshots](#a-look-inside) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+
+## A look inside
+
+Read a message, bring it into Chat as a reference, and let the Assistant prepare a reply in a separate draft window. Files and approved MCP tools join the same workspace.
+
+These screenshots show the current app with **fictional sample data in isolated profiles**. The interface is currently primarily German. Click any image to view it at full size.
+
+| Assistant | Mail |
+| --- | --- |
+| [![Assistant summarizing a referenced email, showing a Markdown table and completed workspace actions](assets/screenshots/assistant.png)](assets/screenshots/assistant.png) | [![Mail module with account folders, a message list and an HTML message in the reading pane](assets/screenshots/mail.png)](assets/screenshots/mail.png) |
+| Reference content, inspect tool activity and prepare the next step through Chat. | Browse folders and messages with HTML/text reading and controlled image loading. |
+
+| Files | MCP connections |
+| --- | --- |
+| [![Files module browsing fictional Project Atlas documents with a text preview and a reference-in-chat action](assets/screenshots/files.png)](assets/screenshots/files.png) | [![MCP settings with a local example server and individual tool approvals](assets/screenshots/mcp.png)](assets/screenshots/mcp.png) |
+| Navigate local folders, preview supported text and reference files in Chat. | Connect integrations and choose which tools the Assistant may discover and use. [View tool permissions](assets/screenshots/mcp-tools.png). |
+
+| Mail drafts | Settings and modules |
+| --- | --- |
+| [![Reply draft prepared by the Assistant with recipient, subject, quoted message and visible local save status](assets/screenshots/draft.png)](assets/screenshots/draft.png) | [![Searchable settings with the required Assistant and optional Files, Mail and MCP modules](assets/screenshots/settings.png)](assets/screenshots/settings.png) |
+| Review the prepared reply and its save status before sending. | Manage optional modules and workspace preferences in compact categories. |
+
+[Screenshot details and refresh guidance](assets/screenshots/README.md)
 
 ## Available features
 

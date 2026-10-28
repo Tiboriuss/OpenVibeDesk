@@ -22,6 +22,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | [Mail design](mail-design.md) | Mail interaction requirements, assistant integration, and staged development goals. |
 | [Settings design](settings-design.md) | Categories, search, progressive disclosure, persistence, and accessibility. |
 | [Brand guide](brand.md) | Canonical logos, colors, typography, spacing, and asset reproduction. |
+| [Application screenshots](../assets/screenshots/README.md) | Current module views with fictional data, capture provenance and refresh guidance. |
 | [Corporate identity PDF](../assets/brand/reference/OpenVibeDesk-CI.pdf) | Illustrated brand guidelines. |
 | [Brand package notes](../assets/brand/reference/README.txt) | Asset provenance, supplied files, and reproduction instructions. |
 
