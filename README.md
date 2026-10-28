@@ -86,6 +86,6 @@ Der interne Paketname `ai-workspace` und bestehende Speicherkennungen bleiben er
 
 ## Mitwirken
 
-[CONTRIBUTING.md](CONTRIBUTING.md) beschreibt Entwicklung und Modulbeiträge. Die dauerhaften Produktvorgaben stehen im [Settings-Konzept](docs/settings-design.md), [Mail-Leitfaden](docs/mail-design.md) und [Markenleitfaden](docs/brand.md). Logos und Signet liegen unter [assets/brand](assets/brand/).
+[CONTRIBUTING.md](CONTRIBUTING.md) beschreibt Entwicklung und Modulbeiträge. Die dauerhaften Produktvorgaben stehen im [Settings-Konzept](docs/settings-design.md), [Mail-Leitfaden](docs/mail-design.md) und [Markenleitfaden](docs/brand.md). Die gelieferten CI-Assets liegen unverändert unter [assets/brand](assets/brand/), darunter die [horizontale Kombination](assets/brand/ovd-horizontal-primary.svg) und die [Bildmarke](assets/brand/ovd-symbol-primary.svg).
 
-**Lizenz:** [MIT](LICENSE).
+**Lizenz:** Der Code steht unter [MIT](LICENSE). Für die mitgelieferte Manrope-Schrift gilt die [SIL Open Font License 1.1](assets/brand/fonts/OFL.txt); ihre Herkunft steht in [SOURCE.txt](assets/brand/fonts/SOURCE.txt).

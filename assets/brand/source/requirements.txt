@@ -1,0 +1,3 @@
+reportlab==4.4.9
+svglib==2.3.2
+fonttools==4.68.0

@@ -5,7 +5,7 @@ import type { WindowControl } from '../shared/model';
 export function WindowChrome({ title }: { title: string }) {
   const control = (action: WindowControl) => { void window.workspace.controlWindow(action).catch(error => console.error('Window control failed', error)); };
   return <header className="window-chrome" onDoubleClick={() => control('toggleMaximize')}>
-    <span className="window-chrome-brand" aria-hidden="true" title="OpenVibeDesk"><BrandMark inverse size={25} /></span>
+    <span className="window-chrome-brand" aria-hidden="true" title="OpenVibeDesk"><BrandMark inverse size={48} /></span>
     <span className="window-chrome-title">{title}</span>
     <div className="window-chrome-actions" onDoubleClick={event => event.stopPropagation()}>
       <button className="window-chrome-button" aria-label="Fenster minimieren" title="Minimieren" onClick={() => control('minimize')}><Minus size={15} /></button>

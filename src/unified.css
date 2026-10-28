@@ -1,32 +1,33 @@
 /* Shared surfaces and accents for the dock and floating windows. */
-:root{--ink:#17243B;--muted:#52637b;--line:#d6deea;--paper:#fff;--canvas:#F4F6FA;--shell:#17243B;--shell-raised:#48379F;--accent:#6455C7;--accent-dark:#48379F;--accent-soft:#EBE9FF}
+:root{--ink:var(--ovd-ink);--muted:var(--ovd-muted);--line:color-mix(in srgb,var(--ovd-navy) 18%,var(--ovd-white));--paper:var(--ovd-paper);--canvas:var(--ovd-paper);--shell:var(--ovd-navy);--shell-raised:var(--ovd-violet);--accent:var(--ovd-violet);--accent-dark:var(--ovd-navy);--accent-soft:var(--ovd-lavender)}
 .ovd-brand-mark{display:block;flex:none;object-fit:contain;user-select:none;pointer-events:none}
 .native-panel{display:flex;flex-direction:column;background:var(--paper);color:var(--ink)}
 .native-view-body{flex:1;min-height:0;overflow:hidden}
-.window-chrome{height:36px;flex:none;display:flex;align-items:center;gap:10px;padding-left:15px;background:var(--shell);color:#f4f5ff;border-bottom:1px solid #35435e;-webkit-app-region:drag;user-select:none}
-.window-chrome-brand{width:28px;height:25px;display:grid;place-items:center;background:transparent}
+.window-chrome{height:36px;flex:none;display:flex;align-items:center;gap:10px;padding-left:15px;background:var(--shell);color:var(--ovd-white);border-bottom:1px solid color-mix(in srgb,var(--ovd-inverse-accent) 25%,var(--ovd-navy));-webkit-app-region:drag;user-select:none}
+.window-chrome-brand{width:48px;height:25px;display:grid;place-items:center;background:transparent}
 .window-chrome-title{font-size:12px;letter-spacing:.1px;font-weight:700}
 .window-chrome-actions{display:flex;margin-left:auto;align-self:stretch;-webkit-app-region:no-drag}
-.window-chrome-button{width:43px;border:0;background:transparent;color:#cbd4e6;display:grid;place-items:center}
-.window-chrome-button:hover{background:#ffffff1c;color:#fff}.window-chrome-close:hover{background:#c84455;color:#fff}
-.window-chrome-button:focus-visible{outline:2px solid #b5aaff;outline-offset:-4px}
-.dock-native{background:var(--shell);border:1px solid #465773;border-radius:16px;color:#f1f3ff;backdrop-filter:none}
-.dock-native button{color:#d6def0;border-radius:10px}.dock-native button:hover{background:var(--shell-raised);color:#fff}.dock-grip{color:#a5b2ca}.dock-native-divider{background:#52617c}
+.window-chrome-button{width:43px;border:0;background:transparent;color:var(--ovd-white);display:grid;place-items:center}
+.window-chrome-button:hover{background:#ffffff1c;color:var(--ovd-white)}.window-chrome-close:hover{background:#c84455;color:var(--ovd-white)}
+.window-chrome-button:focus-visible{outline:2px solid var(--ovd-inverse-accent);outline-offset:-4px}
+.dock-native{background:var(--shell);border:1px solid color-mix(in srgb,var(--ovd-inverse-accent) 35%,var(--ovd-navy));border-radius:16px;color:var(--ovd-white);backdrop-filter:none}
+.dock-native button{color:var(--ovd-white);border-radius:10px}.dock-native button:hover{background:var(--shell-raised);color:var(--ovd-white)}.dock-grip{color:var(--ovd-inverse-accent)}.dock-native-divider{background:color-mix(in srgb,var(--ovd-inverse-accent) 40%,var(--ovd-navy))}
 .mail-layout{background:var(--paper)}
-.native-panel .mail-sidebar{background:#eef1f8;border-color:var(--line);padding-top:22px}
-.native-panel .sidebar-heading,.native-panel .pane-heading small,.native-panel .detail-toolbar>span,.native-panel .attachment-heading,.native-panel .draft-toolbar small,.native-panel .files-toolbar small{color:#5948b5}
-.native-panel .compose-button{background:var(--accent-dark);border-radius:9px}.native-panel .compose-button:hover{background:#382889}
-.native-panel .folder-list button{color:#3f4e65}.native-panel .folder-list button:hover{background:#e0e5ef}.native-panel .folder-list button.selected{background:#ded9fa;color:#382885}
+.native-panel .mail-sidebar{background:var(--ovd-paper);border-color:var(--line);padding-top:22px}
+.native-panel .sidebar-heading,.native-panel .pane-heading small,.native-panel .detail-toolbar>span,.native-panel .attachment-heading,.native-panel .draft-toolbar small,.native-panel .files-toolbar small{color:var(--ovd-muted)}
+.native-panel .compose-button{background:var(--accent);border-radius:9px}.native-panel .compose-button:hover{background:var(--ovd-navy)}
+.native-panel .folder-list button{color:var(--ovd-navy)}.native-panel .folder-list button:hover{background:var(--ovd-paper)}.native-panel .folder-list button.selected{background:var(--ovd-lavender);color:var(--ovd-navy)}
 .native-panel .mail-list,.native-panel .mail-row,.native-panel .pane-heading,.native-panel .detail-toolbar,.native-panel .sender-line,.native-panel .chat-heading,.native-panel .chat-composer,.native-panel .draft-toolbar,.native-panel .draft-footer,.native-panel .files-toolbar{border-color:var(--line)}
-.native-panel .mail-row{background:#fff}.native-panel .mail-row:hover{background:#f5f4ff}.native-panel .mail-row.active{background:#eeecff;border-left-color:var(--accent)}
+.native-panel .mail-row{background:var(--ovd-white)}.native-panel .mail-row:hover{background:var(--ovd-paper)}.native-panel .mail-row.active{background:var(--ovd-lavender);border-left-color:var(--accent)}
 .native-panel .mail-row-top strong,.native-panel .mail-subject,.native-panel .detail-body h2,.native-panel .sender-line strong,.native-panel .chat-heading strong{color:var(--ink)}
 .native-panel .mail-copy,.native-panel .mail-row p,.native-panel .sender-line small,.native-panel .chat-heading small,.native-panel .chat-message time,.native-panel .chat-composer p,.native-panel .files-footer,.native-panel .safe-note{color:var(--muted)}
 .native-panel .detail-toolbar button,.native-panel .attach-button{color:var(--accent-dark);background:var(--accent-soft)}
 .native-panel .attach-button{padding:8px;border-radius:8px}.native-panel .attachment,.native-panel .path-bar{background:var(--canvas);border-color:var(--line)}
 .native-panel .chat-layout,.native-panel .draft-layout,.native-panel .files-layout{background:var(--paper)}
-.native-panel .assistant-avatar{background:var(--accent)}.native-panel .chat-bubble{background:#edf0f6;color:var(--ink)}
-.native-panel .chat-message.user .chat-bubble,.native-panel .send-button{background:var(--accent-dark);color:white}
+.native-panel .assistant-avatar{background:var(--accent)}.native-panel .chat-bubble{background:var(--ovd-paper);color:var(--ink)}
+.native-panel .chat-message.user .chat-bubble{background:var(--ovd-lavender);color:var(--ink)}.native-panel .send-button{background:var(--accent);color:var(--ovd-white)}
 .native-panel .composer-box{border-color:#bbc6d8;box-shadow:none}.native-panel .context-chip{color:var(--accent-dark);background:var(--accent-soft)}
-.native-panel .draft-fields input,.native-panel .draft-body{color:var(--ink)}.native-panel .file-list button:hover{background:#f0edff}
-.settings-page{background:var(--canvas)}.settings-head{background:#edf0f8;color:var(--ink);border-bottom:1px solid var(--line)}.settings-head h1{color:var(--ink)}.settings-head p{color:var(--muted)}.settings-eyebrow{color:var(--accent-dark)}.settings-icon{background:var(--accent)}.settings-card{border-color:var(--line);box-shadow:none}.settings-card-heading{color:var(--accent)}.setting-toggle:checked{background:var(--accent-dark)}
+.native-panel .draft-fields input,.native-panel .draft-body{color:var(--ink)}.native-panel .file-list button:hover{background:var(--ovd-lavender)}
+.settings-page{background:var(--canvas)}.settings-head{background:var(--ovd-paper);color:var(--ink);border-bottom:1px solid var(--line)}.settings-head h1{color:var(--ink)}.settings-head p{color:var(--muted)}.settings-eyebrow{color:var(--ovd-navy)}.settings-icon{background:var(--accent)}.settings-card{border-color:var(--line);box-shadow:none}.settings-card-heading{color:var(--ovd-navy)}.setting-toggle:checked{background:var(--accent)}
+.native-panel .ai-save,.native-panel .agent-save,.native-panel .sessions-new,.native-panel .mail-query-actions button[type=submit],.native-panel .imap-commandbar>button.imap-compose{background:var(--ovd-violet);border-color:var(--ovd-violet);color:var(--ovd-white)}
 .native-panel .compose-button{font-size:10px;gap:3px;white-space:nowrap}.native-panel .compose-button svg{width:14px;height:14px;flex:none}

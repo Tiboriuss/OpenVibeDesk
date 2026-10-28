@@ -1,0 +1,12 @@
+/* OpenVibeDesk CI 1.0 - sRGB */
+:root {
+  --ovd-navy: #222844;
+  --ovd-violet: #6850F5;
+  --ovd-lavender: #E8E5FD;
+  --ovd-paper: #F9F9FE;
+  --ovd-white: #FFFFFF;
+  --ovd-ink: #12182D;
+  --ovd-muted: #606579;
+  --ovd-inverse-accent: #B8AAFF;
+  --ovd-font-family: "Manrope", system-ui, sans-serif;
+}

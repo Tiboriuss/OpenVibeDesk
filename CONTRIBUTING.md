@@ -2,7 +2,7 @@
 
 OpenVibeDesk ist ein frühes Projekt. Issues und Pull Requests sind willkommen; beschreibe bei größeren Änderungen zuerst das Ziel und den geplanten Ansatz.
 
-Für sichtbare Produktnamen, Logos, Farben und neue Oberflächen gilt der [Markenleitfaden](docs/brand.md). Die gemeinsamen Originaldateien unter `assets/brand/` verwenden; das OVD-Signet mit O als linkem Auge, dem V als einzigem violetten Schnabel und D als rechtem Auge nicht pro Modul neu zeichnen.
+Für sichtbare Produktnamen, Logos, Farben und neue Oberflächen gilt der [Markenleitfaden](docs/brand.md) auf Grundlage des gelieferten CI-Pakets. Die 20 unveränderten `ovd-*.svg`-Dateien unter `assets/brand/` verwenden; Bildmarke mit Pupillen, oberem Navy-V und eigenem violettem Dreieck sowie die Wortmarkenpfade nicht neu zeichnen. Maßgebliche Tokens liegen in `assets/brand/source/tokens.json`; die lokale Manrope-Schrift wird mit ihrer SIL-OFL-Lizenz eingebunden.
 
 ## Entwicklung
 

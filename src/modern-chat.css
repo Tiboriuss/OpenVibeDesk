@@ -6,7 +6,7 @@
 .modern-chat-title strong { font-size:12px; }
 .modern-chat-title small { font-size:10px; color:var(--muted); margin-top:2px; }
 .modern-chat-head>button,.chat-icon-button { border:0; background:transparent; color:#52627b; width:32px; height:32px; flex:none; border-radius:7px; display:grid; place-items:center; }
-.modern-chat-head>button:hover,.chat-icon-button:hover { background:#eeecff; color:var(--accent-dark); }
+.modern-chat-head>button:hover,.chat-icon-button:hover { background:var(--accent-soft); color:var(--ink); }
 .message-log-area { flex:1; min-height:0; position:relative; display:flex; }
 .modern-messages { overflow:auto; flex:1; min-width:0; min-height:0; padding:18px 18px 12px; overscroll-behavior:contain; scrollbar-gutter:stable; }
 .message-thread { max-width:760px; margin:0 auto; }
@@ -18,9 +18,9 @@
 .message-content { position:relative; min-width:0; max-width:calc(100% - 36px); }
 .modern-message-body { min-width:0; color:var(--ink); font-size:13px; line-height:1.55; overflow-wrap:anywhere; }
 .modern-message.user .message-content { max-width:calc(100% - 70px); }
-.modern-message.user .modern-message-body { padding:8px 12px; background:#ece9ff; border-radius:13px 13px 4px 13px; }
-.message-avatar { width:26px; height:26px; flex:none; background:#eeeafd; border-radius:8px; display:grid; place-items:center; color:var(--accent-dark); }
-.message-ref { display:flex; align-items:center; gap:5px; width:fit-content; max-width:100%; font-size:10px; color:#4c3c9a; background:#e3defa; border-radius:6px; padding:3px 6px; margin-bottom:6px; }
+.modern-message.user .modern-message-body { padding:8px 12px; background:var(--accent-soft); border-radius:13px 13px 4px 13px; }
+.message-avatar { width:26px; height:26px; flex:none; background:var(--accent-soft); border-radius:8px; display:grid; place-items:center; color:var(--ink); }
+.message-ref { display:flex; align-items:center; gap:5px; width:fit-content; max-width:100%; font-size:10px; color:var(--ink); background:var(--accent-soft); border-radius:6px; padding:3px 6px; margin-bottom:6px; }
 .message-ref svg { flex:none; }
 .message-ref>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .message-status { display:flex; align-items:center; gap:6px; margin-top:5px; font-size:10px; color:#64748c; }
@@ -48,7 +48,7 @@
 .context-chip>svg,.context-chip>button { flex:none; }
 .context-chip>button { min-width:24px; min-height:24px; display:grid; place-items:center; }
 .modern-composer { border:1px solid #b7c4d7; border-radius:12px; padding:6px; background:#fff; transition:border-color .12s,box-shadow .12s; }
-.modern-composer:focus-within { border-color:#8a79cb; box-shadow:0 0 0 2px #7664c31a; }
+.modern-composer:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
 .modern-composer textarea { display:block; width:100%; min-height:32px; max-height:160px; resize:none; border:0; outline:0; background:transparent; font-size:13px; color:var(--ink); padding:6px; line-height:1.5; }
 .native-panel .modern-composer textarea:focus-visible { outline:none; }
 .composer-actions { display:flex; flex-wrap:wrap; align-items:center; gap:7px; padding-top:3px; }
@@ -82,7 +82,7 @@
 .tool-event-list>div>svg { flex:none; align-self:center; }
 .tool-event-list small { font-size:10px; color:#64748c; }
 .tool-event-list .failed,.tool-event-list .failed small { color:#a43748; }
-.modern-chat.is-dragging .modern-composer-area { background:#f4f1ff; box-shadow:inset 0 0 0 2px var(--accent); }
+.modern-chat.is-dragging .modern-composer-area { background:var(--accent-soft); box-shadow:inset 0 0 0 2px var(--accent); }
 .reference-drop-target { display:flex; align-items:center; justify-content:center; gap:8px; margin:0 0 8px; padding:10px; border:1px dashed var(--accent); border-radius:9px; color:var(--accent-dark); font-size:12px; font-weight:600; }
 .reference-content-note { margin:5px 0 8px; color:var(--muted); font-size:10px; line-height:1.45; }
 @media (hover:none) { .message-actions { opacity:1; pointer-events:auto; } .message-actions button { width:30px; height:30px; } }

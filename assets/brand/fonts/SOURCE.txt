@@ -1,0 +1,6 @@
+Manrope Variable, Google Fonts distribution
+Downloaded: 2026-10-28
+https://github.com/google/fonts/tree/main/ofl/manrope
+https://raw.githubusercontent.com/google/fonts/main/ofl/manrope/Manrope%5Bwght%5D.ttf
+SHA-256: 3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6
+License: OFL.txt
