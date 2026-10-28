@@ -1,0 +1,8 @@
+.chat-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:9px 16px;background:#f7f8fc;border-bottom:1px solid var(--line);flex:none}
+.chat-controls-note{flex-basis:100%;color:var(--muted);font-size:10px;line-height:1.35}
+.chat-control{display:flex;align-items:center;gap:7px;min-width:0;color:var(--muted);font-size:11px;font-weight:700}
+.chat-control select{max-width:210px;min-width:0;border:1px solid #c7d1e0;border-radius:7px;background:#fff;color:var(--ink);padding:6px 8px;font-size:11px;font-weight:600}
+.chat-control select:disabled{opacity:.6;cursor:not-allowed}
+.chat-control select:focus-visible{outline:3px solid #8c7af1;outline-offset:2px}
+.chat-heading>div:nth-child(2){min-width:0}.chat-heading small{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.large-text .chat-control,.large-text .chat-control select{font-size:13px}

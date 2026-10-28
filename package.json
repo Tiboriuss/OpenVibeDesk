@@ -1,0 +1,66 @@
+{
+  "name": "ai-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": { "node": ">=22.13.0" },
+  "description": "OpenVibeDesk: local-first single-user AI workspace",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "pnpm build && electron .",
+    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json && vite build",
+    "test": "vitest run --exclude 'dist-electron/**'",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "pack:win": "pnpm build && electron-builder --win nsis",
+    "pack:linux": "pnpm build && electron-builder --linux AppImage",
+    "pack:mac": "pnpm build && electron-builder --mac dmg"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "2.1.2",
+    "lucide-react": "^1.62.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "sql.js": "^1.15.2",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.8.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^45.1.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "org.openworkspace.desktop",
+    "productName": "OpenVibeDesk",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Utility"
+    },
+    "mac": {
+      "target": "dmg"
+    }
+  }
+}
