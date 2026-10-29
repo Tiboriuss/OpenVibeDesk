@@ -19,8 +19,8 @@ function releaseContext(env = process.env, event) {
   if (env.GITHUB_EVENT_NAME === 'release') {
     const release = event.release;
     if (event.action !== 'published' || !release || release.draft !== false || !Number.isSafeInteger(release.id) || release.id <= 0) throw Error('Only a published release can receive installer assets.');
-    if (typeof release.tag_name !== 'string' || !release.tag_name.startsWith('v')) throw Error('Release tags must start with v, for example v0.2.0.');
-    const version = releaseVersion(release.tag_name.slice(1));
+    if (typeof release.tag_name !== 'string') throw Error('Release tags must be semantic versions, for example 0.2.0 or v0.2.0-beta.1.');
+    const version = releaseVersion(release.tag_name.startsWith('v') ? release.tag_name.slice(1) : release.tag_name);
     const taggedCommit = execFileSync('git', ['rev-parse', '--verify', `refs/tags/${release.tag_name}^{commit}`], { encoding: 'utf8' }).trim();
     if (taggedCommit !== commit) throw Error('The release tag does not point to the checked-out commit.');
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? '') || event.repository?.full_name?.toLowerCase() !== env.GITHUB_REPOSITORY.toLowerCase()) throw Error('The release repository does not match the workflow repository.');

@@ -54,7 +54,7 @@ Get-FileHash .\OpenVibeDesk-0.2.0-win-x64.exe -Algorithm SHA256
 Keep **Enable release immutability** disabled in the repository settings for this workflow. Installers are attached after the `published` event, and GitHub's immutable releases reject later asset uploads. The publisher checks this setting's effect and stops before uploading if the target release is immutable. Supporting immutable releases would require a different flow that builds and uploads to a draft before publishing it.
 
 1. Finish and push the intended source commit, including the release workflow.
-2. Create a GitHub release with a tag such as `v0.2.0` or `v0.2.0-beta.1`, pointing at that source commit. Use a prerelease for an early build where appropriate.
+2. Create a GitHub release with a tag such as `0.2.0` or `v0.2.0-beta.1`, pointing at that source commit. A leading `v` is optional. Use a prerelease for an early build where appropriate.
 3. Add release notes describing the actual changes, current platform validation and unsigned status, then publish the release. Saving a draft alone does not start the build.
 4. Follow the release workflow in GitHub Actions. Each native runner installs the pinned dependencies and builds its own target: Apple Silicon Mac, Intel Mac, or Windows x64.
 5. After all builds succeed, the upload job verifies the expected assets and hashes, checks that the release/tag still identify the built source, and attaches the installers, `SHA256SUMS.txt` and `RELEASE.json` to that same release.
@@ -62,7 +62,7 @@ Keep **Enable release immutability** disabled in the repository settings for thi
 
 This publish-after-creation flow requires GitHub release immutability to be disabled: immutable releases cannot receive new assets after publication. If the repository enables immutable releases later, the workflow must change to upload assets to a draft before publishing it.
 
-The release version comes from its tag. Tags must use `vMAJOR.MINOR.PATCH`, optionally followed by a valid SemVer prerelease suffix. Numeric version components must fit the supported Windows version bounds (at most 65535). Build metadata (`+...`) is rejected. The version helper updates `package.json` only inside the CI checkout; it does not commit a version change to the branch.
+The release version comes from its tag. Tags must use `MAJOR.MINOR.PATCH`, optionally prefixed with `v` and optionally followed by a valid SemVer prerelease suffix. Both `0.2.0` and `v0.2.0` produce package version `0.2.0`; the exact original tag is retained for source and release checks. Numeric version components must fit the supported Windows version bounds (at most 65535). Build metadata (`+...`) is rejected. The version helper updates `package.json` only inside the CI checkout; it does not commit a version change to the branch.
 
 Only the upload job has `contents: write`; platform builds use read access. The workflow uses GitHub's built-in token rather than a separate personal token or signing secret. It does not publish an additional release or enable in-app updates.
 
@@ -76,7 +76,7 @@ Keep published version tags and assets stable. A newer source revision should ha
 
 The workflow also supports an explicit **Run workflow** (`workflow_dispatch`) invocation. Select the source ref and optionally provide a plain version such as `0.2.0-beta.1`; leaving it empty uses the checked-in package version. This produces workflow artifacts for validation and does not create a GitHub release or attach release assets. Manual runs also perform targeted upgrade checks: Windows installs the EXE and a newer temporary installer in its disposable runner; Mac launches packaged apps with an isolated profile and replaces the first app with a newer temporary bundle. Fixture builds are excluded from release assets.
 
-The manual version uses the same validation rules as a release version, without the leading `v`. Use this path to inspect installers before publishing a release. Local packaging commands remain available in [CONTRIBUTING.md](../CONTRIBUTING.md#development).
+The manual version input always uses the plain version without a `v` prefix. Use this path to inspect installers before publishing a release. Local packaging commands remain available in [CONTRIBUTING.md](../CONTRIBUTING.md#development).
 
 ## Upgrade validation
 
