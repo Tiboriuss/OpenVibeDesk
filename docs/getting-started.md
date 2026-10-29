@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Repository overview](../README.md) · [Contributing](../CONTRIBUTING.md)
 
-OpenVibeDesk is an early desktop app for one user. The release workflow builds unsigned macOS and Windows installers. macOS development has been exercised in practice; build automation alone does not establish full platform or upgrade validation. Linux remains a local packaging target.
+OpenVibeDesk is an early desktop app for one user. The release workflow builds macOS and Windows installers without trusted publisher certificates. Mac apps use an ad-hoc signature for package integrity and are not notarized; Windows installers are unsigned. macOS development has been exercised in practice; build automation alone does not establish full platform or upgrade validation. Linux remains a local packaging target.
 
 ## Install or update the app
 
@@ -14,11 +14,13 @@ Open [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) and w
 | Mac with an Intel processor | macOS `x64` DMG |
 | Windows with an Intel/AMD 64-bit processor | Windows `x64` EXE |
 
-The first releases are unsigned; the Mac app is also not notarized. macOS Gatekeeper or Windows SmartScreen may warn or block opening. Only approve the specific downloaded OVD app if you trust its source. Do not disable operating-system protections globally. The release assets include checksums for verifying downloaded files; see [Releases and installers](releases.md).
+These early packages have no trusted publisher identity. macOS Gatekeeper or Windows SmartScreen may warn or block opening. Only approve the specific downloaded OVD app if you trust its source. The release assets include checksums for verifying downloaded files; see [Releases and installers](releases.md#signing-and-operating-system-approval).
 
 ### macOS
 
-Open the DMG and drag **OpenVibeDesk.app** to **Applications**. Eject the disk image, then open the copy in Applications. If macOS blocks a trusted download, use the app-specific approval offered in **System Settings → Privacy & Security**; its availability depends on system policy.
+Open the DMG and drag **OpenVibeDesk.app** to **Applications**. Eject the disk image, then open the copy in Applications. Until releases have a trusted Developer ID signature and notarization, macOS may block opening because it cannot verify the developer or check the app. After that attempt, use **System Settings → Privacy & Security → Open Anyway** for this specific app if you trust the download. Its availability depends on system policy. Follow [Apple's opening instructions](https://support.apple.com/en-us/102445); do not disable Gatekeeper globally or remove quarantine attributes to bypass its checks.
+
+An alert saying the app **is damaged** is a different problem from the expected unidentified-developer warning. It can indicate a broken download or invalid package signature. Download a fresh copy, compare its checksum, and report the release version and Mac architecture if it persists. Do not treat damage alerts as a normal installation step. The [release guide](releases.md#package-integrity-checks) explains the package checks.
 
 For a newer version, finish running work, quit OVD completely, and copy the new **OpenVibeDesk.app** to the same Applications folder. Choose **Replace** when Finder asks. Keep the same application name rather than creating a second copy with a different name. The local profile is stored outside the application bundle and is retained.
 

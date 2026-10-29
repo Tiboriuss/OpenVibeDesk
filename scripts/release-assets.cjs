@@ -33,7 +33,7 @@ async function collect(target, context) {
   console.log(`Collected ${name} (${checked.bytes} bytes).`);
 }
 function releaseManifest(context, installers) {
-  return { schemaVersion: 1, version: context.version, sourceCommit: context.commit, signing: 'unsigned', updateMethod: 'Install a newer release over the existing application. User data is stored separately; no automatic update service is included.', installers };
+  return { schemaVersion: 1, version: context.version, sourceCommit: context.commit, signing: 'no-trusted-publisher-signature', macOSAdHocSigned: true, macOSNotarized: false, updateMethod: 'Install a newer release over the existing application. User data is stored separately; no automatic update service is included.', installers };
 }
 async function assemble(context) {
   const names = await fsp.readdir(stage), expected = Object.keys(targets).flatMap(target => [filename(context.version, target), `${target}.json`]);

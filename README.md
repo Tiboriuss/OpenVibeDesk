@@ -60,7 +60,7 @@ Modules can signal new activity with a small dot on their Dock and Settings icon
 
 ## Download and install
 
-Installer downloads appear on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) after the release build finishes: a macOS DMG for Apple Silicon, a macOS DMG for Intel, and a Windows x64 installer. These early packages are unsigned and macOS packages are not notarized, so the operating system may warn or require approval before opening them.
+Installer downloads appear on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) after the release build finishes: a macOS DMG for Apple Silicon, a macOS DMG for Intel, and a Windows x64 installer. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. The operating system may therefore warn or require approval before opening them; see the [installation guide](docs/getting-started.md#install-or-update-the-app).
 
 To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and OS-stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Updates are installed manually; there is no in-app automatic updater yet.
 

@@ -79,7 +79,7 @@
     "mac": {
       "target": "dmg",
       "icon": "assets/brand/app-icon.icns",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
       "notarize": false
     },

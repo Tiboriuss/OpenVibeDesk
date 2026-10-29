@@ -4,7 +4,7 @@
 
 The [release workflow](../.github/workflows/release.yml) builds macOS and Windows installer downloads when a GitHub release is published. It is an explicitly requested exception to the project's preference for local checks. Routine pushes and pull requests do not start this workflow.
 
-The initial release pipeline produces packages without trusted publisher signing. Mac packages are not notarized. Installing a newer version over the existing app is supported through the installer/application identity and stable local data path; an in-app automatic updater is not implemented.
+The initial release pipeline produces packages without trusted publisher certificates. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. Installing a newer version over the existing app is supported through the installer/application identity and stable local data path; an in-app automatic updater is not implemented.
 
 ## Download and update
 
@@ -33,9 +33,13 @@ App upgrades preserve the profile containing settings, drafts, chats, module con
 
 Module updates are independent of app installer updates. Downloaded module packages remain under the existing profile, and changed third-party module code still needs its normal local approval.
 
-## Unsigned package behavior
+## Signing and operating-system approval
 
-These packages do not have an Apple Developer ID signature/notarization or a Windows publisher certificate. macOS Gatekeeper and Windows SmartScreen may warn or block opening. Approve only the specific OVD download if you trust its source; do not disable system protections globally. Organization policies may disallow unsigned apps entirely.
+The Mac build uses `mac.identity: "-"` so electron-builder signs the completed app ad hoc, including its nested code and native dependencies. This provides a verifiable package seal without a signing certificate. It does not establish a trusted publisher identity or provide Apple notarization. The Windows installer has no publisher signature. macOS Gatekeeper and Windows SmartScreen may therefore warn or block opening; organization policy can also prevent installation.
+
+For an expected unidentified-developer or unnotarized-app warning on Mac, first attempt to open the app, then use **System Settings → Privacy & Security → Open Anyway** if you trust that specific download and the option is available. See [Apple's instructions](https://support.apple.com/en-us/102445). Do not disable system protections globally or strip quarantine attributes as an installation workaround.
+
+An **app is damaged** alert must be investigated separately: a broken download or invalid code/resource seal can cause it. It is not the normal approval prompt for the absence of a Developer ID certificate. Compare the download checksum, try a fresh download, and report the release and architecture if the error remains.
 
 Checksums help detect a mismatched or corrupted download. They are not a substitute for code signing or independent proof of publisher identity. Compare a computed SHA-256 hash with the corresponding entry in `SHA256SUMS.txt`:
 
@@ -55,7 +59,7 @@ Keep **Enable release immutability** disabled in the repository settings for thi
 
 1. Finish and push the intended source commit, including the release workflow.
 2. Create a GitHub release with a tag such as `0.2.0` or `v0.2.0-beta.1`, pointing at that source commit. A leading `v` is optional. Use a prerelease for an early build where appropriate.
-3. Add release notes describing the actual changes, current platform validation and unsigned status, then publish the release. Saving a draft alone does not start the build.
+3. Add release notes describing the actual changes, current platform validation and signing/notarization status, then publish the release. Saving a draft alone does not start the build.
 4. Follow the release workflow in GitHub Actions. Each native runner installs the pinned dependencies and builds its own target: Apple Silicon Mac, Intel Mac, or Windows x64.
 5. After all builds succeed, the upload job verifies the expected assets and hashes, checks that the release/tag still identify the built source, and attaches the installers, `SHA256SUMS.txt` and `RELEASE.json` to that same release.
 6. Download and practically check the installers on their intended operating systems. Record the result in the release notes; successful packaging alone does not establish complete platform or upgrade support.
@@ -77,6 +81,18 @@ Keep published version tags and assets stable. A newer source revision should ha
 The workflow also supports an explicit **Run workflow** (`workflow_dispatch`) invocation. Select the source ref and optionally provide a plain version such as `0.2.0-beta.1`; leaving it empty uses the checked-in package version. This produces workflow artifacts for validation and does not create a GitHub release or attach release assets. Manual runs also perform targeted upgrade checks: Windows installs the EXE and a newer temporary installer in its disposable runner; Mac launches packaged apps with an isolated profile and replaces the first app with a newer temporary bundle. Fixture builds are excluded from release assets.
 
 The manual version input always uses the plain version without a `v` prefix. Use this path to inspect installers before publishing a release. Local packaging commands remain available in [CONTRIBUTING.md](../CONTRIBUTING.md#development).
+
+## Package integrity checks
+
+Every macOS build in the release workflow, both published-release and manual runs, verifies its packaged app before uploading artifacts. The [signature verifier](../scripts/verify-mac-signature.cjs) requires the expected application identity and a sealed resource manifest, runs `codesign --verify --deep --strict`, and checks the architecture and strict signature of every nested Mach-O binary, including native `.node` dependencies. A failed check stops that build and prevents release asset publication. This gate checks integrity; a successful result is not a claim of Developer ID trust, notarization or runtime compatibility.
+
+On Mac, run the same check against a copied app from the finished DMG, adjusting the path and architecture:
+
+```sh
+node scripts/verify-mac-signature.cjs --app /path/to/OpenVibeDesk.app --arch arm64
+```
+
+For an Intel package, use `--arch x64`. Also download the finished release through a browser and open it through Finder on the intended Mac, ideally in a fresh test environment. Browser downloads carry macOS quarantine information; directly launching a locally built executable does not exercise the same Gatekeeper path. Keep the download's quarantine information intact and record whether the expected app-specific approval works. [Apple's distribution diagnostics](https://developer.apple.com/forums/thread/706442) explain this distinction. A standard Gatekeeper trust rejection is expected without Developer ID signing and notarization; a damaged seal is a packaging failure.
 
 ## Upgrade validation
 

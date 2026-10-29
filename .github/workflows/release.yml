@@ -88,8 +88,15 @@ jobs:
         run: node scripts/release-version.cjs --write
       - name: Build application
         run: pnpm build
-      - name: Package unsigned installer
+      - name: Package installer without a publisher certificate
         run: pnpm exec electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+      - name: Verify macOS resource seal and binary architecture
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: node scripts/verify-mac-signature.cjs --app "$PACKAGED_APP" --arch "$PACKAGE_ARCH"
+        env:
+          PACKAGED_APP: ${{ matrix.app_dir }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
       - name: Collect verified installer
         run: node scripts/release-assets.cjs collect ${{ matrix.target }}
       - name: Verify macOS app replacement and retained profile
