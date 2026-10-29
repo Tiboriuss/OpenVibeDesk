@@ -3,7 +3,7 @@
   "id": "ovd-assistant",
   "title": "OVD-Assistent",
   "version": "0.1.0",
-  "description": "Pflichtmodul für Gespräche, das Lesen gespeicherter Chatverläufe, Referenzen, Systemzeit, Kalenderzeiträume, Berechnungen, Workspace-Kontext, Navigation und Einstellungen; findet und steuert Zusatzmodule.",
+  "description": "Pflichtmodul für Chatverläufe, Referenzen, Systemzeit, Berechnungen, Workspace-Kontext, Navigation und Einstellungen; findet und steuert Zusatzmodule und verwaltet Modulquellen, Installation und Updates.",
   "keywords": [
     "assistent",
     "assistant",
@@ -24,15 +24,17 @@
     "uhrzeit",
     "zeitzone",
     "heute",
-    "gestern",
     "zeitraum",
     "berechnung",
-    "rechnen",
-    "summe",
-    "durchschnitt",
     "navigation",
     "seitenleiste",
-    "reihenfolge"
+    "reihenfolge",
+    "hinweise",
+    "benachrichtigung",
+    "repository",
+    "katalog",
+    "installieren",
+    "updates"
   ],
   "required": true,
   "capabilities": [
@@ -62,10 +64,18 @@
     "app.quit",
     "modules.list",
     "modules.set_enabled",
+    "modules.attention",
+    "modules.acknowledge_attention",
     "settings.agent_get",
     "settings.agent_save",
     "navigation.get",
-    "navigation.move"
+    "navigation.move",
+    "modules.repositories_list",
+    "modules.repository_prepare",
+    "modules.repository_remove",
+    "modules.repositories_refresh",
+    "modules.repository_catalog",
+    "modules.repository_install"
   ],
   "permissions": [
     "storage.workspace",

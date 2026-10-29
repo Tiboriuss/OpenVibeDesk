@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImapMailView } from './ImapMailView';
 import { MailQueryControls } from './MailQueryControls';
-import type { ImapFolder, ImapMessage, ImapPageCursor, MailAccountSummary, MailSearchResults } from '../../../shared/mail';
+import { useMailPreviews } from './use-mail-previews';
+import type { ImapFolder, ImapMessage, ImapPageCursor, MailAccountSummary, MailPreview, MailSearchResults } from '../../../shared/mail';
 import type { MailCountRequest, MailCountResult, MailQueryRequest, MailQueryResult } from '../../../shared/mail-query';
 import { draftCollection } from '../../../shared/draft-status';
 import type { Draft, MailNavigationTarget } from '../../../shared/model';
@@ -43,11 +44,50 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const listVersion = useRef(0);
   const loadMoreBusy = useRef(false);
   const pendingLookup = useRef<string | undefined>(undefined);
+  const inboxRefreshBusy = useRef(false);
+  const liveView = useRef({ mode, accountId, folder, loading, searching: false });
+  liveView.current = { mode, accountId, folder, loading, searching: !!(searchResults || queryResults || searchLoading || queryBusy) };
   currentFolder.current = { accountId, folder };
+
+  const visibleMessages = queryResults?.messages ?? searchResults?.messages ?? messages;
+  const applyPreviews = useCallback((previews: MailPreview[]) => {
+    const byId = new Map(previews.map(item => [item.emailId, item.preview]));
+    const merge = (items: ImapMessage[]) => items.map(item => byId.has(item.id) ? { ...item, preview: byId.get(item.id)! } : item);
+    setMessages(merge);
+    setSearchResults(current => current ? { ...current, messages: merge(current.messages) } : current);
+    setQueryResults(current => current ? { ...current, messages: merge(current.messages) } : current);
+  }, []);
+  const onVisibleMessages = useMailPreviews(visibleMessages, mode === 'real' && !loading && !searchLoading && !queryBusy,
+    JSON.stringify([accountId, folder, refresh, searchVersion.current, visibleMessages.map(message => message.id)]), applyPreviews);
 
   useEffect(() => window.workspace.onMailMessageChanged(message => { setMessages(items => items.map(item => item.id === message.id ? message : item)); setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? message : item) } : current); setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? message : item) } : current); }), []);
   useEffect(() => window.workspace.onMailSearchResults(results => { searchVersion.current++; setSearchResults(results); setQueryResults(undefined); setQueryRequest(undefined); setCountResult(undefined); setQueryBusy(false); setSearchLoading(false); setMode('real'); setMessageId(undefined); setBodyLoading(undefined); setError(''); setPendingOpen(undefined); }), []);
   useEffect(() => window.workspace.onMailQueryResults(({ result, request }) => { searchVersion.current++; setQueryResults(result); setQueryRequest(request); setCountResult(undefined); setSearchResults(undefined); setQueryBusy(false); setQueryLoadingMore(false); setSearchLoading(false); setMode('real'); setMessageId(undefined); setBodyLoading(undefined); setError(''); setPendingOpen(undefined); }), []);
+  useEffect(() => {
+    let mounted = true;
+    const unsubscribe = window.workspace.onMailInboxChanged(({ accountId: changed }) => {
+      const view = liveView.current;
+      // Background arrival must not navigate away from a search, another folder
+      // or the reader. Refresh metadata in place only for the visible Inbox.
+      if (inboxRefreshBusy.current || view.mode !== 'real' || view.loading || view.searching || view.accountId !== changed || view.folder.toLowerCase() !== 'inbox') return;
+      const version = listVersion.current, search = searchVersion.current;
+      inboxRefreshBusy.current = true;
+      void window.workspace.listMailMessages(view.accountId, view.folder).then(page => {
+        if (!mounted || listVersion.current !== version || searchVersion.current !== search || liveView.current.accountId !== view.accountId || liveView.current.folder !== view.folder || liveView.current.searching || liveView.current.mode !== 'real') return;
+        setMessages(items => {
+          const validity = page.messages[0]?.uidValidity;
+          const retained = validity ? items.filter(item => item.uidValidity === validity) : items;
+          const byId = new Map(retained.map(item => [item.id, item]));
+          for (const message of page.messages) byId.set(message.id, message);
+          return [...byId.values()].sort((a, b) => b.uid - a.uid).slice(0, 500);
+        });
+        setNextCursor(previous => previous?.uidValidity === page.messages[0]?.uidValidity ? previous : page.nextCursor);
+      }).catch(() => {
+        if (mounted && listVersion.current === version && liveView.current.accountId === view.accountId && liveView.current.folder === view.folder) setError('Neue Postfachaktivität erkannt. Die Übersicht konnte nicht aktualisiert werden; bitte „Aktualisieren“ wählen.');
+      }).finally(() => { inboxRefreshBusy.current = false; });
+    });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -79,13 +119,15 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
 
   useEffect(() => {
     if (!accountId) { setFolders([]); setFolder(''); setMessages([]); setFoldersLoadedFor(''); setMessagesLoadedFor(undefined); return; }
+    const previousFolder = foldersLoadedFor === accountId ? currentFolder.current.folder : '';
     let active = true;
     setLoading(true); setError(''); setFolders([]); setMessages([]); setMessageId(undefined); setBodyLoading(undefined); setFolder(''); setFoldersLoadedFor(''); setMessagesLoadedFor(undefined);
     void window.workspace.listMailFolders(accountId).then(items => {
       if (!active) return;
       setFolders(items);
       setFoldersLoadedFor(accountId); setFoldersLoadedVersion(refresh);
-      const first = items.find(item => item.selectable && (item.specialUse?.toLowerCase() === '\\inbox' || item.path.toLowerCase() === 'inbox')) ?? items.find(item => item.selectable);
+      const first = items.find(item => item.selectable && item.path === previousFolder)
+        ?? items.find(item => item.selectable && (item.specialUse?.toLowerCase() === '\\inbox' || item.path.toLowerCase() === 'inbox')) ?? items.find(item => item.selectable);
       setFolder(first?.path ?? '');
       if (!first) setLoading(false);
     }).catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : 'Ordner konnten nicht geladen werden.'); setLoading(false); setPendingOpen(undefined); } });
@@ -255,7 +297,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   return <div className="mail-workspace">
     <div className="mail-workspace-content">
       {mode === 'loading' ? <div className="mail-workspace-loading">Mailkonten werden geladen …</div> :
-        <ImapMailView accounts={accounts} folders={folders} messages={queryResults?.messages ?? searchResults?.messages ?? messages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId}
+        <ImapMailView accounts={accounts} folders={folders} messages={visibleMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
           dateBasis={queryResults && (queryRequest?.sort ?? queryResults.request?.sort ?? 'received_desc').startsWith('received') ? 'received' : 'sent'}
           queryControls={<MailQueryControls accounts={accounts} folders={folders} accountId={accountId} folder={folder} hidden={mode === 'drafts'} busy={queryBusy || queryLoadingMore} summary={countResult ?? queryResults} onQuery={queryMail} onCount={countMail} onReset={clearSearch}/>}
           searchState={queryResults ? { title: 'Mailabfrage', query: '', description: 'Kombinierte Serverfilter', total: queryResults.count, countExact: queryResults.countExact, complete: queryResults.complete, hasMore: queryResults.hasMore, scope: queryResults.scope, loading: queryBusy } : searchResults ? { query: searchResults.query, total: searchResults.total, hasMore: searchResults.hasMore, scope: searchResults.scope + (searchResults.foldersRemaining ? ` · ${searchResults.foldersRemaining} weitere Ordner nicht durchsucht` : '') + (searchResults.warnings?.length ? ' · Einige Ordner nicht erreichbar' : ''), loading: searchLoading } : searchLoading ? { query: pendingSearchQuery, total: 0, hasMore: false, scope: 'Postfachsuche läuft …', loading: true } : undefined}

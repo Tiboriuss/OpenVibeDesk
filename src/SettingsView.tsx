@@ -9,6 +9,8 @@ import type { Settings as WorkspaceSettings } from '../shared/model';
 import type { SettingsSuggestion } from './settings-preparation';
 import { moduleIcon, moduleSettings, useWorkspaceModules } from './module-registry';
 import './settings-view.css';
+import { ModuleAttentionDot, useModuleAttention } from './ModuleAttentionDot';
+import { ModuleRepositories } from './ModuleRepositories';
 
 type GroupId = 'display' | 'dock';
 const groupStorageKey = 'openvibedesk.settings.groups';
@@ -33,6 +35,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const [groups, setGroups] = useState(initialGroups);
   const [searchGroups, setSearchGroups] = useState<Record<GroupId, boolean>>({ display: true, dock: true });
   const moduleState = useWorkspaceModules();
+  const moduleAttention = useModuleAttention();
   const [moduleBusy, setModuleBusy] = useState<string>();
   const [moduleError, setModuleError] = useState('');
   const [visitedModuleSettings, setVisitedModuleSettings] = useState<Set<string>>(() => new Set());
@@ -44,7 +47,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   useEffect(() => {
     const unsubscribeOpen = window.workspace.onShowMailSettings(() => { setActive('mail'); setSearch(''); });
     const unsubscribePrepare = window.workspace.onPrepareSettings(request => {
-      if (!request || !['mail', 'ai', 'agent'].includes(request.category) || !['account', 'smtp', 'ai', 'agent'].includes(request.kind) || !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return;
+      if (!request || !['mail', 'ai', 'agent', 'modules'].includes(request.category) || !['account', 'smtp', 'ai', 'agent', 'module-repository'].includes(request.kind) || !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return;
       setActive(request.category); setSearch(''); setPreparation({ ...request, token: ++preparationToken.current });
     });
     const unsubscribeNavigate = window.workspace.onNavigateSettings(request => {
@@ -89,6 +92,9 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   function chooseCategory(id: SettingsCategoryId) {
     setActive(id);
     setSearch('');
+    const owner = contributedSettings.find(item => item.categoryId === id)?.moduleId;
+    const ids = owner ? moduleAttention.filter(item => item.moduleId === owner).map(item => item.id) : [];
+    if (owner && ids.length) void window.workspace.acknowledgeModuleAttention(owner, ids).catch(() => {});
   }
 
   function toggleGroup(id: GroupId) {
@@ -107,7 +113,10 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       <div className="settings-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Einstellungen durchsuchen" placeholder="Einstellungen suchen …" value={search} onChange={event => updateSearch(event.target.value)} />{search && <button type="button" aria-label="Suche löschen" title="Suche löschen" onClick={() => updateSearch('')}><X size={15} /></button>}</div>
       <nav className="settings-category-nav" aria-label="Einstellungskategorien">{categories.map(item => {
         const Icon = icons[item.id as keyof typeof icons] ?? moduleIcon(item.icon);
-        return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><Icon size={16} aria-hidden="true" /><span>{item.title}</span></button>;
+        const owner = contributedSettings.find(category => category.categoryId === item.id)?.moduleId;
+        const notices = owner ? moduleAttention.filter(notice => notice.moduleId === owner) : [];
+        const label = notices.length ? `${item.title} · ${notices.length} ${notices.length === 1 ? 'Hinweis' : 'Hinweise'}` : item.title;
+        return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-label={label} title={notices.length ? notices.map(notice => notice.message).join(' · ') : undefined} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><span className="module-attention-icon"><Icon size={16} aria-hidden="true" />{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span><span>{item.title}</span></button>;
       })}</nav>
     </aside>
     <main className="settings-view-content">
@@ -138,6 +147,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       <section hidden={!visible('modules')} aria-label="Module" className="module-management">
         {searching && <h3 className="settings-result-category">Module</h3>}
         {(moduleError || moduleState.error) && <p className="mail-account-feedback error" role="alert">{moduleError || moduleState.error}</p>}
+        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.repositories')!, search, categories)}><ModuleRepositories preparation={preparation?.kind === 'module-repository' ? preparation : undefined} installedModules={moduleState.modules} moduleBusy={!!moduleBusy} onActivate={id => toggleModule(id, true)} /></div>
         <NavigationOrderSettings settings={settings} modules={moduleState.modules} loading={moduleState.loading || !!moduleBusy} searchQuery={search}/>
         <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
         {moduleState.loading && <p role="status">Module werden geladen …</p>}

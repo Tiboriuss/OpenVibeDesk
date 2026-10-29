@@ -62,6 +62,8 @@ Each configured account has one expandable group in Settings. Its summary shows 
 
 An empty password field retains stored credentials when the connection identity is unchanged. Changing the server or login requires the credentials explicitly requested by the form. See the shared [settings principles](settings-design.md).
 
+**Current implementation:** each account also has an independent sender/signature/retrieval group. **Kontoname** is a local label; **Absendername** is the validated display name used in SMTP's From header. An empty sender name sends the address alone. The plain-text signature allows up to 5,000 characters and is inserted once into new messages and replies, before any quoted source. It is visible and editable in the draft, retained after restart, and never appended invisibly at send time. Changing preferences does not rewrite existing drafts. The sender shown in compose uses the account's configured sender name. Preference saving preserves connection settings and pending form edits without testing IMAP or retrieving credentials.
+
 ### Personal details
 
 - Display name, such as “Tibor Miller”.
@@ -129,7 +131,9 @@ Keep each row compact while showing:
 
 Keep the list responsive for large mailboxes. Load older messages when needed.
 
-**Current implementation:** metadata is paged and message bodies load on demand. A row can show a body preview only after that body has been loaded; it does not preload every message merely to fill a preview. The ordinary folder view initially requests up to 25 messages and limits the visible collection to 500. Stars and flags are not implemented.
+**Current implementation:** metadata is paged and complete reader bodies load on demand. Compact rows keep a stable height before and after selection. Visible rows and a small scrolling margin receive best-effort plain-text previews without opening each message. The shared preview service accepts up to 12 known message IDs per request, reads at most 8 KiB of decoded content from one non-attachment text part per message, and retains at most 200 Unicode code points. HTML-only parts are converted to text; attachments, embedded images and remote resources are not fetched. Read-only IMAP/PEEK preserves unread state. Requests are serialized, successful previews remain in the bounded session cache, and changing the view cancels obsolete UI work. Missing previews leave a usable sender/subject row; refresh permits retry after a failure. The Assistant can explicitly request the same bounded previews through `mail.previews`, respecting targeted mail permissions. Preview loading alone adds nothing to model context. The ordinary folder view initially requests up to 25 messages and limits the visible collection to 500. Stars and flags are not implemented.
+
+Query/count results use a compact count badge beside **Filter & Anzahl**. Expand that group for account/folder scope, observation time, receipt-time range and warnings. Incomplete results remain labelled in the collapsed summary; the full-width duplicate result strip is removed. The 38px result-list header puts title, loaded count and total on one line; ordinary folder headers show the title and loaded-count badge. **Umfang** exposes search coverage without a long wrapping subtitle. The sidebar account identity uses one 28px row, with the email retained for assistive technology and in its tooltip; multiple accounts use a compact labelled selector.
 
 ### Message reader
 
@@ -391,7 +395,9 @@ Use **UID and UIDVALIDITY per folder** for reliable message identity. If UIDVALI
 
 IMAP IDLE may deliver timely change notifications when available; periodic refresh remains a useful alternative.
 
-**Current implementation:** folder paging and reads validate UID/UIDVALIDITY. Messages are held in bounded session memory and refreshed on demand. Persistent offline mail caching, queued offline mutations, IDLE-driven synchronization and full conflict reconciliation are not implemented. Local drafts and explicit chat snapshots are separate persisted records, not a general offline mailbox.
+**Current implementation:** folder paging and reads validate UID/UIDVALIDITY. Messages are held in bounded session memory. Each account can check for new Inbox activity every 1, 2, 5, 10, 15, 30 or 60 minutes, or use manual retrieval only; the backward-compatible default is five minutes. The background service serializes lightweight read-only INBOX STATUS calls, establishes a silent first baseline, and detects later UIDNEXT advancement under the same UIDVALIDITY. It does not download bodies or mark messages read. Connection failures back off, and account removal, manual mode, module disable and quit cancel scheduled work. A visible normal Inbox refreshes its metadata in place, preserving selection; searches and other folders retain their scope. New activity publishes the shared module attention hint. These are arrival hints, not exact unread counts or delivery guarantees.
+
+Persistent offline mail caching, queued offline mutations, IDLE-driven synchronization and full conflict reconciliation are not implemented. Local drafts and explicit chat snapshots are separate persisted records, not a general offline mailbox.
 
 ## 11. Security and privacy
 

@@ -47,7 +47,9 @@ The OVD Assistant is the required `ovd-assistant` module. Domain modules registe
 
 Custom modules are discovered at startup from `<userData>/modules/<module-folder>/module.json`. On macOS, `userData` is currently `~/Library/Application Support/ai-workspace/`. Built-in modules are discovered under `<appPath>/modules/`.
 
-After copying a module, restart OVD and open **Settings → Modules** (currently **Einstellungen → Module**). Third-party modules require explicit approval of their current file fingerprint. Changed files require new approval. Disabling a module removes its contributions and capabilities without deleting its data.
+For distribution through a public or private repository, see [module repositories](docs/module-repositories.md). The catalog helper prepares versioned packages and checksums without executing module code. Repository installs are discovered immediately.
+
+After manually copying a module, restart OVD and open **Settings → Modules** (currently **Einstellungen → Module**). Third-party modules require explicit approval of their current file fingerprint. Changed files require new approval. Disabling a module removes its contributions and capabilities without deleting its data.
 
 Approvals and disabled IDs are stored in `<userData>/module-settings.json`; module-owned data belongs under `<userData>/module-data/<moduleId>/`. See [local data](docs/getting-started.md#local-data).
 
@@ -83,6 +85,33 @@ exports.activate = async ({ moduleId, dataDirectory }) => ({
 ```
 
 Implement every manifest tool exactly once. Interface actions and the assistant must use the same functions; every implemented domain action available in the interface needs an assistant entry point. Validate domain inputs and resource IDs, exclude secrets from results, respect cancellation, and return bounded JSON with clear errors and search limits. Persist changes safely and never automatically repeat side effects after an uncertain result.
+
+### Module attention indicators
+
+The activation context also provides an optional attention publisher. Use it for a short hint that the user should visit the module:
+
+```js
+exports.activate = async ({ moduleId, dataDirectory, attention }) => ({
+  tools: {
+    'my-module.refresh': async (args, { signal }) => {
+      signal.throwIfAborted();
+      // Perform the module's own work, then publish a bounded hint.
+      attention.publish({ key: 'updated', message: 'New items are available.' });
+      return { outcome: 'completed' };
+    },
+    'my-module.review': async () => {
+      attention.clear('updated');
+      return { outcome: 'completed' };
+    }
+  }
+});
+```
+
+Declare these example tools in the manifest like any other module function. The publisher is bound to the approved process's identity; modules cannot name another module. Keys contain 1–80 ASCII letters/digits or `._:-` and start with a letter/digit. Messages are ordinary single-line text of at most 160 characters; do not include bodies, credentials or other sensitive content. The host retains at most eight hints per module and 100 overall, in session memory.
+
+A dot appears on the module's primary Dock icon and contributed Settings categories. It breathes for ten seconds, then stays static; reduced-motion preferences disable the animation. Opening the relevant module/category acknowledges the hints captured for that visit. Newer publications remain visible, including updates to the same key, and updating an outstanding hint does not continually restart its animation. Explicit clearing removes only that module's key. Disable/failure removes its hints and ignores stale process messages. Modules without navigation or settings contributions have no icon target; their hints remain available through the shared listing.
+
+The Assistant discovers `modules.attention` and `modules.acknowledge_attention` lazily to inspect or acknowledge the same state. Hints grant no permissions, execute no actions and are not automatically copied into provider context. See [attention types](shared/module-attention.ts) and the [host](electron/module-host.ts).
 
 The [process runtime](electron/module-runtime.ts) currently enforces these bounds:
 

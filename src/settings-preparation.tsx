@@ -1,15 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { agentSettingsPatchSchema, defaultAgentSettings } from '../shared/agent-settings';
+import { MAIL_POLL_INTERVALS } from '../shared/mail-preferences';
 import type { SettingsPreparation } from '../shared/model';
 import './settings-preparation.css';
 
 export type SettingsSuggestion = SettingsPreparation & { token: number };
 type SafeValue = string | number | boolean;
-const stringLimits: Record<string, number> = { name: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
-const labels: Record<string, string> = { name: 'Anzeigename', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell', simpleModel: 'Einfaches Modell', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', realMailAccess: 'Allgemeiner Mailzugriff', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
+const stringLimits: Record<string, number> = { name: 120, senderName: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
+const labels: Record<string, string> = { title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell', simpleModel: 'Einfaches Modell', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', realMailAccess: 'Allgemeiner Mailzugriff', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
 
 /** Only ordinary configuration fields reach the forms; secret fields are never copied. */
 export function preparationValues(suggestion: SettingsSuggestion): Record<string, SafeValue> {
+  if (suggestion.kind === 'module-repository') {
+    const result: Record<string, SafeValue> = {};
+    for (const [key, max] of Object.entries({ sourceId: 36, title: 120, url: 2048 })) {
+      const value = suggestion.values[key];
+      if (typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)) result[key] = value;
+    }
+    return result;
+  }
   if (suggestion.kind === 'agent') {
     const result: Record<string, SafeValue> = {};
     for (const key of Object.keys(defaultAgentSettings)) {
@@ -18,11 +27,13 @@ export function preparationValues(suggestion: SettingsSuggestion): Record<string
     }
     return result;
   }
-  const allowed = suggestion.kind === 'ai' ? ['baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'realMailAccess', 'confirmationMode'] : suggestion.kind === 'smtp' ? ['host', 'port', 'security', 'username', 'useImapCredentials'] : ['name', 'email', 'host', 'port', 'security', 'username'];
+  const allowed = suggestion.kind === 'ai' ? ['baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'realMailAccess', 'confirmationMode'] : suggestion.kind === 'smtp' ? ['host', 'port', 'security', 'username', 'useImapCredentials'] : ['name', 'email', 'host', 'port', 'security', 'username', 'senderName', 'signature', 'pollIntervalSeconds'];
   const result: Record<string, SafeValue> = {};
   for (const key of allowed) {
     const value = suggestion.values[key];
     if (key in stringLimits && typeof value === 'string' && !/[\u0000-\u001f\u007f]/.test(value)) result[key] = value.slice(0, stringLimits[key]);
+    else if (key === 'signature' && typeof value === 'string' && value.length <= 5_000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) result[key] = value;
+    else if (key === 'pollIntervalSeconds' && typeof value === 'number' && MAIL_POLL_INTERVALS.some(interval => interval === value)) result[key] = value;
     else if (key === 'port' && typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535) result[key] = value;
     else if (key === 'security' && (value === 'tls' || value === 'starttls')) result[key] = value;
     else if ((key === 'smartThinking' || key === 'simpleThinking') && typeof value === 'string' && ['off', 'low', 'medium', 'high'].includes(value)) result[key] = value;

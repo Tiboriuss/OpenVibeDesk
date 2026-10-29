@@ -9,6 +9,7 @@ import { moduleIcon, moduleViews, useWorkspaceModules, workspaceNavigation } fro
 import type { EmailReferenceSummary, ForkChatResult, Settings, WorkspaceState } from '../shared/model';
 import type { UiAction } from '../shared/actions';
 import { MAX_MODULE_REFERENCES, moduleReferenceInput, moduleReferenceKey, moduleReferenceSummary, moduleReferenceSummarySchema, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
+import { ModuleAttentionDot, useModuleAttention } from './ModuleAttentionDot';
 
 type View = 'dock' | 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions' | 'module';
 const query = new URLSearchParams(window.location.search);
@@ -69,6 +70,7 @@ function loadMailDrafts(): Record<string, EmailReferenceSummary> {
 export function NativeApp() {
   const [state, setState] = useState<WorkspaceState | null>(null);
   const moduleState = useWorkspaceModules();
+  const moduleAttention = useModuleAttention(view === 'dock');
   const contributedViews = moduleViews(moduleState.modules);
   const contributedView = view === 'module' ? contributedViews.find(item => item.moduleId === moduleId && item.id === moduleViewId) : contributedViews.find(item => item.moduleId === (view === 'files' ? 'ovd-files' : 'ovd-mail') && item.id === view);
   const ModuleComponent = contributedView?.Component;
@@ -270,7 +272,19 @@ export function NativeApp() {
     const dockItems = workspaceNavigation(moduleState.modules, state?.settings.navigationOrder);
     return <div className="dock-native"><div className="dock-grip" title="Dock verschieben">⋮⋮</div>{dockItems.map(item => {
       const Icon = moduleIcon(item.icon);
-      return <button key={item.id} title={item.title} aria-label={item.title} onClick={() => { if (item.action) void action(item.action); else if (item.view) void window.workspace.openModuleView(item.moduleId, item.view).catch(reason => setError(String(reason))); }}>{item.id === 'assistant' ? <BrandMark variant="app" size={36} /> : <Icon />}</button>;
+      // A module may contribute several entries. Its primary icon gets one hint.
+      const primary = dockItems.find(entry => entry.moduleId === item.moduleId)?.id === item.id;
+      const notices = primary ? moduleAttention.filter(notice => notice.moduleId === item.moduleId) : [];
+      const title = notices.length ? `${item.title} · ${notices.length} ${notices.length === 1 ? 'Hinweis' : 'Hinweise'}: ${notices.map(notice => notice.message).join(' · ')}` : item.title;
+      return <button className="dock-navigation" key={item.id} title={title} aria-label={title} onClick={() => {
+        const seen = notices.map(notice => notice.id);
+        void (async () => {
+          if (item.action) await window.workspace.dispatchAction(item.action);
+          else if (item.view) await window.workspace.openModuleView(item.moduleId, item.view);
+          if (seen.length) await window.workspace.acknowledgeModuleAttention(item.moduleId, seen);
+          setError('');
+        })().catch(reason => setError(String(reason)));
+      }}><span className="module-attention-icon">{item.id === 'assistant' ? <BrandMark variant="app" size={36} /> : <Icon />}{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span></button>;
     })}<span className="dock-native-divider" /><button title="App beenden" aria-label="App beenden" onClick={() => void window.workspace.quit()}><Power /></button>{(error || moduleState.error) && <span className="dock-module-error" role="alert" title={error || moduleState.error}>!</span>}</div>;
   }
   if (!state) return <div className="native-loading">Loading workspace…</div>;

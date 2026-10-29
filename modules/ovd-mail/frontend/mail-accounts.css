@@ -25,13 +25,14 @@
 .mail-account-form-group>summary>svg{flex:none;color:var(--muted);transition:transform .15s}
 .mail-account-form{min-width:0;padding:14px 0 12px}
 .mail-account-form-group>.mail-account-form{padding:14px 12px;border-top:1px solid var(--line)}
-.mail-account-form fieldset,.smtp-form fieldset{display:flex;flex-direction:column;gap:12px;min-width:0;border:0;margin:0;padding:0}
+.mail-account-form fieldset,.smtp-form fieldset,.mail-preferences-form fieldset{display:flex;flex-direction:column;gap:12px;min-width:0;border:0;margin:0;padding:0}
 .mail-general-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 .mail-general-fields h4{grid-column:1/-1;margin:0;color:var(--ink);font-size:12px}
 .mail-account-field{display:flex;flex-direction:column;gap:5px;min-width:0}
 .mail-account-field label{font-size:11px;font-weight:700;color:var(--ink)}
-.mail-account-field input,.mail-account-field select{width:100%;min-width:0;border:1px solid #b8c5d8;border-radius:7px;background:#fff;color:var(--ink);font-size:12px;line-height:1.3;padding:8px 9px}
-.mail-account-field input:focus,.mail-account-field select:focus{outline:2px solid var(--accent);outline-offset:1px}
+.mail-account-field input,.mail-account-field select,.mail-account-field textarea{width:100%;min-width:0;border:1px solid #b8c5d8;border-radius:7px;background:#fff;color:var(--ink);font:inherit;font-size:12px;line-height:1.3;padding:8px 9px}
+.mail-account-field textarea{resize:vertical;min-height:88px;max-height:320px;line-height:1.5}
+.mail-account-field input:focus,.mail-account-field select:focus,.mail-account-field textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
 .mail-account-field input::placeholder{color:#77869a}
 .mail-account-field input:disabled{background:#f3f5f8;color:var(--muted)}
 .mail-account-field p{margin:0;color:var(--muted);font-size:11px;line-height:1.45}
@@ -42,9 +43,12 @@
 .mail-connection-group>summary strong{font-size:11px}
 .mail-connection-group>summary small{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
 .mail-connection-group>summary>svg{flex:none;color:var(--muted);transition:transform .15s}
-.mail-connection-fields,.smtp-form{display:flex;flex-direction:column;gap:12px;min-width:0;padding:12px 10px;border-top:1px solid var(--line)}
+.mail-connection-fields,.smtp-form,.mail-preferences-form{display:flex;flex-direction:column;gap:12px;min-width:0;padding:12px 10px;border-top:1px solid var(--line)}
+.mail-preferences-group{margin-bottom:12px}
+.mail-general-fields{padding-bottom:12px;border-bottom:1px solid var(--line)}
+.mail-retrieval-field{padding-top:12px;border-top:1px solid var(--line)}
 .mail-account-unsaved{margin:0;color:var(--accent-dark);font-size:11px;line-height:1.4}
-.mail-account-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px;padding-top:2px}
+.mail-account-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:7px;margin-top:2px;padding-top:10px;border-top:1px solid var(--line)}
 .mail-account-actions button{border-radius:7px;padding:8px 10px;font-size:11px;font-weight:700;line-height:1.35}
 .mail-account-check{border:1px solid #bbc7d8;background:#fff;color:#354866}
 .mail-account-save{border:1px solid var(--accent-dark);background:var(--accent-dark);color:#fff}

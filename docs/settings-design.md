@@ -18,6 +18,10 @@ This is a continuing product contract. **Current implementation** notes describe
 
 Mail's current account forms live in [MailAccounts](../modules/ovd-mail/frontend/MailAccounts.tsx). MCP server forms live in [McpSettings](../modules/ovd-mcp/frontend/McpSettings.tsx). These domain forms remain with their modules rather than expanding a monolithic core settings page.
 
+Each Mail account contains a coherent **Konto & Posteingang · IMAP** group, an independent **Absender, Signatur & Abruf** group, and **Postausgang · SMTP**. Each group's save/test actions are inside its bordered content. The local account name is distinct from the outgoing sender name. Sender/signature/polling preferences save independently without a connection test; pending IMAP/SMTP edits remain intact. The Assistant can prepare public preference changes through `accounts.preferences` and inspect one account through `accounts.preferences_get`; the user reviews and saves the form.
+
+Module-contributed category icons can show a small attention dot, shared with the Dock. A new hint breathes briefly, then remains static; reduced motion disables breathing. Visiting a concrete module category acknowledges its currently captured hints, while later arrivals remain. See the [module attention contract](../CONTRIBUTING.md#module-attention-indicators).
+
 ## Search and extensibility
 
 - Search across categories, including closed groups. Use labels, descriptions, IDs and common synonyms.
@@ -58,3 +62,7 @@ The saved “Without confirmations” mode (`Ohne Abfragen` in the current UI) g
 ## Adding or changing settings
 
 Follow the [module contribution contract](../CONTRIBUTING.md#building-modules) and [brand guide](brand.md). Add metadata and the matching control together, use the existing category/group structure, keep technical detail proportional, and preserve pending edits. Verify narrow-window and keyboard use, a save failure, and the corresponding assistant workflow with synthetic data. Broader filters, external deep links or import/export remain future work until their actual behavior is implemented and checked.
+
+## Module sources and installation
+
+The Modules category groups installed modules, sidebar ordering and [repository sources/catalogs](module-repositories.md). Source editors are expandable, preserve independent unsaved changes across category/search navigation and keep save/remove actions inside their own form. Access tokens use password fields and are never repopulated. Catalogs show per-source loading/errors and distinguish available, installed, update, conflict and incompatible states. Installation and code approval remain separate visible steps. The assistant can prepare source settings and use the same catalog/install service, without receiving credentials or bypassing fingerprint approval.

@@ -1,0 +1,64 @@
+.module-repositories{margin-bottom:12px;font-size:12px;min-width:0}
+.module-repositories [hidden]{display:none}
+.repository-sources,.repository-catalog{padding:10px 12px 12px;border-top:1px solid var(--line);min-width:0}
+.repository-editor{border:1px solid var(--line);border-radius:7px;background:#fff;min-width:0}
+.repository-editor+.repository-editor{margin-top:7px}
+.repository-editor>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;list-style:none;cursor:pointer;min-width:0}
+.repository-editor>summary::-webkit-details-marker{display:none}
+.repository-editor>summary:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.repository-editor>summary>span:first-child{min-width:0}
+.repository-editor>summary strong{display:flex;align-items:center;gap:5px;font-size:12px}
+.repository-editor>summary small{display:block;font-size:10px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+.repository-editor-state{display:flex;align-items:center;gap:6px;flex:none;font-size:10px;color:var(--muted)}
+.repository-editor-state svg{transition:transform .15s}
+.repository-editor[open]>summary .repository-editor-state svg{transform:rotate(180deg)}
+.repository-editor form{padding:10px;border-top:1px solid var(--line)}
+.repository-editor fieldset{border:0;padding:0;margin:0;min-width:0;display:grid;gap:11px}
+.repository-field{display:grid;gap:5px;min-width:0}
+.repository-field label{font-size:11px;font-weight:700}
+.repository-field label span{font-weight:400;color:var(--muted);margin-left:5px}
+.module-repositories input:not([type=checkbox]),.module-repositories select{width:100%;min-width:0;border:1px solid #bccbdd;border-radius:6px;background:#fff;color:var(--ink);font:inherit;padding:8px 9px}
+.module-repositories input:focus-visible,.module-repositories select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.repository-field p,.repository-catalog-note{margin:0;font-size:10px;line-height:1.5;color:var(--muted)}
+.repository-field p code{font-size:10px;color:var(--ink)}
+.repository-checkbox{display:flex;gap:6px;align-items:center;font-size:11px}
+.repository-checkbox input{accent-color:var(--accent)}
+.module-repositories button{display:inline-flex;align-items:center;justify-content:center;gap:5px;border:1px solid #c5d0df;border-radius:6px;background:#fff;color:var(--ink);padding:7px 9px;font-size:11px;font-weight:700;cursor:pointer;min-height:30px}
+.module-repositories button:hover:not(:disabled){background:var(--canvas)}
+.module-repositories button:disabled{opacity:.5;cursor:default}
+.module-repositories button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.module-repositories .repository-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.module-repositories .repository-primary:hover:not(:disabled){background:var(--accent-dark)}
+.repository-form-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:2px}
+.repository-form-actions>span{flex:1}
+.module-repositories .repository-remove{color:#9d3545;border-color:#dfb9c1;font-weight:600}
+.repository-remove-confirm{padding:9px;margin-top:9px;border:1px solid #dfb9c1;border-radius:6px;background:#fff7f8}
+.repository-remove-confirm p{font-size:11px;line-height:1.5;margin:0 0 7px}
+.repository-remove-confirm>div{display:flex;gap:6px;flex-wrap:wrap}
+.repository-feedback{margin:8px 0;padding:8px 10px;background:#f1f0fd;color:var(--ink);font-size:11px;line-height:1.5;border-radius:6px;overflow-wrap:anywhere}
+.repository-feedback.error{background:#fff1f3;color:#a13748}
+.repository-catalog-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.repository-catalog-toolbar input{flex:1;min-width:125px!important}
+.repository-catalog-toolbar select{flex:1;max-width:180px;min-width:120px!important}
+.repository-catalog-toolbar button{flex:none}
+.repository-source-statuses{margin-top:9px;display:grid;gap:5px}
+.repository-source-statuses>div{display:flex;gap:8px;align-items:center;justify-content:space-between;font-size:10px;color:var(--muted);line-height:1.45}
+.repository-source-statuses>div>span{overflow-wrap:anywhere;min-width:0}
+.repository-source-statuses strong{font-weight:600;color:var(--ink)}
+.repository-source-statuses small{display:block;font-size:9px;color:var(--muted)}
+.repository-source-statuses>div.error{color:#a13748}
+.repository-source-statuses button{padding:4px;min-width:26px;min-height:26px;flex:none}
+.repository-empty{margin:14px 0 3px;font-size:11px;color:var(--muted);line-height:1.5}
+.repository-module-list{display:grid;margin-top:9px}
+.repository-module{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--line);min-width:0}
+.repository-module>div{flex:1;min-width:0}
+.repository-module strong{display:block;font-size:12px;overflow-wrap:anywhere}
+.repository-module small{display:block;font-size:10px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}
+.repository-module p{font-size:11px;line-height:1.5;color:var(--muted);margin:5px 0;overflow-wrap:anywhere}
+.repository-module-state{display:block;font-size:10px;color:var(--muted);margin-top:5px}
+.repository-module-state.update{color:var(--accent-dark);font-weight:700}
+.repository-module-state.conflict,.repository-module-state.incompatible{color:#a13748}
+.repository-module>button{flex:none}
+.repository-catalog-note{margin-top:10px}
+@media(max-width:650px){.repository-sources,.repository-catalog{padding:9px}.repository-editor>summary{align-items:flex-start;gap:7px}.repository-editor-state{max-width:100px;text-align:right;font-size:9px}.repository-form-actions>span{display:none}.repository-form-actions{justify-content:flex-end}.repository-form-actions .repository-remove{margin-right:auto}.repository-catalog-toolbar input{flex-basis:100%}.repository-catalog-toolbar select{max-width:none}.repository-module{align-items:flex-start;flex-wrap:wrap}.repository-module>div{flex-basis:100%}.repository-module>button{margin-left:auto}}
+@media(prefers-reduced-motion:reduce){.repository-editor-state svg{transition:none}}

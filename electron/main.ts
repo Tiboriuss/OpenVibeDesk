@@ -15,6 +15,10 @@ import { getNavigationEntries, mergeNavigationOrder, migrateNavigationOrder, ord
 import { moduleReferenceInputSchema, moduleReferenceSchema, moduleReferenceSummarySchema, type ModuleReference, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
 import { readChatHistory } from './chat-history';
 import { ModuleHost } from './module-host';
+import { ModuleRepositoryService, normalizeRepositoryUrl } from './module-repositories';
+import { moduleRepositoryInputSchema, repositoryInstallInputSchema } from '../shared/module-repositories';
+import { z } from 'zod';
+import { attentionAcknowledgementSchema } from '../shared/module-attention';
 import { streamCompletion } from './stream';
 import type { ChatMessage, EmailReference, EmailReferenceSummary, FileListing, Mail, SelectedFile, WindowKind, WorkspaceState, AgentRunLimit } from '../shared/model';
 import type { MailModule } from '../modules/ovd-mail/backend';
@@ -36,6 +40,8 @@ const confirmedDraftCloses = new WeakSet<BrowserWindow>();
 const panelModules: Partial<Record<WindowKind, string>> = { mail: 'ovd-mail', draft: 'ovd-mail', files: 'ovd-files' };
 const moduleWindows = new Map<string, { moduleId: string; viewId: string; window: BrowserWindow }>();
 let moduleHost: ModuleHost | undefined;
+let moduleRepositories: ModuleRepositoryService | undefined;
+let repositorySettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
 let saveTimer: NodeJS.Timeout | undefined;
 let settingsWrites: Promise<unknown> = Promise.resolve();
 let quitting = false;
@@ -162,10 +168,10 @@ function setupWindow(win: BrowserWindow): void {
 function panelTitle(kind: WindowKind): string { return { mail: 'Mail', chat: 'Assistant', draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen', sessions: 'Chats' }[kind]; }
 
 function confirmSettingsClose(force = false): boolean {
-  if (!force && aiSettingsStatus === 'clean' && agentSettingsStatus === 'clean' && mcpSettingsStatus === 'clean' && (mailModule?.getSettingsStatus() ?? 'clean') === 'clean') return true;
+  if (!force && !moduleRepositories?.list().busy && repositorySettingsStatus === 'clean' && aiSettingsStatus === 'clean' && agentSettingsStatus === 'clean' && mcpSettingsStatus === 'clean' && (mailModule?.getSettingsStatus() ?? 'clean') === 'clean') return true;
   const owner = panels.get('settings');
   if (!owner || owner.isDestroyed()) return true;
-  if (aiSettingsStatus === 'busy' || agentSettingsStatus === 'busy' || mcpSettingsStatus === 'busy' || mailModule?.getSettingsStatus() === 'busy') {
+  if (moduleRepositories?.list().busy || repositorySettingsStatus === 'busy' || aiSettingsStatus === 'busy' || agentSettingsStatus === 'busy' || mcpSettingsStatus === 'busy' || mailModule?.getSettingsStatus() === 'busy') {
     dialog.showMessageBoxSync(owner, { type: 'info', title: 'Vorgang läuft', message: 'Bitte warte, bis der aktuelle Vorgang abgeschlossen ist.', buttons: ['OK'] });
     return false;
   }
@@ -228,7 +234,7 @@ async function openPanel(kind: WindowKind): Promise<void> {
   }
   win.on('move', rememberBounds);
   win.on('resize', rememberBounds);
-  win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
+  win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
   await win.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: kind } });
 }
 
@@ -363,9 +369,9 @@ async function referenceWorkspaceChat(id: string) {
   panels.get('chat')?.webContents.send('chat:reference-session', id);
   return { sessionId: id, selectedAsContext: true };
 }
-async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent', values: Record<string, unknown>, accountId?: string) {
+async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent' | 'module-repository', values: Record<string, unknown>, accountId?: string) {
   await dispatchAction({ type: 'open_window', kind: 'settings' });
-  panels.get('settings')?.webContents.send('settings:prepare', { category: kind === 'ai' ? 'ai' : kind === 'agent' ? 'agent' : 'mail', kind, values, ...(accountId ? { accountId } : {}) });
+  panels.get('settings')?.webContents.send('settings:prepare', { category: kind === 'module-repository' ? 'modules' : kind === 'ai' ? 'ai' : kind === 'agent' ? 'agent' : 'mail', kind, values, ...(accountId ? { accountId } : {}) });
   return { status: 'requires_user_input', opened: 'settings', note: 'Die Angaben sind im Formular vorbereitet. Der Nutzer prüft sie, ergänzt gegebenenfalls Zugangsdaten und speichert.' };
 }
 async function confirmCapability(context: OperationContext, message: string, detail: string, options: { alwaysAsk?: boolean } = {}): Promise<boolean> {
@@ -437,6 +443,58 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('settings.open', async (args) => { await openSettingsCategory(args.category, args.search); return { opened: true, ...args }; });
   workspaceCapabilities.register('modules.list', () => moduleHost?.statuses() ?? []);
   workspaceCapabilities.register('modules.set_enabled', ({ moduleId, enabled }, context) => moduleHost!.setEnabled(moduleId, enabled, context).then(() => ({ moduleId, status: moduleHost!.registry.getModule(moduleId)?.status })));
+  workspaceCapabilities.register('modules.repositories_list', ({ offset = 0, limit = 20 }) => {
+    const state = moduleRepositories!.list();
+    if (state.error) throw new Error(state.error);
+    const sources = state.sources, hasMore = offset + limit < sources.length;
+    return { sources: sources.slice(offset, offset + limit), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+  });
+  workspaceCapabilities.register('modules.repository_prepare', ({ sourceId, title, url }) => {
+    const state = moduleRepositories!.list();
+    if (state.error) throw new Error(state.error);
+    const source = sourceId ? state.sources.find(item => item.id === sourceId) : undefined;
+    if (sourceId && !source) throw new Error('Diese Modulquelle ist nicht mehr vorhanden.');
+    if (!source && !url) throw new Error('Für eine neue Modulquelle ist eine Repository- oder Katalog-URL erforderlich.');
+    const values = { ...(source ? { sourceId: source.id, title: source.title, url: source.url } : {}), ...(title !== undefined ? { title } : {}), ...(url ? { url: normalizeRepositoryUrl(url).url } : {}) };
+    return prepareSettings('module-repository', values);
+  });
+  workspaceCapabilities.register('modules.repository_remove', async ({ sourceId }, context) => {
+    const source = moduleRepositories!.list().sources.find(item => item.id === sourceId);
+    if (!source) throw new Error('Diese Modulquelle ist nicht mehr vorhanden.');
+    if (!await confirmCapability(context, 'Modulquelle entfernen?', `${source.title}\n${source.url}\nInstallierte Module und deren Daten bleiben erhalten.`)) return { status: 'cancelled' };
+    await moduleRepositories!.remove(sourceId);
+    return { removed: true, sourceId };
+  });
+  workspaceCapabilities.register('modules.repositories_refresh', async ({ sourceId }, context) => {
+    const state = await moduleRepositories!.refresh(sourceId, context.signal);
+    const sources = state.sources.filter(item => !sourceId || item.id === sourceId);
+    const failed = sources.filter(item => item.status === 'error').length;
+    return { sources, failed, complete: failed === 0, ...(failed === sources.length && failed > 0 ? { status: 'failed', error: 'Keiner der angefragten Modulkataloge konnte aktualisiert werden. Details stehen bei den Quellen.' } : failed ? { warning: 'Einige Quellen konnten nicht aktualisiert werden; frühere Einträge können veraltet sein.' } : {}), note: 'Katalogeinträge mit modules.repository_catalog seitenweise lesen.' };
+  });
+  workspaceCapabilities.register('modules.repository_catalog', ({ sourceId, query = '', offset = 0, limit = 10 }) => {
+    const terms = query.toLocaleLowerCase('de-DE').split(/\s+/).filter(Boolean);
+    const state = moduleRepositories!.list();
+    if (state.error) throw new Error(state.error);
+    if (sourceId && !state.sources.some(item => item.id === sourceId)) throw new Error('Diese Modulquelle ist nicht mehr vorhanden.');
+    const sources = state.sources.filter(item => !sourceId || item.id === sourceId);
+    const complete = sources.every(item => item.status === 'ready');
+    const modules = state.modules.filter(item => (!sourceId || item.sourceId === sourceId) && terms.every(term => `${item.id} ${item.title} ${item.description}`.toLocaleLowerCase('de-DE').includes(term)));
+    const hasMore = offset + limit < modules.length;
+    const page = modules.slice(offset, offset + limit);
+    return { untrusted: true, complete, modules: page, sources: sources.filter(item => !page.length || page.some(module => module.sourceId === item.id)).slice(0, 20).map(({ id, title, status, checkedAt, error }) => ({ id, title, status, checkedAt, error })), ...(complete ? {} : { warning: 'Mindestens eine Quelle ist nicht aktuell geladen. Frühere Einträge können veraltet sein. Quellenstatus mit modules.repositories_list lesen und Kataloge aktualisieren.' }), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+  });
+  workspaceCapabilities.register('modules.repository_install', async (input, context) => {
+    const state = moduleRepositories!.list(), item = state.modules.find(item => item.sourceId === input.sourceId && item.id === input.moduleId && item.version === input.version);
+    if (!item || !['available', 'update'].includes(item.status)) throw new Error(item?.reason ?? 'Bitte zuerst den aktuellen Modulkatalog laden und eine installierbare Version auswählen.');
+    const source = state.sources.find(source => source.id === input.sourceId)!;
+    if (!await confirmCapability(context, item.status === 'update' ? 'Modul aktualisieren?' : 'Modul installieren?', `${item.title} · ${item.version}\nQuelle: ${source.url}\nDie Ausführung benötigt danach eine separate Freigabe.`)) return { status: 'cancelled' };
+    return moduleRepositories!.install(input, context.signal);
+  });
+  workspaceCapabilities.register('modules.attention', ({ moduleId, offset = 0, limit = 20 }) => {
+    const notices = moduleHost!.listAttention(moduleId), hasMore = offset + limit < notices.length;
+    return { untrusted: true, notices: notices.slice(offset, offset + limit), total: notices.length, hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+  });
+  workspaceCapabilities.register('modules.acknowledge_attention', ({ moduleId, ids }) => moduleHost!.acknowledgeAttention(moduleId, ids));
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
   workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
   workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config.baseUrl).then(key => listModels(config, key)); });
@@ -519,13 +577,15 @@ function requireMailModule(): MailModule {
   return mailModule;
 }
 async function initializeMailModule(): Promise<void> {
-  if (mailModule) return;
+  if (mailModule) { mailModule.startPolling(); return; }
   const { createMailModule } = await import('../modules/ovd-mail/backend');
-  const module = createMailModule({ getState: () => currentState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles });
+  const module = createMailModule({ getState: () => currentState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles,
+    publishAttention: notice => moduleHost?.publishAttention('ovd-mail', notice), clearAttention: key => moduleHost?.clearAttention('ovd-mail', key) });
   await module.initialize();
   module.registerCapabilities(workspaceCapabilities);
   module.registerIpc();
   mailModule = module;
+  module.startPolling();
 }
 function requireFilesModule(): FilesModule {
   if (!filesModule || !moduleHost?.isReady('ovd-files')) throw new Error('Das Dateienmodul ist nicht verfügbar. Bitte unter Einstellungen → Module aktivieren.');
@@ -582,6 +642,10 @@ function modulesChanged(): void {
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:changed');
   if (dock && !dock.isDestroyed()) { const [width] = dock.getSize(); dock.setSize(width, dockHeight()); }
 }
+function moduleAttentionChanged(): void {
+  const notices = moduleHost?.listAttention() ?? [];
+  for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:attention-changed', notices);
+}
 async function openSettingsCategory(category?: string, search?: string): Promise<void> {
   if (category && !['ai', 'agent', 'display', 'dock', 'modules', ...(moduleHost?.settingsCategories() ?? [])].includes(category)) throw new Error('Diese Einstellungskategorie ist nicht verfügbar.');
   await openPanel('settings');
@@ -613,6 +677,7 @@ function verifyModuleFrame(event: Electron.IpcMainInvokeEvent, moduleId: unknown
 async function initializeModules(): Promise<void> {
   const userData = app.getPath('userData');
   moduleHost = new ModuleHost({ builtInRoot: path.join(app.getAppPath(), 'modules'), userRoot: path.join(userData, 'modules'), dataRoot: path.join(userData, 'module-data'), configFile: path.join(userData, 'module-settings.json'), capabilities: workspaceCapabilities,
+    packageCommitted: (id, fingerprint) => moduleRepositories?.isPackageCommitted(id, fingerprint) ?? false,
     activateBuiltin: async id => { if (id === 'ovd-mail') await initializeMailModule(); if (id === 'ovd-files') await initializeFilesModule(); if (id === 'ovd-mcp') await initializeMcpModule(); },
     beforeDisable: async id => {
       if (id === 'ovd-mail') await mailModule?.flushDrafts();
@@ -621,14 +686,19 @@ async function initializeModules(): Promise<void> {
       if (id === 'ovd-mcp' && mcpSettingsStatus !== 'clean') throw new Error('Bitte die MCP-Einstellungen zuerst speichern oder zurücksetzen.');
     },
     afterDisable: async id => {
+      if (id === 'ovd-mail') mailModule?.stopPolling();
       if (id === 'ovd-files') filesModule?.deactivate();
       if (id === 'ovd-mcp') { await mcpModule?.deactivate(); mcpSettingsStatus = 'clean'; }
       for (const [kind, moduleId] of Object.entries(panelModules)) if (moduleId === id) panels.get(kind as WindowKind)?.close();
       for (const item of [...moduleWindows.values()]) if (item.moduleId === id) item.window.close();
       panels.get('settings')?.webContents.send('settings:navigate', { category: 'modules' });
-    }, changed: modulesChanged, openView: openNativeModuleView,
+    }, changed: modulesChanged, attentionChanged: moduleAttentionChanged, openView: openNativeModuleView,
     controlView: (moduleId, viewId, action) => { const win = moduleWindows.get(`${moduleId}:${viewId}`)?.window; if (!win || win.isDestroyed()) throw new Error('Dieses Modulfenster ist nicht geöffnet.'); return controlNativeWindow(win, action); },
     openSettings: category => openSettingsCategory(category), confirm: confirmCapability });
+  moduleRepositories = new ModuleRepositoryService({ configFile: path.join(userData, 'module-repositories.json'), userRoot: path.join(userData, 'modules'),
+    getInstalled: id => moduleHost!.registry.getRuntimeRecord(id), installPackage: (input, signal) => moduleHost!.installPackage(input, signal),
+    changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
+  await moduleRepositories.initialize();
   await moduleHost.initialize();
   protocol.handle('ovd-module', async request => {
     try {
@@ -638,7 +708,15 @@ async function initializeModules(): Promise<void> {
       return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'" } });
     } catch { return new Response('Diese Modulansicht ist nicht verfügbar. Bitte den Modulstatus prüfen.', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Security-Policy': "default-src 'none'" } }); }
   });
+  ipcMain.handle('modules:repositories:list', event => { verifyPanel(event, ['settings']); return moduleRepositories!.list(); });
+  ipcMain.handle('modules:repositories:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.save(moduleRepositoryInputSchema.parse(input)); });
+  ipcMain.handle('modules:repositories:remove', (event, id: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.remove(z.string().uuid().parse(id)); });
+  ipcMain.handle('modules:repositories:refresh', (event, id: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.refresh(z.string().uuid().optional().parse(id)); });
+  ipcMain.handle('modules:repositories:install', (event, input: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.install(repositoryInstallInputSchema.parse(input)); });
+  ipcMain.on('modules:repositories:settings-status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) repositorySettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.handle('modules:list', event => { verifySender(event); return moduleHost!.list(); });
+  ipcMain.handle('modules:attention', event => { verifySender(event); return moduleHost!.listAttention(); });
+  ipcMain.handle('modules:attention:acknowledge', (event, input: unknown) => { verifySender(event); const { moduleId, ids } = attentionAcknowledgementSchema.parse(input); return moduleHost!.acknowledgeAttention(moduleId, ids); });
   ipcMain.handle('modules:set-enabled', (event, id: unknown, enabled: unknown) => { verifyPanel(event, ['settings']); if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('Ungültige Modulaktion.'); return moduleHost!.setEnabled(id, enabled, uiOperationContext(event)); });
   ipcMain.handle('modules:open-view', (event, id: unknown, viewId: unknown) => { verifySender(event); if (typeof id !== 'string' || typeof viewId !== 'string') throw new Error('Ungültige Modulansicht.'); return moduleHost!.openView(id, viewId); });
   ipcMain.handle('modules:read-view', (event, id: unknown, viewId: unknown) => { const moduleId = verifyModuleFrame(event, id); if (typeof viewId !== 'string' || viewId.length > 100) throw new Error('Ungültige Modulansicht.'); return moduleHost!.readView(moduleId, viewId); });
@@ -710,9 +788,11 @@ app.on('before-quit', event => {
   event.preventDefault();
   if (quitting) return;
   if (mailModule?.getSendingCount()) { dialog.showErrorBox('Mailvorgang läuft', 'Bitte warte, bis der laufende Versand oder die Gesendet-Ablage abgeschlossen ist, bevor du OpenVibeDesk beendest.'); return; }
+  if (moduleRepositories?.list().busy) { dialog.showErrorBox('Modulvorgang läuft', 'Bitte warte, bis die aktuelle Installation oder Katalogaktualisierung abgeschlossen ist.'); return; }
   if (!confirmSettingsClose()) return;
-  allowSettingsUnload = aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
+  allowSettingsUnload = repositorySettingsStatus === 'dirty' || aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
   quitting = true;
+  mailModule?.stopPolling();
   if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; currentState = updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m)); }
   if (saveTimer) clearTimeout(saveTimer);
   void (async () => {
@@ -722,6 +802,7 @@ app.on('before-quit', event => {
     } catch (error) {
       console.error('Workspace save failed', error);
       quitting = false; allowSettingsUnload = false;
+      if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
       dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Der aktuelle Zustand konnte vor dem Beenden nicht gespeichert werden. Deine Entwürfe bleiben geöffnet. Bitte die Speicherung erneut versuchen.');
       return;
     }
@@ -738,6 +819,7 @@ app.on('before-quit', event => {
     } catch (error) {
       console.error('Workspace save failed', error);
       quitting = false; allowSettingsUnload = false;
+      if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
       dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Die letzten Änderungen konnten nicht gespeichert werden. Bitte die Speicherung erneut versuchen.');
       return;
     }

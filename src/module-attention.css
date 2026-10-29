@@ -1,0 +1,6 @@
+.module-attention-icon{position:relative;display:inline-grid;place-items:center;flex:none}
+.module-attention-dot{position:absolute;top:-2px;right:-4px;width:7px;height:7px;border-radius:50%;background:var(--ovd-violet,#6850f5);box-shadow:0 0 0 2px var(--paper,#f9f9fe);pointer-events:none}
+.dock-native .module-attention-dot{width:8px;height:8px;background:var(--ovd-inverse-accent,#b8aaff);box-shadow:0 0 0 2px var(--shell,#222844)}
+.module-attention-dot.is-breathing{animation:ovd-attention-breathe 1.6s ease-in-out infinite}
+@keyframes ovd-attention-breathe{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.55;transform:scale(.7)}}
+@media(prefers-reduced-motion:reduce){.module-attention-dot.is-breathing{animation:none}}

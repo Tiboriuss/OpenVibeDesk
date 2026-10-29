@@ -33,6 +33,7 @@ Design guides include intended behavior that is not implemented yet. The [reposi
 | Resource | What it demonstrates |
 | --- | --- |
 | [Module authoring contract](../CONTRIBUTING.md#building-modules) | Manifests, tools, UI contributions, approval, lifecycle, and resource references. |
+| [Module repositories](module-repositories.md) | Public/private sources, installation, updates, catalog publishing and assistant control. |
 | [Notes module example](../examples/notes-module/README.md) | A standalone process module with its own HTML interface and settings. |
 | [MCP module](../modules/ovd-mcp/README.md) | Server setup, tool approvals, credentials, and dynamic discovery. |
 | [MCP server example](../examples/mcp-server/README.md) | A local server for exercising the MCP integration. |

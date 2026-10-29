@@ -185,6 +185,33 @@ export class ModuleRegistry {
   getModuleCapabilityNames(id: string): string[] { const found = this.records.get(id)?.module; if (!found || found.status !== 'ready') throw new Error('Das Modul ist nicht verfügbar oder noch nicht freigegeben.'); return [...(found.manifest?.capabilities ?? [])]; }
   ownerOf(capability: string): ModuleInfo | undefined { const id = this.capabilityOwners.get(capability); return id ? this.getModule(id) : undefined; }
   getRuntimeRecord(id: string): ModuleRuntimeRecord | undefined { const found = this.records.get(id); return found ? { ...found, module: copy(found.module), viewPaths: { ...found.viewPaths }, settingsPaths: { ...found.settingsPaths } } : undefined; }
+  /** Inspect downloaded files without registering or executing them. */
+  async inspectUserModule(directory: string, expectedId: string): Promise<ModuleRuntimeRecord> {
+    const stat = await fs.lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Das Modulpaket muss ein reguläres Verzeichnis sein.');
+    const candidate = new ModuleRegistry();
+    await candidate.readModule(directory, 'user', {});
+    const record = candidate.getRuntimeRecord(expectedId);
+    if (!record || record.module.status !== 'approval_required') throw new Error(candidate.listModules()[0]?.reason ?? 'Die Modul-ID stimmt nicht mit dem Katalog überein.');
+    this.checkUserReplacement(record);
+    return record;
+  }
+  private checkUserReplacement(record: ModuleRuntimeRecord): void {
+    const current = this.records.get(record.module.id);
+    if (record.module.source !== 'user' || record.module.required || record.module.id.startsWith('ovd-') || record.module.manifest?.runtime.type !== 'process' || current?.module.source === 'builtin') throw new Error('Eingebaute Module können nicht durch ein Repository ersetzt werden.');
+    for (const name of record.module.manifest.capabilities) {
+      const owner = this.capabilityOwners.get(name);
+      if (owner && owner !== record.module.id) throw new Error('Eine Modulfunktion gehört bereits zu einem anderen installierten Modul.');
+    }
+  }
+  /** Host-only, synchronous publication after a verified filesystem transaction. */
+  replaceUserRecord(record: ModuleRuntimeRecord): void {
+    this.checkUserReplacement(record);
+    const stored = { ...record, module: copy(record.module), viewPaths: { ...record.viewPaths }, settingsPaths: { ...record.settingsPaths } };
+    for (const [name, owner] of this.capabilityOwners) if (owner === record.module.id) this.capabilityOwners.delete(name);
+    this.records.set(record.module.id, stored);
+    for (const name of record.module.manifest!.capabilities) this.capabilityOwners.set(name, record.module.id);
+  }
   async verifyUnchanged(id: string): Promise<void> {
     const record = this.records.get(id);
     if (!record || await scanFingerprint(record.rootPath) !== record.fingerprint) throw new Error('Das Modul wurde geändert. Bitte OVD neu starten und die neue Version freigeben.');

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ModuleRuntimeRecord } from './modules';
+import { attentionKeySchema, moduleAttentionInputSchema, type ModuleAttentionInput } from '../shared/module-attention';
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const INVOCATION_TIMEOUT_MS = 60_000;
@@ -15,6 +16,8 @@ type Runtime = { fingerprint: string; record: ModuleRuntimeRecord; child?: Utili
 export interface ModuleRuntimeOptions {
   dataRoot: string;
   onFailure?(moduleId: string, reason: string): void;
+  onAttention?(moduleId: string, notice: ModuleAttentionInput): void;
+  onAttentionClear?(moduleId: string, key: string): void;
 }
 
 function abortError(): Error { return new DOMException('Abgebrochen', 'AbortError'); }
@@ -79,6 +82,20 @@ export class ModuleRuntimeManager {
     if (runtime.stopped) return;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { this.fail(runtime, 'Das Modul hat eine ungültige Antwort geliefert.'); return; }
     const message = raw as Record<string, unknown>;
+    if (message.type === 'attention' || message.type === 'attention-clear') {
+      // The child cannot choose another module's ID; old/retired runtimes cannot publish.
+      if (this.runtimes.get(runtime.record.module.id) !== runtime || runtime.record.module.status !== 'ready') return;
+      if (message.type === 'attention') {
+        const notice = moduleAttentionInputSchema.safeParse(message.notice);
+        if (!notice.success || Object.keys(message).some(key => !['type', 'notice'].includes(key))) { this.fail(runtime, 'Das Modul hat einen ungültigen Hinweis geliefert.'); return; }
+        this.options.onAttention?.(runtime.record.module.id, notice.data);
+      } else {
+        const key = attentionKeySchema.safeParse(message.key);
+        if (!key.success || Object.keys(message).some(key => !['type', 'key'].includes(key))) { this.fail(runtime, 'Das Modul hat einen ungültigen Hinweis geliefert.'); return; }
+        this.options.onAttentionClear?.(runtime.record.module.id, key.data);
+      }
+      return;
+    }
     if (message.type === 'ready') {
       const expected = runtime.record.module.manifest!.tools!.map(tool => tool.name).sort();
       if (runtime.started || !Array.isArray(message.tools) || message.tools.length !== expected.length || !message.tools.every((name, index) => name === expected[index])) { this.fail(runtime, 'Die Modulfunktionen stimmen nicht mit dem Manifest überein.'); return; }
@@ -142,6 +159,18 @@ export class ModuleRuntimeManager {
     if (child) { const timer = setTimeout(() => child.kill(), 250); timer.unref(); }
   }
 
+  /** Cancelled calls remain busy until the worker acknowledges completion or exits. */
+  isBusy(moduleId: string): boolean { const runtime = this.runtimes.get(moduleId); return !!runtime && (!runtime.started || runtime.pending.size > 0); }
+  async stopAndWait(moduleId: string): Promise<void> {
+    const runtime = this.runtimes.get(moduleId), child = runtime?.child;
+    if (!runtime || !child) { this.stop(moduleId); return; }
+    await new Promise<void>((resolve, reject) => {
+      const finished = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(() => { child.removeListener('exit', finished); child.kill(); reject(new Error('Der bisherige Modulprozess konnte nicht sicher beendet werden. Bitte OVD neu starten.')); }, 2000);
+      child.once('exit', finished);
+      this.stop(moduleId);
+    });
+  }
   stop(moduleId: string): void { const runtime = this.runtimes.get(moduleId); if (runtime) this.terminate(runtime, new Error('Das Modul wurde beendet.'), false); }
   dispose(): void { this.disposed = true; for (const id of [...this.runtimes.keys()]) this.stop(id); }
 }

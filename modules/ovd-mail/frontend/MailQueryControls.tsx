@@ -31,6 +31,8 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
   const allAccounts = account === '__all__';
   const activeFilters = [text.trim(), from.trim(), to.trim(), subject.trim(), read, period].filter(Boolean).length;
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const partial = !!summary && (!summary.complete || !summary.countExact);
+  const resultLabel = summary ? `${summary.countExact ? '' : 'Mindestens '}${summary.count.toLocaleString('de-DE')} ${summary.count === 1 ? 'Nachricht' : 'Nachrichten'}${partial ? ' · Teilergebnis' : ''}` : '';
 
   function request(): MailQueryRequest {
     const filter: NonNullable<MailQueryRequest['filter']> = {
@@ -61,7 +63,8 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
 
   return <section className="mail-query-controls" aria-label="Mailfilter und Zählung" hidden={hidden}>
     <details className="mail-query-details">
-      <summary><Filter size={14} aria-hidden="true"/><span>Filter & Anzahl</span>{activeFilters > 0 && <small>{activeFilters} Filter</small>}<ChevronDown size={13} aria-hidden="true"/></summary>
+      <summary><Filter size={14} aria-hidden="true"/><span>Filter & Anzahl</span>{activeFilters > 0 && <small>{activeFilters} Filter</small>}{summary && <span className={`mail-query-result-count${partial ? ' is-partial' : ''}`} role="status">{resultLabel}</span>}<ChevronDown size={13} aria-hidden="true"/></summary>
+      {summary && <div className={`mail-query-summary${partial ? ' is-partial' : ''}`} aria-label="Abfrageergebnis"><strong>{resultLabel}</strong><span>{summary.scope}</span><small>Stand: {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(summary.observedAt))}</small>{summary.resolvedRange && <small>Empfangszeit: {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: summary.resolvedRange.timeZone || timeZone }).format(new Date(summary.resolvedRange.start))} bis {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: summary.resolvedRange.timeZone || timeZone }).format(new Date(summary.resolvedRange.end))} (ausschließlich) · {summary.resolvedRange.timeZone || timeZone}</small>}{summary.warnings?.map(warning => <small key={warning}>{warning}</small>)}</div>}
       <form className="mail-query-form" onSubmit={event => { event.preventDefault(); void run(false); }}>
         <div className="mail-query-fields">
           <label htmlFor={`${id}-account`}>Konto<select id={`${id}-account`} value={account} disabled={busy} onChange={event => { setAccount(event.target.value); setSelectedFolder(''); }}><option value="">Aktives Konto{accounts.find(item => item.id === accountId)?.name ? ` · ${accounts.find(item => item.id === accountId)?.name}` : ''}</option><option value="__all__">Alle Konten</option>{accounts.map(item => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}</select></label>
@@ -80,6 +83,5 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
       </form>
     </details>
     {error && <p className="mail-query-error" role="alert">{error}</p>}
-    {summary && <div className={`mail-query-summary${!summary.complete || !summary.countExact ? ' is-partial' : ''}`} role="status"><strong>{summary.countExact ? '' : 'Mindestens '}{summary.count.toLocaleString('de-DE')} {summary.count === 1 ? 'Nachricht' : 'Nachrichten'}{!summary.complete || !summary.countExact ? ' · Teilergebnis' : ''}</strong><span>{summary.scope}</span><small>Stand: {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(summary.observedAt))}</small>{summary.resolvedRange && <small>Empfangszeit: {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: summary.resolvedRange.timeZone || timeZone }).format(new Date(summary.resolvedRange.start))} bis {new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'short', timeZone: summary.resolvedRange.timeZone || timeZone }).format(new Date(summary.resolvedRange.end))} (ausschließlich) · {summary.resolvedRange.timeZone || timeZone}</small>}{summary.warnings?.map(warning => <small key={warning}>{warning}</small>)}</div>}
   </section>;
 }

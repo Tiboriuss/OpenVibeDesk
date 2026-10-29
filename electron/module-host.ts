@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import Ajv, { type ValidateFunction } from 'ajv';
 import { z } from 'zod';
 import { ModuleRegistry } from './modules';
@@ -8,6 +8,7 @@ import { ModuleRuntimeManager } from './module-runtime';
 import { type CapabilityContext, type WorkspaceCapabilityRegistry } from './workspace-capabilities';
 import type { ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { ModuleToolProvider } from '../shared/module-tool-provider';
+import { ATTENTION_PULSE_MS, MAX_ATTENTION, MAX_MODULE_ATTENTION, attentionAcknowledgementSchema, attentionKeySchema, moduleAttentionInputSchema, type ModuleAttention, type ModuleAttentionInput } from '../shared/module-attention';
 
 type HostOptions = {
   builtInRoot: string; userRoot: string; dataRoot: string; configFile: string;
@@ -16,13 +17,24 @@ type HostOptions = {
   beforeDisable(id: string): Promise<void>;
   afterDisable(id: string): void | Promise<void>;
   changed(): void;
+  attentionChanged?(): void;
+  packageCommitted?(moduleId: string, fingerprint: string): boolean | Promise<boolean>;
   openView(moduleId: string, viewId: string): Promise<void>;
   controlView(moduleId: string, viewId: string, action: 'minimize' | 'toggleMaximize' | 'close'): unknown;
   openSettings(category: string): Promise<void>;
   confirm(context: CapabilityContext, message: string, detail: string, options?: { alwaysAsk?: boolean }): Promise<boolean>;
 };
 type Binding = { descriptor: ModuleToolDescriptor; action: string; kind: 'capability' | 'process' | 'view' | 'settings' | 'window'; validate?: ValidateFunction; confirmation?: { title?: string; message: string } };
+export interface ModulePackageInstall {
+  moduleId: string;
+  stagedDirectory: string;
+  /** Omitted only for a new installation. Updates must name the observed installed fingerprint. */
+  expectedFingerprint?: string;
+  /** Persist the source receipt atomically; reject without changing it if persistence fails. */
+  commit(): Promise<void>;
+}
 const configSchema = z.object({ version: z.literal(1), disabled: z.array(z.string().max(128)).max(500), approvals: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)) }).strict();
+const packageJournalSchema = z.object({ version: z.literal(1), moduleId: z.string().regex(/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/).max(80), backup: z.string().regex(/^\.ovd-package-backup-[a-f0-9-]{36}$/).optional(), previousFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const toolQuerySchema = z.object({ moduleId: z.string().min(1).max(128), query: z.string().trim().max(200).optional(), offset: z.number().int().min(0).max(1000).optional(), limit: z.number().int().min(1).max(24).optional() }).strict();
 const moduleQuerySchema = z.object({ query: z.string().trim().max(200).optional(), offset: z.number().int().min(0).max(10000).optional(), limit: z.number().int().min(1).max(20).optional() }).strict();
 const fold = (text: string) => text.normalize('NFKC').toLocaleLowerCase('de-DE');
@@ -42,12 +54,17 @@ export class ModuleHost {
   private readonly pending = new Map<string, number>();
   private readonly toolProviders = new Map<string, ModuleToolProvider<CapabilityContext>>();
   private readonly providerOffers = new Map<string, { fingerprint: string; retired: boolean }>();
+  private readonly attention = new Map<string, ModuleAttention>();
 
   constructor(private readonly options: HostOptions) {
-    this.runtimes = new ModuleRuntimeManager({ dataRoot: options.dataRoot, onFailure: (id, reason) => { this.registry.fail(id, reason); this.bindings.delete(id); options.changed(); } });
+    this.runtimes = new ModuleRuntimeManager({ dataRoot: options.dataRoot,
+      onAttention: (id, notice) => this.publishAttention(id, notice),
+      onAttentionClear: (id, key) => this.clearAttention(id, key),
+      onFailure: (id, reason) => { this.registry.fail(id, reason); this.bindings.delete(id); this.clearModuleAttention(id); options.changed(); } });
   }
   async initialize(): Promise<void> {
     await fs.mkdir(this.options.userRoot, { recursive: true });
+    await this.recoverPackageSwap();
     try { this.config = configSchema.parse(JSON.parse(await fs.readFile(this.options.configFile, 'utf8'))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.configError = true; }
     await this.registry.discover({ builtInRoots: [this.options.builtInRoot], userRoots: [this.options.userRoot], disabledIds: new Set(this.config.disabled), trustedAdapters: new Set(['ovd-assistant-v1', 'ovd-mail-v1', 'ovd-files-v1', 'ovd-mcp-v1']) });
@@ -61,6 +78,41 @@ export class ModuleHost {
     }
   }
   isReady(id: string): boolean { return this.registry.getModule(id)?.status === 'ready'; }
+  /** Built-ins are trusted callers; process IDs are bound by ModuleRuntimeManager. */
+  publishAttention(moduleId: string, raw: ModuleAttentionInput): void {
+    if (!this.isReady(moduleId)) return;
+    const notice = moduleAttentionInputSchema.parse(raw), key = JSON.stringify([moduleId, notice.key]);
+    const previous = this.attention.get(key);
+    if (!previous) {
+      const owned = [...this.attention.entries()].filter(([, item]) => item.moduleId === moduleId);
+      if (owned.length >= MAX_MODULE_ATTENTION) this.attention.delete(owned[0][0]);
+      if (this.attention.size >= MAX_ATTENTION) this.attention.delete(this.attention.keys().next().value!);
+    }
+    const now = Date.now();
+    // Updating an outstanding key does not keep restarting the breathing animation.
+    this.attention.set(key, { ...notice, moduleId, id: randomUUID(), createdAt: previous?.createdAt ?? now, pulseUntil: previous?.pulseUntil ?? now + ATTENTION_PULSE_MS });
+    this.options.attentionChanged?.();
+  }
+  clearAttention(moduleId: string, rawKey: string): void {
+    const key = attentionKeySchema.parse(rawKey);
+    if (this.attention.delete(JSON.stringify([moduleId, key]))) this.options.attentionChanged?.();
+  }
+  private clearModuleAttention(moduleId: string): void {
+    let changed = false;
+    for (const [key, notice] of this.attention) if (notice.moduleId === moduleId) { this.attention.delete(key); changed = true; }
+    if (changed) this.options.attentionChanged?.();
+  }
+  listAttention(moduleId?: string): ModuleAttention[] {
+    return [...this.attention.values()].filter(item => this.isReady(item.moduleId) && (!moduleId || item.moduleId === moduleId)).map(item => ({ ...item }));
+  }
+  acknowledgeAttention(moduleId: string, ids?: string[]): { acknowledged: number } {
+    const parsed = attentionAcknowledgementSchema.parse({ moduleId, ids });
+    const selected = parsed.ids ? new Set(parsed.ids) : undefined;
+    let acknowledged = 0;
+    for (const [key, notice] of this.attention) if (notice.moduleId === moduleId && (!selected || selected.has(notice.id))) { this.attention.delete(key); acknowledged++; }
+    if (acknowledged) this.options.attentionChanged?.();
+    return { acknowledged };
+  }
   list(): ModuleInfo[] { return this.registry.listModules(); }
   summaries(): ModuleSummary[] { return [...this.registry.listSummaries(), ...this.providerModules().map(({ summary }) => summary)]; }
   find(raw: ModuleQuery = {}) {
@@ -240,7 +292,7 @@ export class ModuleHost {
         if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} deaktivieren?`, 'Seine Ansichten werden geschlossen; gespeicherte Daten bleiben erhalten.')) return;
         const next = { ...this.config, disabled: [...new Set([...this.config.disabled, id])] };
         await this.persist(next);
-        this.registry.disable(id); this.runtimes.stop(id); this.activation.delete(id); this.bindings.delete(id);
+        this.registry.disable(id); this.runtimes.stop(id); this.activation.delete(id); this.bindings.delete(id); this.clearModuleAttention(id);
         this.clearProviderOffers(id);
         await this.options.afterDisable(id);
       } else {
@@ -256,7 +308,7 @@ export class ModuleHost {
           const next = { ...this.config, disabled: this.config.disabled.filter(item => item !== id), approvals: { ...this.config.approvals, ...(processModule ? { [id]: record.fingerprint } : {}) } };
           await this.persist(next);
         } catch (error) {
-          this.registry.disable(id); this.runtimes.stop(id); this.activation.delete(id); this.bindings.delete(id);
+          this.registry.disable(id); this.runtimes.stop(id); this.activation.delete(id); this.bindings.delete(id); this.clearModuleAttention(id);
           this.clearProviderOffers(id);
           await this.options.afterDisable(id); this.options.changed();
           throw error;
@@ -264,6 +316,109 @@ export class ModuleHost {
       }
       this.options.changed();
     } finally { this.changing = false; }
+  }
+  /** Install metadata only. New or changed code still needs the ordinary explicit fingerprint approval. */
+  async installPackage(input: ModulePackageInstall, signal?: AbortSignal): Promise<ModuleInfo> {
+    if (this.changing) throw new Error('Es wird bereits ein Modul geändert.');
+    if (this.configError) throw new Error('Die lokale Modulkonfiguration ist nicht lesbar. Bitte module-settings.json prüfen.');
+    if (!/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/.test(input.moduleId) || input.moduleId.length > 80 || input.moduleId.startsWith('ovd-')) throw new Error('Ungültige oder reservierte Modul-ID.');
+    if (input.expectedFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(input.expectedFingerprint)) throw new Error('Ungültiger installierter Modulfingerabdruck.');
+    this.changing = true;
+    const id = input.moduleId, previous = this.registry.getRuntimeRecord(id), previousConfig = this.config;
+    const target = path.join(this.options.userRoot, id), backup = path.join(this.options.userRoot, `.ovd-package-backup-${randomUUID()}`);
+    const journal = path.join(this.options.userRoot, '.ovd-package-transaction.json');
+    let retired = false, backedUp = false, placed = false, configurationChanged = false, journalWritten = false;
+    try {
+      signal?.throwIfAborted();
+      if (previous?.module.source === 'builtin' || previous?.module.manifest?.runtime.type === 'host-adapter') throw new Error('Eingebaute Module können nicht ersetzt werden.');
+      if (previous ? input.expectedFingerprint !== previous.fingerprint : input.expectedFingerprint !== undefined) throw new Error('Der installierte Modulstand hat sich geändert. Bitte die Modulliste aktualisieren.');
+      if (previous && path.resolve(previous.rootPath) !== path.resolve(target)) throw new Error('Dieses Modul wurde manuell in einem anderen Verzeichnis installiert und wird nicht überschrieben.');
+      if ((this.pending.get(id) ?? 0) > 0 || this.runtimes.isBusy(id)) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
+      const root = await fs.realpath(this.options.userRoot), stageStat = await fs.lstat(input.stagedDirectory);
+      if (!stageStat.isDirectory() || stageStat.isSymbolicLink() || !path.basename(input.stagedDirectory).startsWith('.') || path.dirname(await fs.realpath(input.stagedDirectory)) !== root) throw new Error('Das vorbereitete Paket liegt nicht im lokalen Installationsbereich.');
+      let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+      try { targetStat = await fs.lstat(target); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (targetStat && (!previous || !targetStat.isDirectory() || targetStat.isSymbolicLink())) throw new Error('Am Installationsort liegen bereits fremde oder ungültige Dateien.');
+      if (previous && !targetStat) throw new Error('Das installierte Modul fehlt. Bitte OVD neu starten und den Modulstatus prüfen.');
+      if (previous) await this.registry.verifyUnchanged(id);
+      const candidate = await this.registry.inspectUserModule(input.stagedDirectory, id);
+      signal?.throwIfAborted();
+      if (previous) {
+        await this.options.beforeDisable(id);
+        signal?.throwIfAborted();
+        this.registry.fail(id, 'Das Modul wird aktualisiert.'); retired = true;
+        this.activation.delete(id); this.bindings.delete(id); await this.runtimes.stopAndWait(id);
+        await this.options.afterDisable(id);
+      }
+      signal?.throwIfAborted();
+      // A small recovery record ensures a quit between the two renames cannot lose the old installation.
+      await fs.writeFile(journal, JSON.stringify({ version: 1, moduleId: id, ...(previous ? { backup: path.basename(backup), previousFingerprint: previous.fingerprint } : {}), fingerprint: candidate.fingerprint }), { flag: 'wx', mode: 0o600 });
+      journalWritten = true;
+      if (previous) { await fs.rename(target, backup); backedUp = true; }
+      await fs.rename(input.stagedDirectory, target); placed = true;
+      const installed = await this.registry.inspectUserModule(target, id);
+      if (installed.fingerprint !== candidate.fingerprint) throw new Error('Das Paket wurde während der Installation verändert.');
+      if (previous?.module.status === 'disabled') { installed.module.status = 'disabled'; installed.module.reason = 'Das aktualisierte Modul bleibt deaktiviert. Beim Aktivieren ist eine neue Freigabe erforderlich.'; }
+      signal?.throwIfAborted();
+      const approvals = { ...this.config.approvals }; delete approvals[id];
+      const next = { ...this.config, approvals };
+      await this.persist(next); configurationChanged = true;
+      await input.commit();
+      // No cancellable or fallible installation work follows the receipt commit.
+      this.registry.replaceUserRecord(installed);
+      try { this.clearModuleAttention(id); } catch { /* Notifications must not undo a committed package. */ }
+      this.clearProviderOffers(id);
+      await fs.rm(journal, { force: true }).catch(() => {});
+      if (backedUp) await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
+      try { this.options.changed(); } catch { /* The next settings read observes the committed state. */ }
+      return this.registry.getModule(id)!;
+    } catch (error) {
+      let rollbackFailed = false;
+      if (placed) try { await fs.rm(target, { recursive: true, force: true }); } catch { rollbackFailed = true; }
+      if (backedUp && !rollbackFailed) try { await fs.rename(backup, target); } catch { rollbackFailed = true; }
+      if (configurationChanged) try { await this.persist(previousConfig); } catch { rollbackFailed = true; }
+      if (previous && retired && !rollbackFailed) {
+        this.registry.replaceUserRecord(previous);
+        if (previous.module.status === 'ready') this.buildBindings(id);
+      }
+      if (journalWritten && !rollbackFailed) await fs.rm(journal, { force: true }).catch(() => {});
+      if (retired) this.options.changed();
+      if (rollbackFailed) throw new Error('Die Installation wurde abgebrochen; die Wiederherstellung muss beim nächsten OVD-Start abgeschlossen werden. Bitte OVD neu starten.');
+      throw error;
+    } finally { this.changing = false; }
+  }
+  private async recoverPackageSwap(): Promise<void> {
+    const file = path.join(this.options.userRoot, '.ovd-package-transaction.json');
+    let raw: string;
+    try { const stat = await fs.lstat(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2048) return; raw = await fs.readFile(file, 'utf8'); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+    let parsed: ReturnType<typeof packageJournalSchema.safeParse>;
+    try { parsed = packageJournalSchema.safeParse(JSON.parse(raw)); } catch { return; }
+    if (!parsed.success || parsed.data.moduleId.startsWith('ovd-')) return;
+    const { moduleId, backup, fingerprint, previousFingerprint } = parsed.data, target = path.join(this.options.userRoot, moduleId), saved = backup ? path.join(this.options.userRoot, backup) : undefined;
+    let targetFingerprint: string | undefined, targetExists = false;
+    try { await fs.lstat(target); targetExists = true; targetFingerprint = (await new ModuleRegistry().inspectUserModule(target, moduleId)).fingerprint; }
+    catch { /* A missing or invalid target is never treated as a committed installation. */ }
+    const committed = targetFingerprint === fingerprint && await this.options.packageCommitted?.(moduleId, fingerprint) === true;
+    if (committed) {
+      if (saved) await fs.rm(saved, { recursive: true, force: true }).catch(() => {});
+    } else if (saved) {
+      // A journal may precede the first rename, or remain after a successful rollback.
+      if (targetFingerprint !== previousFingerprint || !previousFingerprint) {
+        try {
+          const old = await new ModuleRegistry().inspectUserModule(saved, moduleId);
+          if (previousFingerprint && old.fingerprint !== previousFingerprint) return;
+          // Do not erase files manually changed while OVD was stopped.
+          if (targetExists && targetFingerprint !== fingerprint) return;
+          await fs.rm(target, { recursive: true, force: true });
+          await fs.rename(saved, target);
+        } catch { return; }
+      }
+    } else {
+      if (targetExists && targetFingerprint !== fingerprint) return;
+      await fs.rm(target, { recursive: true, force: true });
+    }
+    await fs.rm(file, { force: true });
   }
   private async persist(config: z.infer<typeof configSchema>) {
     const temp = this.options.configFile + '.tmp';
@@ -276,11 +431,13 @@ export class ModuleHost {
     for (const key of this.providerOffers.keys()) if (key.startsWith(parentModuleId + '.')) this.providerOffers.delete(key);
   }
   async openView(id: string, viewId: string): Promise<void> {
+    if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
     const record = this.requireReady(id);
     if (!record.module.manifest?.contributions.views.some(view => view.id === viewId)) throw new Error('Unbekannte Modulansicht.');
     await this.options.openView(id, viewId);
   }
   async readView(id: string, viewId: string): Promise<string> {
+    if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
     const record = this.requireReady(id), file = record.viewPaths[viewId] ?? record.settingsPaths[viewId];
     if (!file) throw new Error('Unbekannte HTML-Modulansicht.');
     await this.registry.verifyUnchanged(id);
@@ -289,5 +446,5 @@ export class ModuleHost {
     return fs.readFile(file, 'utf8');
   }
   settingsCategories(): string[] { return this.list().filter(module => module.status === 'ready').flatMap(module => (module.manifest?.contributions.settings ?? []).map(item => module.source === 'builtin' ? item.id : `${module.id}:${item.id}`)); }
-  dispose(): void { this.runtimes.dispose(); this.toolProviders.clear(); this.providerOffers.clear(); }
+  dispose(): void { this.runtimes.dispose(); this.attention.clear(); this.toolProviders.clear(); this.providerOffers.clear(); }
 }

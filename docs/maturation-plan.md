@@ -22,6 +22,8 @@ This plan covers the desktop host, Assistant/chat, Mail, Files, MCP, settings, m
 - Keep checks local and practical. Use synthetic profiles or designated test mailboxes, existing focused tests where relevant, and no GitHub Actions. Add a regression test only when it protects a meaningful boundary that is difficult to verify reliably by hand.
 - Keep repository documentation in English and update current-scope claims when each package ships. This planning change does not start implementation, upgrade dependencies or authorize external actions.
 
+A later user-requested extension added [module repository sources](module-repositories.md) on 29 October 2026. This is an implemented host distribution feature; the baseline and unfinished work packages below remain a historical planning snapshot.
+
 ## Verified starting point
 
 These are source observations at the baseline, not a new runtime audit. The [architecture](architecture.md) contains the full current behavior and limits.

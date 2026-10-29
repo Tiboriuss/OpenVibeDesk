@@ -1,5 +1,6 @@
 /** Utility-process entry. Approved modules have normal OS user rights, not sandboxed access. */
 export {};
+import { attentionKeySchema, moduleAttentionInputSchema } from '../shared/module-attention';
 
 const parent = process.parentPort;
 if (!parent) process.exit(1);
@@ -38,7 +39,11 @@ async function initialize(message: Record<string, unknown>): Promise<void> {
     // This import runs in the module process only, after the host's fingerprint approval.
     const backend: unknown = require(message.entryPath);
     if (!backend || typeof backend !== 'object' || !('activate' in backend) || typeof backend.activate !== 'function') throw new Error('Invalid activation export');
-    const activated: unknown = await backend.activate({ moduleId: message.moduleId, dataDirectory: message.dataDirectory });
+    const attention = Object.freeze({
+      publish(notice: unknown) { if (!disposed) send({ type: 'attention', notice: moduleAttentionInputSchema.parse(notice) }); },
+      clear(key: unknown) { if (!disposed) send({ type: 'attention-clear', key: attentionKeySchema.parse(key) }); }
+    });
+    const activated: unknown = await backend.activate({ moduleId: message.moduleId, dataDirectory: message.dataDirectory, attention });
     if (!activated || typeof activated !== 'object' || !('tools' in activated) || !activated.tools || typeof activated.tools !== 'object' || Array.isArray(activated.tools)) throw new Error('Invalid tool registration');
     const tools = activated.tools as Record<string, unknown>, actual = Object.keys(tools).sort();
     if (actual.length !== declared.length || !actual.every((name, index) => name === declared[index] && typeof tools[name] === 'function')) throw new Error('Manifest mismatch');

@@ -22,6 +22,7 @@ type Props = {
   onAccount(id: string): void;
   onFolder(path: string): void;
   onSelect(id: string): void;
+  onVisibleMessages?(ids: string[]): void;
   onRefresh(): void;
   onLoadMore?(): void;
   onSettings(): void;
@@ -77,7 +78,7 @@ function folderDisplay(folder: ImapFolder) {
   return { label: folder.name || folder.path, Icon: Folder, primary: false };
 }
 
-export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, error, hasMore = false, onAccount, onFolder, onSelect, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDisplay, onOpenLink, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
+export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, error, hasMore = false, onAccount, onFolder, onSelect, onVisibleMessages, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDisplay, onOpenLink, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
   const [showDetail, setShowDetail] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [query, setQuery] = useState('');
@@ -85,6 +86,7 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
   const [attachmentsOnly, setAttachmentsOnly] = useState(false);
   const searchAction = useRef(onSearch); searchAction.current = onSearch;
   const clearSearchAction = useRef(onClearSearch); clearSearchAction.current = onClearSearch;
+  const messageList = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState<{ messageId: string; index: number }>();
   const [marking, setMarking] = useState<string>();
   const [actionError, setActionError] = useState('');
@@ -123,10 +125,35 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
     return messages.filter(message => {
       if (unreadOnly && message.read) return false;
       if (attachmentsOnly && !message.attachments.length) return false;
-      const content = `${message.from}\n${message.to}\n${message.subject}\n${message.bodyText}`.toLocaleLowerCase('de-DE');
+      const content = `${message.from}\n${message.to}\n${message.subject}\n${message.preview ?? ''}\n${message.bodyText}`.toLocaleLowerCase('de-DE');
       return words.every(word => content.includes(word));
     });
   }, [messages, query, unreadOnly, attachmentsOnly, searchState]);
+  const listedIds = filteredMessages.map(message => message.id).join('\n');
+  useEffect(() => {
+    const root = messageList.current;
+    if (!root || !listedIds || draftsSelected || !onVisibleMessages) {
+      onVisibleMessages?.([]);
+      return;
+    }
+    const visible = new Set<string>();
+    let reportedIds: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.messageId;
+        if (id) { if (entry.isIntersecting) visible.add(id); else visible.delete(id); }
+      }
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const ids = listedIds.split('\n').filter(id => visible.has(id));
+        const key = ids.join('\n');
+        if (reportedIds !== key) { reportedIds = key; onVisibleMessages(ids); }
+      }, 60);
+    }, { root, rootMargin: '100px 0px' });
+    for (const row of root.querySelectorAll('[data-message-id]')) observer.observe(row);
+    return () => { clearTimeout(timer); observer.disconnect(); };
+  }, [listedIds, draftsSelected, showDetail, onVisibleMessages]);
   function listDate(message: ImapMessage): string | undefined {
     const value = dateBasis === 'received' ? message.receivedAt : message.date;
     return value && !Number.isNaN(new Date(value).getTime()) ? value : undefined;
@@ -188,7 +215,7 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
     {queryControls}
     <div className="imap-mail-body">
       <aside className="imap-sidebar" aria-label="Mailkonto und Ordner">
-        <div className="imap-account"><span className="imap-section-heading">POSTFÄCHER</span>{accounts.length > 1 ? accountChoice : <div className="imap-account-single" title={currentAccount?.email}><span className="imap-account-avatar">{initials(currentAccount?.name || currentAccount?.email || 'Mail')}</span><div><strong>{currentAccount?.name || 'Kein Konto eingerichtet'}</strong><small>{currentAccount?.email || 'Konto hinzufügen'}</small></div></div>}</div>
+        <div className="imap-account">{accounts.length > 1 ? accountChoice : <div className="imap-account-single" title={currentAccount ? `${currentAccount.name} · ${currentAccount.email}` : 'Konto hinzufügen'}><span className="imap-account-avatar" aria-hidden="true">{initials(currentAccount?.name || currentAccount?.email || 'Mail')}</span><strong>{currentAccount?.name || currentAccount?.email || 'Kein Konto'}</strong><span className="imap-account-address">{currentAccount?.email || 'Konto hinzufügen'}</span></div>}</div>
         <nav className="imap-folders" aria-label="Mailordner">
           <span className="imap-section-heading">ORDNER</span>
           {primaryFolders.map(folderButton)}
@@ -202,8 +229,8 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
       <div className="imap-mobile-controls">{accountChoice}{folderChoice}</div>
       {draftsSelected ? <div className="imap-drafts-panel">{draftsView}</div> : <>
         <section className="imap-list-panel" aria-label="Nachrichtenliste">
-          <header className="imap-list-header"><div><h2 title={searchState ? searchState.scope : folderName}>{searchState ? searchState.title || 'Suchergebnisse' : folderName}</h2><p title={searchState?.scope}>{searchState ? `${resultCount} Treffer · ${searchState.scope}` : filtering ? `${filteredMessages.length} Treffer` : `${messages.length} Nachrichten geladen`}</p></div><span className="imap-count">{searchState ? resultCount : filtering ? filteredMessages.length : messages.length}</span></header>
-          {searchState && <div className="imap-search-result-bar"><button type="button" onClick={clearSearch}><ArrowLeft size={13} /> Zurück zum Ordner</button><span title={searchState.query || searchState.description}>{searchState.query ? `„${searchState.query}“` : searchState.description || 'Serverfilter'}</span></div>}
+          <header className="imap-list-header"><div><h2 title={searchState ? searchState.scope : folderName}>{searchState ? searchState.title || 'Suchergebnisse' : folderName}</h2>{(searchState || filtering) && <p title={searchState ? `${messages.length} Nachrichten geladen · ${searchState.scope}${searchState.complete === false || searchState.countExact === false ? ' · Teilergebnis' : ''}` : `${filteredMessages.length} Treffer in ${messages.length} geladenen Nachrichten`}>{searchState ? `${messages.length} geladen${searchState.complete === false || searchState.countExact === false ? ' · Teilergebnis' : ''}` : `${filteredMessages.length} Treffer`}</p>}</div><span className="imap-count" title={searchState ? `${resultCount} Treffer insgesamt` : `${filtering ? filteredMessages.length : messages.length} Nachrichten geladen`}>{searchState ? resultCount : filtering ? filteredMessages.length : messages.length}</span></header>
+          {searchState && <div className="imap-search-result-bar"><button type="button" onClick={clearSearch}><ArrowLeft size={13} /> Zum Ordner</button><span title={searchState.query || searchState.description}>{searchState.query ? `„${searchState.query}“` : searchState.description || 'Serverfilter'}</span><details className="imap-result-details"><summary>Umfang</summary><p>{searchState.scope}</p></details></div>}
           <div className="imap-list-filters" aria-label="Nachrichtenfilter"><div className="imap-list-tabs"><button type="button" aria-pressed={!unreadOnly} onClick={() => setUnreadOnly(false)}>Alle</button><button type="button" aria-pressed={unreadOnly} onClick={() => setUnreadOnly(true)}>Ungelesen</button></div><button type="button" className="imap-attachment-filter" aria-pressed={attachmentsOnly} onClick={() => setAttachmentsOnly(value => !value)} title="Nur Nachrichten mit Anhang" aria-label="Mit Anhang"><Paperclip size={15} /></button></div>
           {filtering && !searchState && <p className="imap-search-scope">In {messages.length} geladenen Nachrichten. {onSearch ? "Enter durchsucht das Postfach auf dem Server." : "Texte werden beim Öffnen geladen."}</p>}
           {searchState && (unreadOnly || attachmentsOnly) && <p className="imap-search-scope">Ansichtsfilter: {filteredMessages.length} von {messages.length} geladenen Treffern. Für eine vollständige Zählung „Filter & Anzahl“ verwenden.</p>}
@@ -211,11 +238,12 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
           {(loading || searchState?.loading) && <p className="imap-list-status" role="status">{searchState?.loading ? "Postfach wird durchsucht …" : "Nachrichten werden geladen …"}</p>}
           {!loading && !error && messages.length === 0 && <p className="imap-list-status">{searchState ? 'Keine passenden Nachrichten gefunden.' : accounts.length ? 'Keine Nachrichten in diesem Ordner.' : 'Richte ein Mailkonto ein, um Nachrichten zu laden.'}</p>}
           {!loading && !error && messages.length > 0 && filtering && filteredMessages.length === 0 && <p className="imap-list-status" role="status">Keine Treffer in den geladenen Nachrichten.</p>}
-          <div className="imap-message-list">
+          <div className="imap-message-list" ref={messageList}>
             {filteredMessages.map((message, index) => {
               const value = listDate(message), label = dateBasis === 'received' ? 'Empfangszeit' : 'Absenderdatum';
-              return <Fragment key={message.id}>{(index === 0 || listDateGroup(filteredMessages[index - 1]) !== listDateGroup(message)) && <div className="imap-date-group" title={label}>{listDateGroup(message)}</div>}<button type="button" className={`imap-message-row${message.id === selectedMessageId ? ' selected' : ''}${!message.read ? ' unread' : ''}`} aria-pressed={message.id === selectedMessageId} draggable onDragStart={event => writeMailDrag(event.dataTransfer, message.id)} title="Zum Referenzieren in den Chat ziehen" onClick={() => chooseMessage(message.id)}>
-                <span className="imap-row-unread">{!message.read && <span className="imap-unread-dot" aria-label="Ungelesen" />}</span><span className="imap-message-content"><span className="imap-message-top"><strong>{senderName(message.from)}</strong><time dateTime={value} title={value ? `${label}: ${formatDate(value, true)}` : `${label} unbekannt`}>{value ? formatDate(value) : 'Unbekannt'}</time></span><span className="imap-message-subject">{message.subject || '(Kein Betreff)'}</span>{message.bodyLoaded && !!message.bodyText && <span className="imap-message-preview">{message.bodyText.replace(/\s+/g, ' ')}</span>}<span className="imap-message-flags">{message.attachments.length > 0 && <><Paperclip size={12} aria-label="Mit Anhang" /><span>{message.attachments.length} {message.attachments.length === 1 ? 'Anhang' : 'Anhänge'}</span></>}</span></span>
+              const preview = (message.preview || (message.bodyLoaded ? message.bodyText : '')).replace(/\s+/g, ' ').trim();
+              return <Fragment key={message.id}>{(index === 0 || listDateGroup(filteredMessages[index - 1]) !== listDateGroup(message)) && <div className="imap-date-group" title={label}>{listDateGroup(message)}</div>}<button type="button" className={`imap-message-row${message.id === selectedMessageId ? ' selected' : ''}${!message.read ? ' unread' : ''}`} data-message-id={message.id} aria-pressed={message.id === selectedMessageId} draggable onDragStart={event => writeMailDrag(event.dataTransfer, message.id)} title="Zum Referenzieren in den Chat ziehen" onClick={() => chooseMessage(message.id)}>
+                <span className="imap-row-unread">{!message.read && <span className="imap-unread-dot" aria-label="Ungelesen" />}</span><span className="imap-message-content"><span className="imap-message-top"><strong>{senderName(message.from)}</strong><time dateTime={value} title={value ? `${label}: ${formatDate(value, true)}` : `${label} unbekannt`}>{value ? formatDate(value) : 'Unbekannt'}</time></span><span className="imap-message-subject-line"><span className="imap-message-subject">{message.subject || '(Kein Betreff)'}</span>{message.attachments.length > 0 && <span className="imap-message-flags" title={`${message.attachments.length} ${message.attachments.length === 1 ? 'Anhang' : 'Anhänge'}`}><Paperclip size={12} aria-label="Mit Anhang"/><span>{message.attachments.length}</span></span>}</span>{preview && <span className="imap-message-preview">{preview}</span>}</span>
               </button></Fragment>;
             })}
             {hasMore && onLoadMore && <button type="button" className="imap-load-more" disabled={loading || loadingMore} onClick={onLoadMore}>{loadingMore ? 'Wird geladen …' : 'Ältere Nachrichten laden'}</button>}

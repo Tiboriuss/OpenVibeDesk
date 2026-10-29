@@ -38,11 +38,13 @@ These screenshots show the current app with **fictional sample data in isolated 
 | Area | Current scope |
 | --- | --- |
 | **Assistant** | Streaming, Markdown, session management, chat branches, mail/chat/file references, time and calculation tools, and configurable agent execution. |
-| **Mail** | IMAP accounts, folders, server search, combined filters and counts, HTML/text reading with controlled image loading, attachments, local drafts, SMTP sending, and separate Sent-copy filing with retry. |
+| **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML/text reading, attachments, local drafts, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
 
 Mail, chat, files, and settings open in separate windows. The dock and its module order are configurable. Settings use compact groups and global search.
+
+Modules can signal new activity with a small dot on their Dock and Settings icons: it briefly breathes, then stays visible until acknowledged. The Mail module uses this for newly observed Inbox activity.
 
 ## Run locally
 
@@ -69,6 +71,8 @@ Configure an OpenAI-compatible endpoint and models in **Settings → AI & connec
 The build targets do not imply verified cross-compilation, signing, or production-ready distribution. See [development and validation](CONTRIBUTING.md#development).
 
 ## Modules and a small AI context
+
+Under **Settings → Modules**, add public or private GitHub repositories or HTTPS catalogs, browse their modules, and install or update selected versions. Access tokens stay in the OS credential store; downloaded code requires explicit local approval. See [module repositories](docs/module-repositories.md) for setup and publishing your own company modules.
 
 The **Assistant is the required module**, `ovd-assistant`. [Mail](modules/ovd-mail/), [Files](modules/ovd-files/), and [MCP](modules/ovd-mcp/README.md) are optional modules with their own domain logic, interfaces, and registration.
 

@@ -6,14 +6,19 @@ export interface MailAccountSummary {
   port: number;
   security: 'tls' | 'starttls';
   username: string;
+  senderName?: string;
+  signature?: string;
+  pollIntervalSeconds?: number;
 }
 
 export type MailAccountInput = Omit<MailAccountSummary, 'id'> & { accountId?: string; password?: string };
+export interface MailPreferencesInput { accountId: string; senderName: string; signature: string; pollIntervalSeconds: number; }
 export interface SmtpConfig { accountId: string; host: string; port: number; security: 'tls' | 'starttls'; username: string; useImapCredentials: boolean; hasPassword: boolean; }
 export type SmtpInput = Omit<SmtpConfig, 'hasPassword'> & { password?: string };
 export interface ImapFolder { path: string; name: string; delimiter: string; specialUse?: string; selectable: boolean; }
 export interface ImapPageCursor { beforeUid: number; uidValidity: string; }
 export interface ImapMessagePage { messages: ImapMessage[]; nextCursor?: ImapPageCursor; }
+export interface MailPreview { emailId: string; preview: string; }
 export interface ImapMessage {
   id: string;
   uid: number;
@@ -24,6 +29,8 @@ export interface ImapMessage {
   date: string;
   receivedAt?: string;
   bodyText: string;
+  /** Bounded plain-text list preview; absent until fetched, empty if unavailable. */
+  preview?: string;
   /** Untrusted markup, only consumed by the isolated Mail renderer. */
   bodyHtml?: string;
   htmlTruncated?: boolean;

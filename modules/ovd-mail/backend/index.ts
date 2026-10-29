@@ -11,14 +11,17 @@ import { OutgoingStore } from './outgoing-store';
 import { fileSentMessage } from './sent-service';
 import { applyUiAction, type UiAction } from '../../../shared/actions';
 import type { Draft, EmailReference, EmailReferenceSummary, Folder, Mail, MailViewContext, WindowKind, WorkspaceState } from '../../../shared/model';
-import type { ImapMessage, MailSendResult, SentCopyState, SentCopyResult } from '../../../shared/mail';
+import type { ImapMessage, MailPreview, MailSendResult, SentCopyState, SentCopyResult } from '../../../shared/mail';
 import type { WorkspaceCapabilityRegistry, CapabilityContext } from '../../../electron/workspace-capabilities';
 import { mailCapabilitySchemas, mailCapabilityDefinitions, type MailCapabilityArgs } from './capabilities';
-import { validateMailAccount, testImapConnection, saveMailPassword, readMailPassword, deleteMailPassword, listImapFolders, fetchImapMessages, searchImapMessages, fetchImapMessageBody, downloadImapAttachment, setImapMessageRead, imapConnectionIdentity, invalidateMailAccountConnections, resumeMailAccountConnections, type MailAccountConfig } from './mail-service';
+import { validateMailAccount, testImapConnection, saveMailPassword, readMailPassword, deleteMailPassword, listImapFolders, fetchImapMessages, searchImapMessages, fetchImapMessageBody, fetchImapMessagePreviews, downloadImapAttachment, setImapMessageRead, imapConnectionIdentity, invalidateMailAccountConnections, resumeMailAccountConnections, type MailAccountConfig } from './mail-service';
 import { initializeMailAccounts, getMailAccounts, addMailAccount, updateMailAccount, removeMailAccount } from './mail-store';
 import { validateSmtpSettings, testSmtpConnection, saveSmtpPassword, readSmtpPassword, deleteSmtpPassword, prepareSmtpMail, sendPreparedSmtpMail, type SmtpSettings } from './smtp-service';
 import { initializeSmtpSettings, getSmtpSettings, listSmtpSettings, writeSmtpSettings } from './smtp-store';
 import { createMailQueryHost } from './mail-query-host';
+import { MailPolling } from './mail-polling';
+import { draftTextWithSignature, mailPreferences, mailPreferencesSchema } from '../../../shared/mail-preferences';
+import { fetchInboxStatus } from './mail-service';
 
 export type MailOperationContext = CapabilityContext & { grantMailIds?(ids: string[]): void; primaryEmailId?: string };
 type OperationContext = MailOperationContext;
@@ -43,6 +46,8 @@ export interface MailModuleHost {
   snapshotEmailReference(id: unknown, sessionId: string, signal: AbortSignal): Promise<EmailReference>;
   emailReferenceSummary(id: unknown): EmailReferenceSummary;
   selectedLocalFiles: ReadonlySet<string>;
+  publishAttention?(notice: { key: string; message: string }): void;
+  clearAttention?(key: string): void;
 }
 
 /** Optional trusted Mail adapter. Nothing is loaded or registered before the host activates it. */
@@ -58,12 +63,24 @@ export function createMailModule(host: MailModuleHost) {
   const filingDrafts = new Map<string, Promise<SentCopyResult>>();
   const outgoing = new OutgoingStore(path.join(app.getPath('userData'), 'module-data', 'ovd-mail', 'outgoing'));
   const liveMail = new Map<string, LiveMail>();
+  let previewQueue: Promise<unknown> = Promise.resolve();
+  let pendingPreviewRequests = 0;
+  let uiPreviewController: AbortController | undefined;
   const recentMailSearches = new Map<string, string[]>();
   let activeMailView: MailViewContext | null = null;
   const knownMailFolders = new Map<string, Set<string>>();
   const accountEpochs = new Map<string, number>();
   const mutatingAccounts = new Set<string>();
   const smtpOperations = new Map<string, number>();
+  const polling = new MailPolling({
+    accounts: () => mailAccountsUnavailable ? [] : getMailAccounts(),
+    check: (account, signal) => fetchInboxStatus(account, signal),
+    changed: account => {
+      host.publishAttention?.({ key: `inbox-${account.id}`, message: `Neue Nachrichten in ${account.name}` });
+      const window = panels.get('mail');
+      if (window && !window.isDestroyed()) window.webContents.send('mail:inbox-changed', { accountId: account.id });
+    }
+  });
   const queryHost = createMailQueryHost({
     accounts: getMailAccounts, activeAccountId: () => activeMailView?.accountId,
     snapshot: accountSnapshot, assertCurrent, folders: loadMailFolders, cache: cacheMailMessages,
@@ -137,10 +154,28 @@ function smtpInput(input: unknown) {
   return { config, password: password as string | undefined };
 }
 function notifyMailAccountsChanged(): void {
+  polling.refresh();
   for (const kind of ['settings', 'mail', 'draft'] as const) {
     const win = panels.get(kind);
     if (win && !win.isDestroyed()) win.webContents.send('mail:accounts:changed');
   }
+}
+function notifyMailPreferencesChanged(): void {
+  polling.refresh();
+  // Preferences changes must not navigate the Mail window away from its selection.
+  for (const kind of ['settings', 'draft'] as const) {
+    const window = panels.get(kind);
+    if (window && !window.isDestroyed()) window.webContents.send('mail:accounts:changed');
+  }
+}
+function renewMetadataEpoch(accountId: string): void {
+  const epoch = (accountEpochs.get(accountId) ?? 0) + 1;
+  accountEpochs.set(accountId, epoch);
+  for (const entry of liveMail.values()) if (entry.accountId === accountId) entry.epoch = epoch;
+}
+function senderAddress(account: MailAccountConfig): string {
+  const name = mailPreferences(account).senderName;
+  return name ? `${JSON.stringify(name)} <${account.email}>` : account.email;
 }
 function cachedMail(id: unknown) {
   if (typeof id !== 'string') throw new Error('Ungültige Nachricht.');
@@ -222,7 +257,7 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
     const saved = getSmtpSettings(account.id);
     if (!saved) throw new Error('Bitte zuerst SMTP für dieses Konto in den E-Mail-Einstellungen einrichten.');
     config = effectiveSmtp(saved);
-    const confirmed = await confirmCapability(context, 'Diese E-Mail jetzt senden?', [`Von: ${account.email}`, `An: ${draft.to || '(keine direkten Empfänger)'}`, `CC: ${draft.cc || '–'}`, `BCC: ${draft.bcc || '–'}`, `Betreff: ${draft.subject || '(Kein Betreff)'}`, `Anhänge: ${draft.attachments.length ? draft.attachments.map(file => file.name).join(', ') : 'keine'}`].join('\n'));
+    const confirmed = await confirmCapability(context, 'Diese E-Mail jetzt senden?', [`Von: ${senderAddress(account)}`, `An: ${draft.to || '(keine direkten Empfänger)'}`, `CC: ${draft.cc || '–'}`, `BCC: ${draft.bcc || '–'}`, `Betreff: ${draft.subject || '(Kein Betreff)'}`, `Anhänge: ${draft.attachments.length ? draft.attachments.map(file => file.name).join(', ') : 'keine'}`].join('\n'));
     context.signal.throwIfAborted();
     const current = getState().drafts.find(item => item.id === draftId);
     if (current) { const existing = existingSendResult(current); if (existing) return existing; }
@@ -251,7 +286,7 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
     }
     let result: Awaited<ReturnType<typeof sendPreparedSmtpMail>>;
     try {
-      const prepared = await prepareSmtpMail({ from: account.email, to: draft.to, cc: draft.cc, bcc: draft.bcc, subject: draft.subject, text: draft.body, attachments: draft.attachments.map(file => ({ path: file.path, name: file.name })), inReplyTo: draft.inReplyTo, references: draft.references });
+      const prepared = await prepareSmtpMail({ from: senderAddress(account), to: draft.to, cc: draft.cc, bcc: draft.bcc, subject: draft.subject, text: draft.body, attachments: draft.attachments.map(file => ({ path: file.path, name: file.name })), inReplyTo: draft.inReplyTo, references: draft.references });
       await outgoing.save(draft.id, prepared, outgoingIdentity(account));
       setStatus({ sentCopy: { status: 'pending', messageId: prepared.messageId } });
       await draftPersistence.save(draft.id);
@@ -380,7 +415,7 @@ function accountInput(input: unknown) {
   const { accountId, password: rawPassword, ...fields } = input as Record<string, unknown>;
   const previous = accountId === undefined ? undefined : mailAccount(accountId);
   const password = rawPassword === '' ? undefined : rawPassword;
-  const parsed = validateMailAccount({ ...fields, id: previous?.id ?? randomUUID(), ...(password === undefined ? {} : { password }) });
+  const parsed = validateMailAccount({ ...(previous ? mailPreferences(previous) : {}), ...fields, id: previous?.id ?? randomUUID(), ...(password === undefined ? {} : { password }) });
   const { password: suppliedPassword, ...account } = parsed;
   if (!suppliedPassword && !previous) throw new Error('Bitte ein Passwort für das neue Mailkonto eingeben.');
   if (!suppliedPassword && previous && imapConnectionIdentity(previous) !== imapConnectionIdentity(account)) throw new Error('Bei geändertem IMAP-Server, Port, Verschlüsselung oder Benutzernamen bitte das Passwort erneut eingeben.');
@@ -400,6 +435,13 @@ async function saveMailAccount(input: unknown, context: OperationContext) {
     mutatingAccounts.add(account.id);
     let paused = false;
     try {
+      if (previous && !password && imapConnectionIdentity(previous) === imapConnectionIdentity(account)) {
+        context.signal.throwIfAborted();
+        await updateMailAccount(account);
+        renewMetadataEpoch(account.id);
+        notifyMailAccountsChanged();
+        return;
+      }
       await testImapConnection(account, password);
       context.signal.throwIfAborted();
       const oldPassword = password ? await readMailPassword(account.id) : null;
@@ -425,6 +467,22 @@ async function saveMailAccount(input: unknown, context: OperationContext) {
     }
   });
 }
+async function saveMailPreferences(input: unknown, context: OperationContext): Promise<void> {
+  const values = mailPreferencesSchema.parse(input);
+  await queueAccountWrite(async () => {
+    context.signal.throwIfAborted();
+    const previous = mailAccount(values.accountId);
+    ensureAccountCanChange(previous.id);
+    mutatingAccounts.add(previous.id);
+    try {
+      const { accountId: _id, ...preferences } = values;
+      const { password: _password, ...next } = validateMailAccount({ ...previous, ...preferences });
+      await updateMailAccount(next);
+      renewMetadataEpoch(previous.id);
+      notifyMailPreferencesChanged();
+    } finally { mutatingAccounts.delete(previous.id); }
+  });
+}
 async function deleteMailAccount(accountId: unknown, context: OperationContext) {
   return queueAccountWrite(async () => {
      ensureSmtpSettingsAvailable();
@@ -445,6 +503,7 @@ async function deleteMailAccount(accountId: unknown, context: OperationContext) 
       if (smtpPassword) await deleteSmtpPassword(account.id);
       if (password) await deleteMailPassword(account.id);
       await removeMailAccount(account.id);
+      host.clearAttention?.(`inbox-${account.id}`);
     } catch {
       let recovered = true;
       if (password) await saveMailPassword(account.id, password).catch(() => { recovered = false; });
@@ -464,7 +523,7 @@ function cacheMailMessages(snapshot: AccountSnapshot, folder: string, messages: 
   const result = messages.map(message => {
     const id = createHash('sha256').update(JSON.stringify([accountId, imapConnectionIdentity(account), folder, message.uidValidity, message.uid])).digest('hex');
     const previous = liveMail.get(id)?.message;
-    const merged: ImapMessage = { ...message, id, accountId, accountName: account.name, folder, display: previous?.display ?? { ...defaultMailDisplay }, ...(previous?.bodyLoaded ? { bodyText: previous.bodyText, bodyHtml: previous.bodyHtml, htmlTruncated: previous.htmlTruncated, inlineImages: previous.inlineImages, bodyLoaded: true, truncated: previous.truncated } : {}) };
+    const merged: ImapMessage = { ...message, id, accountId, accountName: account.name, folder, display: previous?.display ?? { ...defaultMailDisplay }, ...(previous?.preview !== undefined ? { preview: previous.preview } : {}), ...(previous?.bodyLoaded ? { bodyText: previous.bodyText, bodyHtml: previous.bodyHtml, htmlTruncated: previous.htmlTruncated, inlineImages: previous.inlineImages, bodyLoaded: true, truncated: previous.truncated } : {}) };
     liveMail.delete(id); liveMail.set(id, { accountId, folder, message: merged, epoch });
     return merged;
   });
@@ -574,13 +633,55 @@ async function listWorkspaceMail(args: MailCapabilityArgs<'mail.list_messages'>,
   };
 }
 
+function compactPreview(text: string): string {
+  return [...text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, 200).join('');
+}
+function loadMailPreviews(rawIds: unknown, context: OperationContext): Promise<MailPreview[]> {
+  const { emailIds } = mailCapabilitySchemas['mail.previews'].parse({ emailIds: rawIds });
+  // Validate every target before starting any read, including cache hits.
+  const ids = [...new Set(emailIds.map(id => authorizedMailId(id, context)))];
+  ids.forEach(cachedMail);
+  if (pendingPreviewRequests >= 4) return Promise.reject(new Error('Die Mailvorschau wird bereits geladen. Bitte kurz warten.'));
+  pendingPreviewRequests++;
+  const work = previewQueue.then(async () => {
+    context.signal.throwIfAborted();
+    ids.forEach(id => authorizedMailId(id, context));
+    const groups = new Map<string, { snapshot: AccountSnapshot; folder: string; validity: string; ids: string[] }>();
+    for (const id of ids) {
+      const entry = cachedMail(id);
+      if (entry.message.preview !== undefined) continue;
+      if (entry.message.bodyLoaded) { entry.message = { ...entry.message, preview: compactPreview(entry.message.bodyText) }; continue; }
+      const key = JSON.stringify([entry.accountId, entry.folder, entry.message.uidValidity]);
+      const group = groups.get(key) ?? { snapshot: accountSnapshot(entry.accountId), folder: entry.folder, validity: entry.message.uidValidity, ids: [] };
+      group.ids.push(id); groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      context.signal.throwIfAborted(); assertCurrent(group.snapshot);
+      group.ids.forEach(id => authorizedMailId(id, context));
+      const entries = group.ids.map(id => cachedMail(id));
+      const values = await fetchImapMessagePreviews(group.snapshot.account, group.folder, group.validity, entries.map(entry => entry.message.uid), context.signal);
+      context.signal.throwIfAborted(); assertCurrent(group.snapshot);
+      group.ids.forEach(id => authorizedMailId(id, context));
+      const previews = new Map(values.map(value => [value.uid, compactPreview(value.preview)]));
+      for (const entry of entries) {
+        const current = cachedMail(entry.message.id);
+        if (current.accountId !== entry.accountId || current.folder !== group.folder || current.message.uidValidity !== group.validity) throw new Error('Die Mailübersicht wurde geändert. Bitte aktualisieren.');
+        // Merge only the preview so a simultaneous body/read-state change survives.
+        current.message = { ...current.message, preview: current.message.bodyLoaded ? compactPreview(current.message.bodyText) : previews.get(current.message.uid) ?? '' };
+      }
+    }
+    return ids.map(id => ({ emailId: id, preview: cachedMail(id).message.preview ?? '' }));
+  });
+  previewQueue = work.catch(() => {});
+  return work.finally(() => { pendingPreviewRequests--; });
+}
 async function loadMailMessage(messageId: unknown, context: OperationContext) {
 
     const entry = cachedMail(messageId);
     if (entry.message.bodyLoaded) return entry.message;
     const body = await fetchImapMessageBody(mailAccount(entry.accountId), entry.folder, entry.message.uidValidity, entry.message.uid);
     context.signal.throwIfAborted(); assertCachedCurrent(entry);
-    entry.message = { ...entry.message, ...body };
+    entry.message = { ...entry.message, ...body, preview: compactPreview(body.bodyText) };
     panels.get('mail')?.webContents.send('mail:message-changed', entry.message);
     return entry.message;
 }
@@ -702,7 +803,7 @@ async function createWorkspaceDraft(args: MailCapabilityArgs<'drafts.create'>, c
   const originalId = reply && source?.messageId && safeMessageId(source.messageId) ? source.messageId : undefined;
   const references = reply ? [...(source?.references ?? []).filter(safeMessageId), ...(originalId ? [originalId] : [])].slice(-20) : [];
   const quote = reply && source?.bodyText ? `\n\n${source.bodyText.slice(0, 20000).split('\n').map(line => `> ${line}`).join('\n')}` : '';
-  const draft: Draft = { id: randomUUID(), ...(account ? { accountId: account.id } : {}), to, cc: args.cc ?? '', bcc: args.bcc ?? '', subject: args.subject ?? (reply && source ? `Re: ${source.subject.replace(/^Re:\s*/i, '')}`.slice(0, 1000) : ''), body: `${args.body ?? ''}${quote}`.slice(0, 100000), attachments: [], updatedAt: new Date().toISOString(), ...(originalId ? { inReplyTo: originalId } : {}), ...(references.length ? { references } : {}) };
+  const draft: Draft = { id: randomUUID(), ...(account ? { accountId: account.id } : {}), to, cc: args.cc ?? '', bcc: args.bcc ?? '', subject: args.subject ?? (reply && source ? `Re: ${source.subject.replace(/^Re:\s*/i, '')}`.slice(0, 1000) : ''), body: `${draftTextWithSignature(args.body ?? '', account ? mailPreferences(account).signature : '')}${quote}`.slice(0, 100000), attachments: [], updatedAt: new Date().toISOString(), ...(originalId ? { inReplyTo: originalId } : {}), ...(references.length ? { references } : {}) };
   context.signal.throwIfAborted();
   commit({ ...applyUiAction(getState(), { type: 'open_window', kind: 'draft' }).state, drafts: [...getState().drafts, draft], activeDraftId: draft.id });
   let persistenceError: string | undefined;
@@ -722,7 +823,7 @@ async function snapshotLiveReference(id: string, signal: AbortSignal): Promise<E
     assertCachedCurrent(live);
     const current = liveMail.get(id);
     if (!current || current.accountId !== live.accountId || current.folder !== live.folder || current.message.uidValidity !== live.message.uidValidity || current.message.uid !== live.message.uid) throw new Error('Die Mail ist nicht mehr geladen. Bitte erneut in den Chat ziehen.');
-    current.message = { ...current.message, ...body };
+    current.message = { ...current.message, ...body, preview: compactPreview(body.bodyText) };
     panels.get('mail')?.webContents.send('mail:message-changed', current.message);
     return boundedEmailReference(externalMail(current), current.message.truncated);
   }
@@ -784,12 +885,13 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
     const result = await searchWorkspaceMail(args, context as OperationContext);
     return { matches: result.messages.slice(0, 20).map(({ id, from, to, subject, date, accountId, accountName, folder, read, attachments }) => ({ id, from: from.slice(0, 240), to: to.slice(0, 240), subject: subject.slice(0, 240), date, accountId, accountName: accountName?.slice(0, 80), folder: folder?.slice(0, 120), read, attachmentCount: attachments.length, attachments: attachments.slice(0, 3).map(({ name, size }) => ({ name: name.slice(0, 80), size })) })), scope: result.scope, total: result.total, hasMore: result.hasMore || result.messages.length > 20, foldersSearched: result.foldersSearched, foldersRemaining: result.foldersRemaining, warnings: result.warnings, displayedResults: result.messages.length, searchViewRequested: true };
   });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.accounts'], () => { ensureMailAccountsAvailable(); return getMailAccounts(); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.accounts'], () => { ensureMailAccountsAvailable(); return getMailAccounts().map(({ signature, ...account }) => ({ ...account, signatureConfigured: !!signature })); });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.list_folders'], ({ accountId }, context) => { requireMailboxAccess(context); return loadMailFolders(accountId); });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.list_messages'], (args, context) => listWorkspaceMail(args, context as OperationContext));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open_folder'], async ({ accountId, folder, refresh }, context) => { requireMailboxAccess(context); const snapshot = accountSnapshot(accountId); const folders = await loadMailFolders(accountId); if (!folders.some(item => item.path === folder && item.selectable)) throw new Error('Mailordner nicht gefunden.'); await dispatchAction({ type: 'open_window', kind: 'mail' }); assertCurrent(snapshot); panels.get('mail')?.webContents.send('mail:show-real', { accountId, folder, refresh }); return { accountId, folder, openRequested: true }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.filter'], async args => { await dispatchAction({ type: 'open_window', kind: 'mail' }); if (activeMailView) panels.get('mail')?.webContents.send('mail:show-real', { accountId: activeMailView.accountId, folder: activeMailView.folder }); panels.get('mail')?.webContents.send('mail:filter', args); return { viewUpdateRequested: true, ...args }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.read'], async ({ emailId }, rawContext) => { const context = rawContext as OperationContext; const id = authorizedMailId(emailId, context); return { untrusted: true, email: await snapshotEmailReference(id, context.sessionId ?? getState().activeSessionId, context.signal) }; });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.previews'], async ({ emailIds }, context) => ({ untrusted: true, complete: false, previews: await loadMailPreviews(emailIds, context), message: 'Kurze Vorschauen, keine vollständigen Mailtexte. Zum gezielten Lesen mail.read verwenden.' }));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_display'], ({ emailId, display }, context) => setMailDisplay(authorizedMailId(emailId, context as OperationContext), display, context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.display_status'], async ({ emailId }, context) => {
     const id = authorizedMailId(emailId, context as OperationContext); await loadMailMessage(id, context); return mailDisplayResult(id);
@@ -806,6 +908,8 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['files.remove_attachment'], async ({ draftId, index }) => { const id = activeDraftId(draftId); await dispatchAction({ type: 'remove_attachment', draftId: id, index }); return { draftId: id, removed: index }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.test'], async ({ accountId }) => { const snapshot = accountSnapshot(accountId); await testImapConnection(snapshot.account); assertCurrent(snapshot); return { connected: true }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.save'], ({ accountId, ...values }) => { if (accountId) mailAccount(accountId); return prepareSettings('account', values, accountId); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.preferences'], ({ accountId, ...values }) => { mailAccount(accountId); return prepareSettings('account', values, accountId); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.preferences_get'], ({ accountId }) => ({ accountId, ...mailPreferences(mailAccount(accountId)) }));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.remove'], ({ accountId }, context) => deleteMailAccount(accountId, context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.list'], (_args, context) => readSmtpSettings(context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.test'], async ({ accountId }) => { const saved = getSmtpSettings(accountId); if (!saved) throw new Error('SMTP bitte zuerst im Einstellungsformular einrichten.'); await withSmtpOperation(saved, effective => testSmtpConnection(effective)); return { connected: true, sent: false }; });
@@ -845,6 +949,7 @@ function registerIpc(): void {
   ipcMain.handle('mail:accounts:list', event => { verifyPanel(event, ['settings', 'mail', 'draft']); ensureMailAccountsAvailable(); return getMailAccounts(); });
   ipcMain.handle('mail:accounts:test', (event, input: unknown) => { verifyPanel(event, ['settings']); return checkMailAccount(input, uiOperationContext(event)); });
   ipcMain.handle('mail:accounts:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return saveMailAccount(input, uiOperationContext(event)); });
+  ipcMain.handle('mail:preferences:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return saveMailPreferences(input, uiOperationContext(event)); });
   ipcMain.handle('mail:accounts:remove', (event, accountId: unknown) => { verifyPanel(event, ['settings']); return deleteMailAccount(accountId, uiOperationContext(event)); });
   ipcMain.handle('mail:search', (event, request: import('../../../shared/mail').MailSearchRequest) => { verifyPanel(event, ['mail']); return searchWorkspaceMail(request, uiOperationContext(event)); });
   ipcMain.handle('mail:query', async (event, request: unknown) => { verifyPanel(event, ['mail']); const result = await queryHost.query(request, uiOperationContext(event)); if ('cancelled' in result) throw new Error(result.message); return result; });
@@ -865,6 +970,16 @@ function registerIpc(): void {
     verifyPanel(event, ['mail']); if (typeof emailId !== 'string') throw new Error('Ungültige Mailreferenz.'); return openMailLink(emailId, url);
   });
   ipcMain.handle('mail:message:body', (event, messageId: unknown) => { verifyPanel(event, ['mail']); return loadMailMessage(messageId, uiOperationContext(event)); });
+  ipcMain.handle('mail:previews', async (event, ids: unknown) => {
+    verifyPanel(event, ['mail']);
+    mailCapabilitySchemas['mail.previews'].parse({ emailIds: ids });
+    uiPreviewController?.abort();
+    const controller = new AbortController(); uiPreviewController = controller;
+    const context = uiOperationContext(event);
+    try { return await loadMailPreviews(ids, { ...context, signal: AbortSignal.any([context.signal, controller.signal]) }); }
+    finally { if (uiPreviewController === controller) uiPreviewController = undefined; }
+  });
+  ipcMain.handle('mail:previews:cancel', event => { verifyPanel(event, ['mail']); uiPreviewController?.abort(); });
   ipcMain.handle('mail:draft:create', async (event, accountId: unknown, messageId: unknown) => {
     verifyPanel(event, ['mail']);
     const result = await createWorkspaceDraft({ ...(typeof accountId === 'string' ? { accountId } : {}), ...(typeof messageId === 'string' ? { sourceEmailId: messageId, mode: 'reply' as const } : {}) }, uiOperationContext(event));
@@ -893,6 +1008,7 @@ function getContext(context: OperationContext) {
 }
 return {
   initialize, registerCapabilities, registerIpc, validateAction, getContext,
+  startPolling: () => polling.start(), stopPolling: () => polling.stop(),
   createDraft: createWorkspaceDraft, openDraft,
   onStateChanged: (state: WorkspaceState) => draftPersistence.onStateChanged(state),
   saveDraft: (id: string) => draftPersistence.save(activeDraftId(id)),
@@ -904,7 +1020,7 @@ return {
   getRecentSearchIds: (sessionId: string) => recentMailSearches.get(sessionId) ?? [],
   getSettingsStatus: () => mailSettingsStatus,
   getSendingCount: () => sendingDrafts.size + filingDrafts.size,
-  onPanelClosed(kind: WindowKind) { if (kind === 'mail') activeMailView = null; if (kind === 'settings') mailSettingsStatus = 'clean'; },
+  onPanelClosed(kind: WindowKind) { if (kind === 'mail') { activeMailView = null; uiPreviewController?.abort(); } if (kind === 'settings') mailSettingsStatus = 'clean'; },
   agentMails(referenceIds: ReadonlySet<string>): Mail[] {
     const mails = new Map<string, Mail>();
     if (realMailAllowed()) for (const [id, entry] of liveMail) mails.set(id, externalMail(entry));

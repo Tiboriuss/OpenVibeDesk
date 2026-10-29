@@ -4,11 +4,13 @@ import { simpleParser } from 'mailparser';
 import { AsyncEntry } from '@napi-rs/keyring';
 import { z } from 'zod';
 import type { ImapPageCursor } from '../../../shared/mail';
+import { DEFAULT_MAIL_POLL_INTERVAL, mailPreferenceFields } from '../../../shared/mail-preferences';
 
 /** Passwords are held in the system credential store, never in these account records. */
 export type MailAccountConfig = {
   id: string; name: string; email: string; host: string; port: number;
   security: 'tls' | 'starttls'; username: string;
+  senderName?: string; signature?: string; pollIntervalSeconds?: number;
 };
 export type MailAccountInput = MailAccountConfig & { password?: string };
 export type ImapFolder = { path: string; name: string; delimiter: string; specialUse?: string; selectable: boolean };
@@ -33,6 +35,8 @@ const accountSchema = z.object({
   id: z.uuid(), name: textField(120), email: textField(320).refine(value => value.includes('@')),
   host: textField(253).refine(validHost), port: z.number().int().min(1).max(65535),
   security: z.enum(['tls', 'starttls']), username: textField(320),
+  senderName: mailPreferenceFields.senderName.default(''), signature: mailPreferenceFields.signature.default(''),
+  pollIntervalSeconds: mailPreferenceFields.pollIntervalSeconds.default(DEFAULT_MAIL_POLL_INTERVAL),
   password: z.string().min(1).max(4096).optional()
 }).strict();
 const configSchema = accountSchema.omit({ password: true });
@@ -46,6 +50,9 @@ const INLINE_TOTAL_LIMIT = 2 * 1024 * 1024;
 const INLINE_IMAGE_COUNT = 10;
 const ATTACHMENT_LIMIT = 25 * 1024 * 1024;
 const MESSAGE_LIMIT = 25;
+const PREVIEW_MESSAGE_LIMIT = 12;
+const PREVIEW_BYTE_LIMIT = 8 * 1024;
+const PREVIEW_CHAR_LIMIT = 200;
 const OPERATION_TIMEOUT = 45_000;
 const accountGenerations = new Map<string, number>();
 const pausedAccounts = new Set<string>();
@@ -144,6 +151,17 @@ export async function withImap<T>(rawConfig: MailAccountConfig, suppliedPassword
 
 export async function testImapConnection(config: MailAccountConfig, password?: string): Promise<void> {
   await withImap(config, password, async () => {});
+}
+
+export interface InboxStatus { uidValidity: string; uidNext: number; }
+/** Lightweight INBOX observation; STATUS neither selects nor changes message flags. */
+export async function fetchInboxStatus(config: MailAccountConfig, signal?: AbortSignal): Promise<InboxStatus> {
+  return withImap(config, undefined, async client => {
+    const status = await client.status('INBOX', { uidValidity: true, uidNext: true });
+    signal?.throwIfAborted();
+    if (!status || !uidValiditySchema.safeParse(String(status.uidValidity ?? '')).success || !uidSchema.safeParse(status.uidNext).success) throw new MailOperationError('Der Posteingangsstatus ist nicht verfügbar.');
+    return { uidValidity: String(status.uidValidity), uidNext: status.uidNext! };
+  }, signal);
 }
 
 export async function listImapFolders(config: MailAccountConfig): Promise<ImapFolder[]> {
@@ -347,6 +365,66 @@ async function inlineMessageImages(client: ImapFlow, uid: number, parts: Part[],
     } catch { /* An unavailable embedded image must not hide otherwise readable mail text. */ }
   }
   return Object.keys(images).length ? images : undefined;
+}
+
+/** Short list snippets are independent of the full reader and never load images or attachments. */
+export async function fetchImapMessagePreviews(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUids: number[], signal?: AbortSignal): Promise<{ uid: number; preview: string }[]> {
+  const path = pathSchema.safeParse(rawPath), validity = uidValiditySchema.safeParse(rawValidity);
+  const requested = z.array(uidSchema).min(1).max(PREVIEW_MESSAGE_LIMIT).safeParse(rawUids);
+  if (!path.success || !validity.success || !requested.success) throw new MailOperationError('Ungültige Nachrichtenkennungen für die Vorschau.');
+  const uids = [...new Set(requested.data)];
+  return withImap(config, undefined, async client => {
+    signal?.throwIfAborted();
+    const mailbox = await client.mailboxOpen(path.data, { readOnly: true });
+    if (mailbox.uidValidity.toString() !== validity.data) throw new MailOperationError('Der Mailordner wurde geändert. Bitte aktualisieren.');
+    // BODYSTRUCTURE identifies a display part without fetching entire sources or attachment data.
+    const metadata = await client.fetchAll(uids, { uid: true, bodyStructure: true }, { uid: true });
+    signal?.throwIfAborted();
+    const byUid = new Map(metadata.filter(row => uids.includes(row.uid)).map(row => [row.uid, row]));
+    const result: { uid: number; preview: string }[] = [];
+    for (const uid of uids) {
+      signal?.throwIfAborted();
+      let preview = '';
+      const parts = messageParts(byUid.get(uid)?.bodyStructure);
+      const displayPart = (type: string) => parts.find(part => part.type === type && part.disposition !== 'attachment' && !part.name);
+      const part = displayPart('text/plain') ?? displayPart('text/html');
+      if (part) {
+        try {
+          // ImapFlow uses BODY.PEEK and decodes transfer encoding and supported charsets.
+          // Its small chunks and decoded-byte limiter avoid the full body/reader pipeline.
+          const download = await client.download(String(uid), part.part, { uid: true, maxBytes: PREVIEW_BYTE_LIMIT, chunkSize: 1024 });
+          if (download.content) {
+            const chunks: Buffer[] = [];
+            let retained = 0;
+            for await (const chunk of download.content) {
+              signal?.throwIfAborted();
+              const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              const keep = bytes.subarray(0, Math.max(0, PREVIEW_BYTE_LIMIT - retained));
+              if (keep.length) chunks.push(keep);
+              retained += keep.length;
+            }
+            signal?.throwIfAborted();
+            let text = new TextDecoder(download.meta?.charset || 'utf-8').decode(Buffer.concat(chunks));
+            if (part.type === 'text/html') {
+              const parsed = await simpleParser(`Content-Type: text/html; charset=utf-8\r\n\r\n${text}`, { skipImageLinks: true, skipTextToHtml: true });
+              signal?.throwIfAborted();
+              text = parsed.text ?? '';
+            }
+            // A preview is plain untrusted text. Collapse layout/control characters and
+            // avoid splitting a surrogate pair at the list's character boundary.
+            preview = Array.from(text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, PREVIEW_CHAR_LIMIT).join('');
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Missing/unsupported individual MIME parts should not prevent a useful list.
+          // A lost connection is a batch failure, not a successfully fetched empty snippet.
+          if (!client.usable) throw error;
+        }
+      }
+      result.push({ uid, preview });
+    }
+    return result;
+  }, signal);
 }
 
 export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number): Promise<ImapMessageBody> {

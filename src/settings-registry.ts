@@ -25,6 +25,7 @@ export const settingsEntries = [
   { id: 'display.textSize', category: 'display', title: 'Textgröße', description: 'Größerer Text für Mail, Chat und Entwürfe.', keywords: 'darstellung anzeige ansicht aussehen bildschirm schrift schriftgröße text textgröße groß größer klein lesbarkeit', defaultValue: defaultSettings.textSize, apply: 'immediate' },
   { id: 'dock.alwaysOnTop', category: 'dock', title: 'Dock im Vordergrund', description: 'Das Dock über anderen Fenstern anzeigen.', keywords: 'dock fenster vordergrund oben immer sichtbar anzeigen position desktop verhalten', defaultValue: defaultSettings.dockAlwaysOnTop, apply: 'immediate' },
   { id: 'modules.installed', category: 'modules', title: 'Installierte Module', description: 'Module aktivieren, deaktivieren und ihren Zustand prüfen', keywords: 'modul module plugin plugins erweiterung zusatz addon aktiv deaktiv status freigabe', apply: 'immediate' },
+  { id: 'modules.repositories', category: 'modules', title: 'Modulquellen & Katalog', description: 'Öffentliche und private Repositories, Module installieren und aktualisieren', keywords: 'repository repositories repo github quelle quellen katalog catalog modul module herunterladen download installieren installation aktualisieren update updates token privat private firma unternehmen zugang erweiterung plugin', apply: 'save' },
   navigationOrderEntry
 ] as const;
 

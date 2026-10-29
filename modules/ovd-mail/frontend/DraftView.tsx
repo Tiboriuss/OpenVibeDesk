@@ -5,7 +5,7 @@ import type { DraftSaveState } from '../../../shared/drafts';
 import type { ImapFolder, MailSendResult, SentCopyResult } from '../../../shared/mail';
 import './draft-view.css';
 
-export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, onAttach, onRemoveAttachment, onSend, onFileSent, onListSentFolders }: { draft?: Draft; saveState?: DraftSaveState; onSave?(): Promise<void>; accounts?: { id: string; name: string; email: string }[]; onUpdate(patch: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; accountId?: string }): void; onAttach(): void; onRemoveAttachment?(index: number): void; onSend?(): Promise<void | MailSendResult>; onFileSent?(folder?: string): Promise<SentCopyResult>; onListSentFolders?(): Promise<ImapFolder[]> }) {
+export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, onAttach, onRemoveAttachment, onSend, onFileSent, onListSentFolders }: { draft?: Draft; saveState?: DraftSaveState; onSave?(): Promise<void>; accounts?: { id: string; name: string; email: string; senderName?: string }[]; onUpdate(patch: { to?: string; cc?: string; bcc?: string; subject?: string; body?: string; accountId?: string }): void; onAttach(): void; onRemoveAttachment?(index: number): void; onSend?(): Promise<void | MailSendResult>; onFileSent?(folder?: string): Promise<SentCopyResult>; onListSentFolders?(): Promise<ImapFolder[]> }) {
   const [showCopies, setShowCopies] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -78,7 +78,7 @@ export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, o
     </div></div>
     {saveState?.status === 'error' && <p className="draft-save-error" role="alert">{saveState.error || 'Die letzte Änderung konnte nicht lokal gespeichert werden.'} Deine Änderungen sind noch im Fenster verfügbar. Bitte erneut speichern.</p>}
     <div className="draft-fields">
-      <label htmlFor="draft-account">Von<select id="draft-account" disabled={locked} value={draft.accountId ?? ''} onChange={event => onUpdate({ accountId: event.target.value })}><option value="">{accounts.length ? 'Sendekonto auswählen' : 'Kein Mailkonto eingerichtet'}</option>{accounts.map(account => <option value={account.id} key={account.id}>{account.name} · {account.email}</option>)}</select></label>
+      <label htmlFor="draft-account">Von<select id="draft-account" disabled={locked} value={draft.accountId ?? ''} onChange={event => onUpdate({ accountId: event.target.value })}><option value="">{accounts.length ? 'Sendekonto auswählen' : 'Kein Mailkonto eingerichtet'}</option>{accounts.map(account => <option value={account.id} key={account.id}>{account.senderName || account.name} · {account.email}</option>)}</select></label>
       <div className="draft-to-row"><label htmlFor="draft-to">An<input id="draft-to" disabled={locked} value={draft.to} onChange={event => onUpdate({ to: event.target.value })} placeholder="name@beispiel.de" /></label><button type="button" className="draft-copy-toggle" onClick={() => setShowCopies(value => !value)} aria-expanded={showCopies} aria-controls="draft-copy-fields">CC / BCC</button></div>
       <div id="draft-copy-fields" hidden={!showCopies}>
         <label htmlFor="draft-cc">CC<input id="draft-cc" disabled={locked} value={draft.cc ?? ''} onChange={event => onUpdate({ cc: event.target.value })} placeholder="Weitere Empfänger" /></label>
