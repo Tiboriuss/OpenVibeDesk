@@ -60,19 +60,21 @@ Keep **Enable release immutability** disabled in the repository settings for thi
 5. After all builds succeed, the upload job verifies the expected assets and hashes, checks that the release/tag still identify the built source, and attaches the installers, `SHA256SUMS.txt` and `RELEASE.json` to that same release.
 6. Download and practically check the installers on their intended operating systems. Record the result in the release notes; successful packaging alone does not establish complete platform or upgrade support.
 
+This publish-after-creation flow requires GitHub release immutability to be disabled: immutable releases cannot receive new assets after publication. If the repository enables immutable releases later, the workflow must change to upload assets to a draft before publishing it.
+
 The release version comes from its tag. Tags must use `vMAJOR.MINOR.PATCH`, optionally followed by a valid SemVer prerelease suffix. Numeric version components must fit the supported Windows version bounds (at most 65535). Build metadata (`+...`) is rejected. The version helper updates `package.json` only inside the CI checkout; it does not commit a version change to the branch.
 
 Only the upload job has `contents: write`; platform builds use read access. The workflow uses GitHub's built-in token rather than a separate personal token or signing secret. It does not publish an additional release or enable in-app updates.
 
 ### Retry a failed run
 
-Inspect the failed job and correct the cause before retrying. No installers are uploaded unless every platform build succeeds and the final validation passes. On a rerun, already attached assets with matching content are retained. A conflicting asset is not silently replaced; investigate the version/source mismatch and publish a new version when the release contents have changed.
+Inspect the failed job and correct the cause before retrying. For an upload-only failure, rerun the failed jobs so the workflow reuses its existing verified build artifacts rather than rebuilding a published version. No installers are uploaded unless every platform build succeeds and the final validation passes. On a rerun, already attached assets with matching content are retained. A conflicting asset is not silently replaced; investigate the version/source mismatch and publish a new version when the release contents have changed.
 
 Keep published version tags and assets stable. A newer source revision should have a new version rather than replacing an existing release's installer under the same filename.
 
 ### Manual build without publishing
 
-The workflow also supports an explicit **Run workflow** (`workflow_dispatch`) invocation. Select the source ref and optionally provide a plain version such as `0.2.0-beta.1`; leaving it empty uses the checked-in package version. This produces workflow artifacts for validation and does not create a GitHub release or attach release assets.
+The workflow also supports an explicit **Run workflow** (`workflow_dispatch`) invocation. Select the source ref and optionally provide a plain version such as `0.2.0-beta.1`; leaving it empty uses the checked-in package version. This produces workflow artifacts for validation and does not create a GitHub release or attach release assets. Manual runs also perform targeted upgrade checks: Windows installs the EXE and a newer temporary installer in its disposable runner; Mac launches packaged apps with an isolated profile and replaces the first app with a newer temporary bundle. Fixture builds are excluded from release assets.
 
 The manual version uses the same validation rules as a release version, without the leading `v`. Use this path to inspect installers before publishing a release. Local packaging commands remain available in [CONTRIBUTING.md](../CONTRIBUTING.md#development).
 
@@ -80,4 +82,4 @@ The manual version uses the same validation rules as a release version, without 
 
 A release check should install one version with a synthetic profile, create recognisable settings/chat/draft/module data, quit the app, then install a newer version over it. Verify that the visible version changes, the app still opens, the data is retained, and OS credentials remain available. Also check the installer from a fresh account/profile and the relevant architecture.
 
-Use isolated profiles and synthetic credentials; never validate upgrades by modifying a normal mailbox or personal data. Preserve ongoing-send safeguards when quitting. Windows installation and runtime checks require Windows; a cross-built EXE or a successful macOS package is not equivalent evidence. Current practical results should be recorded with each release rather than inferred from the workflow configuration.
+Use isolated profiles and synthetic credentials; never validate upgrades by modifying a normal mailbox or personal data. Preserve ongoing-send safeguards when quitting. The Mac check uses the actual packaged renderer and native keyring binding, creates a chat and unsent draft through the window API, then confirms their restoration after replacing the application bundle. It redirects application data before the app main entry executes and does not read a normal user profile. The native binding load does not prove OS credential-store access or credential migration. Windows installation and runtime checks require Windows; a cross-built EXE or a successful macOS package is not equivalent evidence. Current practical results should be recorded with each release rather than inferred from the workflow configuration.

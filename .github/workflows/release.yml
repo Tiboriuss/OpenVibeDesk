@@ -54,10 +54,12 @@ jobs:
             runner: macos-15
             platform: mac
             arch: arm64
+            app_dir: release/mac-arm64/OpenVibeDesk.app
           - target: mac-x64
             runner: macos-15-intel
             platform: mac
             arch: x64
+            app_dir: release/mac/OpenVibeDesk.app
           - target: win-x64
             runner: windows-2025
             platform: win
@@ -90,6 +92,13 @@ jobs:
         run: pnpm exec electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
       - name: Collect verified installer
         run: node scripts/release-assets.cjs collect ${{ matrix.target }}
+      - name: Verify macOS app replacement and retained profile
+        if: github.event_name == 'workflow_dispatch' && matrix.platform == 'mac'
+        shell: bash
+        run: node scripts/verify-mac-upgrade.cjs --app "$PACKAGED_APP" --version "$RELEASE_VERSION"
+        env:
+          PACKAGED_APP: ${{ matrix.app_dir }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       - name: Verify Windows installer upgrade and retained profile
         if: github.event_name == 'workflow_dispatch' && matrix.target == 'win-x64'
         shell: pwsh
