@@ -2,13 +2,25 @@
 
 ![OpenVibeDesk — a desktop workspace with an integrated assistant](assets/brand/readme-header.svg)
 
-**A desktop workspace you can operate through its interface and its assistant.**
+**An everyday desktop app with an assistant built in.**
 
-OpenVibeDesk brings chat, mail, files, and custom integrations into a local desktop app. The assistant can retrieve information and control the relevant windows: for example, find an email, open it in the mail window, and prepare a draft addressed to its sender. The interface and assistant use the same validated capabilities.
+OpenVibeDesk is an open-source project for people who want to get their daily work done. It brings mail, files, and company tools into a local desktop app with familiar windows, buttons, and menus. You can work directly in the interface, ask the assistant for help, and move between the two as needed.
+
+The assistant works with the same app you see. Ask it to find an email, and it can open that message in the mail window. Ask for a reply, and it can prepare an editable draft. The interface and assistant use the same functions, so the conversation connects to visible work you can inspect and continue yourself.
 
 This is an early, single-user development version. Development and practical use have been exercised on **macOS**. Windows and Linux build targets exist; broader platform, installer, and release validation is still pending. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-[Screenshots](#a-look-inside) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+
+## Who we are building this for
+
+Think of a small auto repair shop dealing with customer messages, supplier emails, and the daily inbox backlog. Its staff should be able to find a conversation, understand what needs attention, and prepare a reply through an app they can use without learning how AI agents work. Good defaults, clear windows, and understandable actions matter more than adding another layer of complexity.
+
+Every business has its own tools. An IT service provider or the IT person at a small company should be able to build a module connecting OVD to that company's ERP, for example to look up a customer or an order. That module can provide ordinary controls for staff and the same functions for the assistant. Company-specific integrations can be distributed through private module repositories. ERP access is an example of what a custom module could add; it is not a bundled integration today.
+
+The ambition is a useful app for everyday people and small businesses. It is not a self-learning agent trying to replace every tool or take over the business. We are building for people who need practical help with their work, with familiar controls and an assistant they can call on when useful. Large enterprise deployments and AI power users are not the audience driving the design.
+
+This is the direction of the project. The early version already has Mail, Files, Chat, and module support; making those dependable and approachable for daily use is the next step.
 
 ## A look inside
 
