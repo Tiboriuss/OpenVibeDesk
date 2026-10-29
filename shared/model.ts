@@ -1,4 +1,5 @@
 import type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
+import type { ChatEvidence } from './chat-evidence';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 export type WindowKind = 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions';
 export interface Settings { textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; }
@@ -11,6 +12,7 @@ export interface AgentSettings { maxToolRounds: number; maxToolCalls: number; ti
 export interface AgentRunLimit { status: 'limit_reached'; reason: 'tool_rounds' | 'tool_calls' | 'timeout'; toolRounds: number; toolCalls: number; discoveryCalls: number; actionCalls: number; elapsedMs: number; limit: number; nextToolType: 'discovery' | 'action' | 'mixed' | 'none'; }
 
 export interface ChatOptions { tier: ModelTier; sessionRefId?: string; sessionId?: string; clientRequestId?: string; references?: ModuleReferenceInput[]; }
+export interface ReformulateChatOptions { tier: ModelTier; sessionId?: string; }
 export interface AiConfig { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; historyStart: number; workspaceTools?: boolean; realMailAccess?: boolean; confirmationMode?: ConfirmationMode; }
 export interface AiSettings { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; realMailAccess: boolean; confirmationMode: ConfirmationMode; hasApiKey: boolean; configured: boolean; }
 export interface AiSettingsInput { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools?: boolean; realMailAccess?: boolean; confirmationMode?: ConfirmationMode; apiKey?: string; }
@@ -22,7 +24,7 @@ export interface SessionReference { id: string; title: string; excerpt: string; 
 export interface EmailReferenceSummary { id: string; subject: string; from: string; accountName?: string; }
 export interface EmailReference extends EmailReferenceSummary { to: string; date: string; bodyText: string; attachments: { name: string; size: number }[]; truncated?: boolean; accountId?: string; fromAddresses?: string[]; replyToAddresses?: string[]; messageId?: string; references?: string[]; }
 export interface ForkChatResult { sessionId: string; text: string; emailRef?: string; emailReference?: EmailReference; sessionRefId?: string; references?: ModuleReference[]; }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; clientRequestId?: string; emailRef?: string; emailReference?: EmailReference; sessionRef?: SessionReference; references?: ModuleReference[]; timestamp: string; status?: 'streaming' | 'completed' | 'cancelled' | 'failed' | 'limited'; error?: string; toolEvents?: ToolEvent[]; agentRunLimit?: AgentRunLimit; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; clientRequestId?: string; emailRef?: string; emailReference?: EmailReference; sessionRef?: SessionReference; references?: ModuleReference[]; timestamp: string; status?: 'streaming' | 'completed' | 'cancelled' | 'failed' | 'limited'; error?: string; toolEvents?: ToolEvent[]; agentRunLimit?: AgentRunLimit; evidence?: ChatEvidence; reformulationOf?: { sessionId: string; messageId: string }; operationRunId?: string; continuationOf?: { sessionId: string; messageId: string; rootRunId: string }; }
 export interface ChatSession { id: string; title: string; createdAt: string; updatedAt: string; historyStart: number; messages: ChatMessage[]; }
 export interface WorkspaceState { version: 1; mailLayoutRevision?: number; windows: WorkspaceWindow[]; selectedMailId?: string; folder: Folder; mails: Mail[]; drafts: Draft[]; activeDraftId?: string; chat: ChatMessage[]; sessions: ChatSession[]; activeSessionId: string; provider: string; settings: Settings; ai?: AiConfig; agentSettings?: AgentSettings; }
 export interface FileEntry { name: string; path: string; isDirectory: boolean; size: number; }
@@ -35,6 +37,11 @@ export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachme
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  referenceModuleResource(moduleId: string, reference: ModuleReferenceInput): Promise<void>;
+  getChatRun(messageId: string, sessionId?: string): Promise<import('./operations').OperationRunSummary | null>;
+  continueChat(messageId: string, options: ReformulateChatOptions): Promise<void>;
+  reconcileChatAction(actionId: string): Promise<import('./operations').OperationActionSummary>;
+  reformulateChat(messageId: string, options: ReformulateChatOptions): Promise<void>;
   listModuleAttention(): Promise<import('./module-attention').ModuleAttention[]>;
   acknowledgeModuleAttention(moduleId: string, ids?: string[]): Promise<{ acknowledged: number }>;
   onModuleAttentionChanged(callback: (notices: import('./module-attention').ModuleAttention[]) => void): () => void;

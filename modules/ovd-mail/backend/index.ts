@@ -22,6 +22,7 @@ import { createMailQueryHost } from './mail-query-host';
 import { MailPolling } from './mail-polling';
 import { draftTextWithSignature, mailPreferences, mailPreferencesSchema } from '../../../shared/mail-preferences';
 import { fetchInboxStatus } from './mail-service';
+import { createMailOperationAdapter } from './mail-operation-adapter';
 
 export type MailOperationContext = CapabilityContext & { grantMailIds?(ids: string[]): void; primaryEmailId?: string };
 type OperationContext = MailOperationContext;
@@ -273,6 +274,13 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
     if (context.signal.aborted) return sendResult(draftId, 'cancelled', 'draft', { cancelled: true, message: 'Der Versand wurde vor der Übergabe an den SMTP-Server gestoppt.' });
     return failed(safeSendMessage(error));
   }
+  // Recheck the frozen draft/account binding after the confirmation wait and
+  // before changing delivery state or preparing an SMTP submission.
+  try { await context.validateOperation?.(); context.signal.throwIfAborted(); }
+  catch (error) {
+    if (context.signal.aborted) return sendResult(draftId, 'cancelled', 'draft', { cancelled: true, message: 'Der Versand wurde vor der Übergabe an den SMTP-Server gestoppt.' });
+    throw error;
+  }
   sendingDrafts.add(draftId);
   try {
     setStatus({ deliveryStatus: 'sending', deliveryError: undefined, rejectedRecipients: undefined, sentCopy: undefined });
@@ -322,7 +330,10 @@ async function sendDraft(draftId: unknown, context: OperationContext): Promise<M
     if (result.status === 'sent') {
       // SMTP acceptance is final. Filing is an independent operation with its own retry.
       try {
-        const filing = await fileSentDraft(draftId, undefined, context);
+        // This is the already-authorized send's follow-up. Its draft revision
+        // changed by design after acceptance; only explicit filing operations
+        // validate a filing binding of their own.
+        const filing = await fileSentDraft(draftId, undefined, context, false);
         const warning = [outcome.warning, filing.warning, ...(filing.sentCopy.status !== 'filed'
           ? ['Die Nachricht wurde angenommen, aber die Gesendet-Ablage ist noch nicht bestätigt. Nur die Ablage prüfen oder erneut versuchen; nicht erneut senden.'] : [])].filter(Boolean).join(' ');
         return { ...outcome, persisted: filing.persisted, sentCopy: filing.sentCopy, ...(warning ? { warning } : {}) };
@@ -349,15 +360,16 @@ function filingResult(draftId: string, state: SentCopyState, persisted = true): 
     ...(state.status === 'filed' ? { message: 'Die Nachricht ist im Gesendet-Ordner abgelegt. Es wurde kein weiterer SMTP-Versand ausgeführt.' }
       : { error: state.error ?? 'Die Gesendet-Ablage wurde noch nicht bestätigt. Die Nachricht wurde bereits vom SMTP-Server angenommen.' }) };
 }
-function fileSentDraft(draftId: string, folder: string | undefined, context: OperationContext): Promise<SentCopyResult> {
+function fileSentDraft(draftId: string, folder: string | undefined, context: OperationContext, validateOwnOperation = true): Promise<SentCopyResult> {
   const running = filingDrafts.get(draftId);
   if (running) return running;
-  const operation = performSentFiling(draftId, folder, context);
+  const operation = performSentFiling(draftId, folder, context, validateOwnOperation);
   filingDrafts.set(draftId, operation);
   void operation.finally(() => { if (filingDrafts.get(draftId) === operation) filingDrafts.delete(draftId); }).catch(() => {});
   return operation;
 }
-async function performSentFiling(draftId: string, folder: string | undefined, context: OperationContext): Promise<SentCopyResult> {
+async function performSentFiling(draftId: string, folder: string | undefined, context: OperationContext, validateOwnOperation: boolean): Promise<SentCopyResult> {
+  if (validateOwnOperation) { await context.validateOperation?.(); context.signal.throwIfAborted(); }
   const draft = getState().drafts.find(item => item.id === draftId);
   if (!draft || draft.deliveryStatus !== 'sent') throw new Error('Die Ablage ist nur nach bestätigter SMTP-Annahme möglich. Es wurde keine Nachricht gesendet.');
   if (!draft.sentCopy) throw new Error('Für diese ältere Nachricht liegt keine unveränderte lokale Versandkopie vor. Bitte den Gesendet-Ordner manuell prüfen. Es wird nicht erneut gesendet.');
@@ -491,6 +503,7 @@ async function deleteMailAccount(accountId: unknown, context: OperationContext) 
     context.signal.throwIfAborted();
     if (!confirmed) return false;
     ensureAccountCanChange(account.id);
+    await context.validateOperation?.(); context.signal.throwIfAborted();
     mutatingAccounts.add(account.id);
     try {
     const password = await readMailPassword(account.id);
@@ -704,6 +717,7 @@ async function setMailDisplay(emailId: string, input: MailDisplayPatch, context:
     if (!allowed) return { ...mailDisplayResult(emailId), cancelled: true, message: 'Externe Bilder wurden nicht geladen; die Ansicht wurde nicht geändert.' };
   }
   context.signal.throwIfAborted(); assertCachedCurrent(entry);
+  await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
   entry.message = { ...entry.message, display: { ...(entry.message.display ?? defaultMailDisplay), ...patch } };
   panels.get('mail')?.webContents.send('mail:message-changed', entry.message);
   if (context.origin === 'agent') await openRealMail(emailId);
@@ -729,6 +743,7 @@ async function saveMailAttachment(messageId: unknown, index: unknown, context: O
     assertCachedCurrent(entry);
     const data = await downloadImapAttachment(mailAccount(entry.accountId), entry.folder, entry.message.uidValidity, entry.message.uid, attachment.part);
     context.signal.throwIfAborted(); assertCachedCurrent(entry);
+    await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
     await fs.writeFile(choice.filePath, data.content);
     return true;
 }
@@ -736,6 +751,7 @@ async function changeMailRead(messageId: unknown, read: unknown, context: Operat
 
     if (typeof read !== 'boolean') throw new Error('Ungültiger Nachrichtenstatus.');
     const entry = cachedMail(messageId);
+    await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
     await setImapMessageRead(mailAccount(entry.accountId), entry.folder, entry.message.uidValidity, entry.message.uid, read);
     context.signal.throwIfAborted(); assertCachedCurrent(entry);
     entry.message = { ...entry.message, read };
@@ -804,6 +820,7 @@ async function createWorkspaceDraft(args: MailCapabilityArgs<'drafts.create'>, c
   const references = reply ? [...(source?.references ?? []).filter(safeMessageId), ...(originalId ? [originalId] : [])].slice(-20) : [];
   const quote = reply && source?.bodyText ? `\n\n${source.bodyText.slice(0, 20000).split('\n').map(line => `> ${line}`).join('\n')}` : '';
   const draft: Draft = { id: randomUUID(), ...(account ? { accountId: account.id } : {}), to, cc: args.cc ?? '', bcc: args.bcc ?? '', subject: args.subject ?? (reply && source ? `Re: ${source.subject.replace(/^Re:\s*/i, '')}`.slice(0, 1000) : ''), body: `${draftTextWithSignature(args.body ?? '', account ? mailPreferences(account).signature : '')}${quote}`.slice(0, 100000), attachments: [], updatedAt: new Date().toISOString(), ...(originalId ? { inReplyTo: originalId } : {}), ...(references.length ? { references } : {}) };
+  await context.validateOperation?.();
   context.signal.throwIfAborted();
   commit({ ...applyUiAction(getState(), { type: 'open_window', kind: 'draft' }).state, drafts: [...getState().drafts, draft], activeDraftId: draft.id });
   let persistenceError: string | undefined;
@@ -899,11 +916,11 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open'], ({ emailId }, context) => openRealMail(authorizedMailId(emailId, context as OperationContext)));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_read'], async ({ emailId, read }, context) => { const id = authorizedMailId(emailId, context as OperationContext); await changeMailRead(id, read, context); return { emailId: id, read }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.download_attachment'], ({ emailId, index }, context) => saveMailAttachment(authorizedMailId(emailId, context as OperationContext), index, context));
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['files.attach'], async ({ draftId, path: requested }) => {
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['files.attach'], async ({ draftId, path: requested }, context) => {
     const resolved = await fs.realpath(requested); const root = await fs.realpath(app.getPath('documents')); const relative = path.relative(root, resolved);
     if ((relative.startsWith('..') || path.isAbsolute(relative)) && !selectedLocalFiles.has(resolved)) throw new Error('Diese Datei bitte zuerst über files.choose ausdrücklich auswählen.');
     const stat = await fs.stat(resolved); if (!stat.isFile()) throw new Error('Bitte eine Datei auswählen.');
-    const id = activeDraftId(draftId); await dispatchAction({ type: 'attach_file', draftId: id, file: { path: resolved, name: path.basename(resolved), size: stat.size } }); return { draftId: id, attached: path.basename(resolved), size: stat.size };
+    const id = activeDraftId(draftId); await context.validateOperation?.(); context.signal.throwIfAborted(); await dispatchAction({ type: 'attach_file', draftId: id, file: { path: resolved, name: path.basename(resolved), size: stat.size } }); return { draftId: id, attached: path.basename(resolved), size: stat.size };
   });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['files.remove_attachment'], async ({ draftId, index }) => { const id = activeDraftId(draftId); await dispatchAction({ type: 'remove_attachment', draftId: id, index }); return { draftId: id, removed: index }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.test'], async ({ accountId }) => { const snapshot = accountSnapshot(accountId); await testImapConnection(snapshot.account); assertCurrent(snapshot); return { connected: true }; });
@@ -1006,8 +1023,15 @@ function getContext(context: OperationContext) {
   const ids = new Set([...(context.referenceIds ?? []), ...(activeMailView?.messageId ? [activeMailView.messageId] : [])]);
   return { activeDraftId: getState().activeDraftId, mailView: activeMailView ? { ...activeMailView, ...(activeMailView.messageId && liveMail.has(activeMailView.messageId) ? { display: mailDisplayResult(activeMailView.messageId) } : {}) } : null, referencedEmails: [...ids].slice(-20).map(id => { try { return emailReferenceSummary(id); } catch { return { id, unavailable: true }; } }), loadedMailCount: liveMail.size, draftCount: getState().drafts.length, mailToolAccess: realMailAllowed() };
 }
+const operationAdapter = createMailOperationAdapter({
+  state: getState, accounts: getMailAccounts, account: mailAccount, smtp: getSmtpSettings,
+  activeDraftId, authorizedMailId, reference: referenceFor,
+  live: id => liveMail.has(id) ? cachedMail(id) : undefined,
+  activeView: () => activeMailView, saveStatus: id => draftPersistence.getStatus(id),
+  existingSendResult, filingResult
+});
 return {
-  initialize, registerCapabilities, registerIpc, validateAction, getContext,
+  initialize, registerCapabilities, registerIpc, validateAction, getContext, operationAdapter,
   startPolling: () => polling.start(), stopPolling: () => polling.stop(),
   createDraft: createWorkspaceDraft, openDraft,
   onStateChanged: (state: WorkspaceState) => draftPersistence.onStateChanged(state),

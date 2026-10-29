@@ -88,7 +88,7 @@ export function NativeApp() {
   const queuedReferenceInputs = useRef<ModuleReferenceInput[]>([]);
   const [referencesLoading, setReferencesLoading] = useState(false);
   const [referenceError, setReferenceError] = useState('');
-  const [sessionRef, setSessionRef] = useState<string>();
+  const [sessionReferences, setSessionReferences] = useState<Record<string, string>>({});
   const [forkContext, setForkContext] = useState<ForkChatResult>();
   const [error, setError] = useState('');
   const [chatError, setChatError] = useState('');
@@ -98,6 +98,12 @@ export function NativeApp() {
   const sessionId = state?.activeSessionId;
   const activeSessionId = useRef(sessionId);
   activeSessionId.current = sessionId;
+  const sessionRef = sessionId ? sessionReferences[sessionId] : undefined;
+  function setSessionRef(value?: string) {
+    const target = activeSessionId.current;
+    if (!target) return;
+    setSessionReferences(current => { const next = { ...current }; if (value) next[target] = value; else delete next[target]; return next; });
+  }
   const pendingEmail = sessionId ? mailDrafts[sessionId] : undefined;
   const pendingReferences = sessionId ? referenceDrafts[sessionId] ?? [] : [];
   const prompt = sessionId && typeof chatDrafts[sessionId] === 'string' ? chatDrafts[sessionId] : '';
@@ -127,7 +133,7 @@ export function NativeApp() {
     setChatDrafts(current => ({ ...current, [result.sessionId]: result.text }));
     setForkContext(result);
   }) : undefined, []);
-  useEffect(() => { const id = state?.activeSessionId; if (previousSession.current && id !== previousSession.current) { setSessionRef(undefined); emailRequestVersion.current++; setEmailLoading(false); setEmailError(''); cancelReferenceRequests(); setChatError(''); } if (id) { previousSession.current = id; const queued = queuedReferenceInputs.current; queuedReferenceInputs.current = []; for (const reference of queued) void referenceModuleResource(reference); } }, [state?.activeSessionId]);
+  useEffect(() => { const id = state?.activeSessionId; if (previousSession.current && id !== previousSession.current) { emailRequestVersion.current++; setEmailLoading(false); setEmailError(''); cancelReferenceRequests(); setChatError(''); } if (id) { previousSession.current = id; const queued = queuedReferenceInputs.current; queuedReferenceInputs.current = []; for (const reference of queued) void referenceModuleResource(reference); } }, [state?.activeSessionId]);
   useEffect(() => {
     if (!forkContext || state?.activeSessionId !== forkContext.sessionId) return;
     removeEmail();
@@ -253,20 +259,33 @@ export function NativeApp() {
       if (activeSessionId.current === targetSession) { setSessionRef(reference); setChatError(err instanceof Error ? err.message : String(err)); }
     } finally { setSending(false); }
   }
-  async function createChat() { try { await window.workspace.createChatSession(); setSessionRef(undefined); await action({ type: 'open_window', kind: 'chat' }); } catch (err) { setError(String(err)); } }
+  async function createChat() { try { await window.workspace.createChatSession(); await action({ type: 'open_window', kind: 'chat' }); } catch (err) { setError(String(err)); } }
   async function openChat(id: string) { try { await window.workspace.selectChatSession(id); await action({ type: 'open_window', kind: 'chat' }); } catch (err) { setError(String(err)); } }
-  async function forkMessage(id: string, retry: boolean) {
+  async function forkMessage(id: string) {
     if (sending) return;
     setSending(true); setChatError('');
     let fork: Awaited<ReturnType<typeof window.workspace.forkChat>> | undefined;
     try {
       fork = await window.workspace.forkChat(id);
-      if (retry) await window.workspace.sendChat(fork.text, fork.emailRef, { tier, sessionId: fork.sessionId, ...(fork.sessionRefId ? { sessionRefId: fork.sessionRefId } : {}), ...(fork.references?.length ? { references: fork.references.map(moduleReferenceInput) } : {}) });
-      else { setChatDrafts(current => ({ ...current, [fork!.sessionId]: fork!.text })); setForkContext(fork); }
+      setChatDrafts(current => ({ ...current, [fork!.sessionId]: fork!.text })); setForkContext(fork);
     } catch (err) {
       if (fork) { setChatDrafts(current => ({ ...current, [fork!.sessionId]: fork!.text })); setForkContext(fork); }
       setChatError(String(err));
     } finally { setSending(false); }
+  }
+  async function reformulateMessage(id: string) {
+    if (sending || !sessionId) return;
+    setSending(true); setChatError('');
+    try { await window.workspace.reformulateChat(id, { tier, sessionId }); }
+    catch (err) { setChatError(err instanceof Error ? err.message : String(err)); }
+    finally { setSending(false); }
+  }
+  async function continueMessage(id: string) {
+    if (sending || !sessionId) return;
+    setSending(true); setChatError('');
+    try { await window.workspace.continueChat(id, { tier, sessionId }); }
+    catch (err) { setChatError(err instanceof Error ? err.message : String(err)); }
+    finally { setSending(false); }
   }
   if (view === 'dock') {
     const dockItems = workspaceNavigation(moduleState.modules, state?.settings.navigationOrder);
@@ -294,7 +313,7 @@ export function NativeApp() {
     <div className="native-view-body">
     {ModuleComponent && <ModuleComponent state={state} onAction={action} onError={setError} />}
     {['mail', 'draft', 'files', 'module'].includes(view) && !ModuleComponent && <div className="module-host-status" role="status">{moduleState.loading ? 'Modul wird geladen …' : moduleState.error || 'Dieses Modul ist nicht verfügbar. Prüfe seinen Status in den Einstellungen unter Module.'}</div>}
-    {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id, false)} onForkRetry={id => void forkMessage(id, true)} sending={sending || state.sessions.some(s => s.messages.some(m => m.status === 'streaming'))} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
+    {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id)} onReformulate={id => void reformulateMessage(id)} onContinue={id => void continueMessage(id)} sending={sending || state.sessions.some(s => s.messages.some(m => m.status === 'streaming'))} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
     {view === 'sessions' && <SessionsView state={state} onCreate={() => void createChat()} onOpen={id => void openChat(id)} onRename={(id, title) => void window.workspace.renameChatSession(id, title).catch(err => setError(String(err)))} onReference={id => void window.workspace.referenceChatSession(id).catch(err => setError(String(err)))} />}
     {view === 'settings' && <SettingsView settings={state.settings} onUpdate={patch => void updateSettings(patch)} />}
     </div>

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Bot, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Plus, RefreshCw, Square, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bot, BookOpen, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import type { ChatMessage, EmailReferenceSummary, WorkspaceState } from '../shared/model';
+import type { OperationRunSummary } from '../shared/operations';
 import { SESSION_DRAG_PREFIX, SESSION_DRAG_TYPE } from './SessionsView';
 import { MAIL_DRAG_TYPE, readMailDrag } from './mail-reference';
 import { MODULE_REFERENCE_DRAG_TYPE, moduleReferenceKey, readModuleReferenceDrag, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
@@ -37,11 +38,62 @@ function AgentLimitNotice({ limit, onOpen }: { limit?: ChatMessage['agentRunLimi
   return <div className="message-limit-status" role="status"><strong><CircleAlert size={14} aria-hidden="true"/>Agent-Limit erreicht</strong><p>{explanation}{next ? ` ${next}` : ''}</p>{limit && <small>{limit.toolRounds} Runden · {limit.toolCalls} Aufrufe · {limit.discoveryCalls} Werkzeugsuche · {limit.actionCalls} Fachaufrufe · {Math.max(0, Math.round(limit.elapsedMs / 1000))} s</small>}<button type="button" onClick={onOpen}>Agent-Einstellungen</button></div>;
 }
 
-export function ChatView({ state, prompt, setPrompt, emailReference, emailLoading, emailError, onEmailDrop, onRemoveEmail, references, referencesLoading, referenceError, onModuleReferenceDrop, onRemoveModuleReference, onCancelModuleReferences, sessionRef, setSessionRef, sending, error, tier, setTier, thinking, onSend, onStop, onNew, onSessions, onForkEdit, onForkRetry, onAgentSettings }: {
+function OperationStatus({ message, sessionId, sending }: { message: ChatMessage; sessionId: string; sending: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [summary, setSummary] = useState<OperationRunSummary | null>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [checking, setChecking] = useState<string>();
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    if (!open) return;
+    let current = true;
+    setLoading(true); setError('');
+    void window.workspace.getChatRun(message.id, sessionId).then(value => { if (current) setSummary(value); }, reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); }).finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [open, message.id, message.operationRunId, message.status, message.toolEvents?.length, sessionId, revision]);
+  async function reconcile(actionId: string) {
+    if (checking || sending) return;
+    setChecking(actionId); setError('');
+    try { await window.workspace.reconcileChatAction(actionId); setRevision(value => value + 1); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setChecking(undefined); }
+  }
+  const actions = summary?.actions ?? [];
+  const uncertain = actions.filter(action => action.status === 'uncertain' || action.effect === 'unknown').length;
+  const failed = actions.filter(action => action.status === 'failed').length;
+  const completed = actions.filter(action => action.status === 'completed').length;
+  const stateLabel = uncertain ? `${uncertain} unklar` : failed ? `${failed} fehlgeschlagen` : actions.length && completed === actions.length ? 'erledigt' : actions.length ? 'offen' : '';
+  const statusLabels = { prepared: 'vorbereitet', running: 'läuft', completed: 'erledigt', failed: 'fehlgeschlagen', cancelled: 'abgebrochen', uncertain: 'Ausgang unklar' };
+  const effectLabels = { none: 'keine Änderung ausgeführt', applied: 'Änderung bestätigt', unknown: 'Änderung unklar' };
+  return <details className="tool-events operation-journal" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary><ChevronRight size={13} aria-hidden="true"/><span>Auftragsstatus</span>{summary && <small>{actions.length} {actions.length === 1 ? 'Schritt' : 'Schritte'}{stateLabel ? ` · ${stateLabel}` : ''}</small>}</summary>
+    {open && <div className="operation-journal-content" aria-busy={loading || !!checking}>
+      {loading && <small role="status">Auftragsstatus wird geladen …</small>}
+      {!loading && summary === null && <p>Für diesen Auftrag ist kein gespeichertes Aktionsprotokoll verfügbar.</p>}
+      {!loading && summary && !actions.length && <p>Noch keine Fachaktionen protokolliert.</p>}
+      {summary && actions.map(action => <div key={action.id} className={`operation-action ${action.status}`}>
+        <div className="operation-action-heading"><span>{toolDetail(action.label) || 'Workspace-Aktion'}</span><small>{statusLabels[action.status]}</small></div>
+        <small className={action.effect === 'unknown' ? 'operation-effect-unknown' : ''}>{effectLabels[action.effect]}</small>
+        {action.detail && <small className="operation-action-detail">{toolDetail(action.detail)}</small>}
+        {(action.status === 'uncertain' || action.effect === 'unknown') && <button type="button" disabled={sending || loading || !!checking} onClick={() => void reconcile(action.id)} title="Nur den tatsächlichen Status prüfen; die ursprüngliche Aktion wird nicht erneut ausgeführt" aria-label={`Status prüfen: ${toolDetail(action.label) || 'Workspace-Aktion'}`}>{checking === action.id ? 'Status wird geprüft …' : 'Status prüfen'}</button>}
+      </div>)}
+      {uncertain > 0 && <p className="operation-journal-note">Unklare Änderungen bleiben gesperrt, bis das zuständige Modul ihren Status klären kann. Die Statusprüfung wiederholt keine Aktion.</p>}
+      {error && <p className="operation-journal-error" role="alert">{error}</p>}
+      <button type="button" className="operation-journal-refresh" disabled={loading || !!checking} onClick={() => setRevision(value => value + 1)}>Statusübersicht aktualisieren</button>
+    </div>}
+  </details>;
+}
+
+function canContinue(message: ChatMessage): boolean {
+  return !!message.operationRunId && !message.reformulationOf && message.status !== 'streaming' && (message.status === 'cancelled' || message.status === 'failed' || message.status === 'limited' || message.evidence?.status === 'cancelled' || message.evidence?.status === 'failed' || message.evidence?.status === 'limited' || !!message.toolEvents?.some(event => event.status === 'uncertain'));
+}
+
+export function ChatView({ state, prompt, setPrompt, emailReference, emailLoading, emailError, onEmailDrop, onRemoveEmail, references, referencesLoading, referenceError, onModuleReferenceDrop, onRemoveModuleReference, onCancelModuleReferences, sessionRef, setSessionRef, sending, error, tier, setTier, thinking, onSend, onStop, onNew, onSessions, onForkEdit, onReformulate, onContinue, onAgentSettings }: {
   state: WorkspaceState; prompt: string; setPrompt(value: string): void; emailReference?: EmailReferenceSummary; emailLoading: boolean; emailError?: string; onEmailDrop(id: string): void; onRemoveEmail(): void;
   references: ModuleReferenceSummary[]; referencesLoading: boolean; referenceError?: string; onModuleReferenceDrop(reference: ModuleReferenceInput): void; onRemoveModuleReference(reference: ModuleReferenceInput): void; onCancelModuleReferences(): void;
   sessionRef?: string; setSessionRef(value?: string): void; sending: boolean; error?: string; tier: Tier; setTier(value: Tier): void; thinking: Thinking;
-  onSend(): void; onStop(): void; onNew(): void; onSessions(): void; onForkEdit(messageId: string): void; onForkRetry(messageId: string): void; onAgentSettings(): void;
+  onSend(): void; onStop(): void; onNew(): void; onSessions(): void; onForkEdit(messageId: string): void; onReformulate(messageId: string): void; onContinue(messageId: string): void; onAgentSettings(): void;
 }) {
   const list = useRef<HTMLDivElement>(null), thread = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), stick = useRef(true);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -142,16 +194,20 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
             <div className="modern-message-body">
               {message.emailRef && <span className="message-ref" title={message.emailReference?.subject}><Mail size={12} aria-hidden="true"/><span>{message.emailReference?.subject || state.mails.find(mail => mail.id === message.emailRef)?.subject || 'Referenzierte E-Mail'}</span></span>}
               {message.sessionRef && <span className="message-ref" title={message.sessionRef.title}><Link2 size={12} aria-hidden="true"/><span>{message.sessionRef.title}</span></span>}
-              {message.references?.map(reference => <span key={moduleReferenceKey(reference)} className="message-ref" title={reference.description || reference.title}><Link2 size={12} aria-hidden="true"/><span>{reference.title}</span></span>)}
+              {message.references?.map(reference => <span key={moduleReferenceKey(reference)} className="message-ref" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={12} aria-hidden="true"/> : <Link2 size={12} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Skill: ' : ''}{reference.title}</span></span>)}
               {!!message.toolEvents?.length && <ToolActivity events={message.toolEvents}/>}
+              {message.operationRunId && !message.reformulationOf && <OperationStatus message={message} sessionId={state.activeSessionId} sending={sending}/>}
+              {message.reformulationOf && <small className="message-status" title="Verwendet ausschließlich gespeicherte Ergebnisse und Momentaufnahmen. Es werden keine Werkzeuge ausgeführt.">{message.status === 'completed' ? 'Neu formuliert' : 'Neuformulierung'} · keine Aktionen</small>}
+              {message.continuationOf && <small className="message-status" title="Setzt den gespeicherten Auftrag fort. Erledigte Aktionen werden nicht wiederholt; unklare Änderungen bleiben bis zur Klärung gesperrt.">Fortsetzung des Auftrags</small>}
               <ChatMarkdown text={message.text || (message.status === 'streaming' ? 'Antwort wird vorbereitet …' : '')} messageId={message.id} copied={copied} onCopy={copy}/>
-              {message.status === 'streaming' && <small className="message-status streaming" role="status"><span aria-hidden="true"/>Antwort wird erstellt …</small>}
+              {message.status === 'streaming' && <small className="message-status streaming" role="status"><span aria-hidden="true"/>{message.reformulationOf ? 'Antwort wird neu formuliert …' : 'Antwort wird erstellt …'}</small>}
               {message.status === 'cancelled' && <small className="message-status">Gestoppt</small>}
               {message.status === 'failed' && <small className="message-status failed">{message.error || 'Antwort unterbrochen'}</small>}
+              {message.error && message.status !== 'failed' && message.status !== 'streaming' && <small className="message-status failed" role="status">{message.error}</small>}
               {message.status === 'limited' && <AgentLimitNotice limit={message.agentRunLimit} onOpen={onAgentSettings}/>}
             </div>
-            {message.role === 'user' && <div className="message-actions" role="group" aria-label="Nachrichtenaktionen"><button type="button" title="Nachricht kopieren" aria-label="Nachricht kopieren" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14}/> : <Copy size={14}/>}</button><button type="button" title="Als neuen Chat bearbeiten" aria-label="Als neuen Chat bearbeiten" disabled={sending} onClick={() => onForkEdit(message.id)}><Pencil size={14}/></button></div>}
-            {message.role === 'assistant' && message.status !== 'streaming' && (message.text || hasPreviousUser(message.id)) && <div className="message-actions" role="group" aria-label="Antwortaktionen">{message.text && <button type="button" title="Antwort kopieren" aria-label="Antwort kopieren" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14}/> : <Copy size={14}/>}</button>}{hasPreviousUser(message.id) && <button type="button" title="Antwort in neuem Chat erneut erzeugen" aria-label="Antwort in neuem Chat erneut erzeugen" disabled={sending} onClick={() => onForkRetry(message.id)}><RefreshCw size={14}/></button>}</div>}
+            {message.role === 'user' && <div className="message-actions" role="group" aria-label="Nachrichtenaktionen"><button type="button" title="Nachricht kopieren" aria-label="Nachricht kopieren" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14}/> : <Copy size={14}/>}</button><button type="button" title="Auftrag in einem neuen Chat bearbeiten; erst Senden startet eine neue Ausführung" aria-label="Auftrag als neuen Chat bearbeiten" disabled={sending} onClick={() => onForkEdit(message.id)}><Pencil size={14}/></button></div>}
+            {message.role === 'assistant' && message.status !== 'streaming' && (message.text || hasPreviousUser(message.id)) && <div className="message-actions" role="group" aria-label="Antwortaktionen">{message.text && <button type="button" title="Antwort kopieren" aria-label="Antwort kopieren" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14}/> : <Copy size={14}/>}</button>}{hasPreviousUser(message.id) && <button type="button" title={message.evidence ? 'Antwort aus gespeicherten Ergebnissen neu formulieren, ohne Aktionen auszuführen' : 'Neu formulieren benötigt gespeicherte Ergebnisbelege. Für diese ältere Antwort sind noch keine verfügbar.'} aria-label="Antwort neu formulieren" disabled={sending} onClick={() => onReformulate(message.id)}><RefreshCw size={14}/></button>}{canContinue(message) && <button type="button" title="Gespeicherten Auftrag fortsetzen; erledigte Aktionen werden nicht wiederholt" aria-label="Auftrag fortsetzen" disabled={sending} onClick={() => onContinue(message.id)}><Play size={14}/></button>}</div>}
           </div>
         </article>)}
         {!messages.length && <div className="chat-empty"><div className="chat-empty-icon"><Bot size={22}/></div><strong>Wobei kann ich helfen?</strong><span>Dein Chat wird lokal gespeichert.</span></div>}</div>
@@ -159,14 +215,15 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       {awayFromBottom && <button type="button" className="jump-to-latest" onClick={scrollToLatest} title="Zur neuesten Nachricht" aria-label="Zur neuesten Nachricht"><ArrowDown size={14} aria-hidden="true"/>Neueste Nachricht</button>}
     </div>
     <div className="modern-composer-area">
-      {(mail || linked || references.length > 0) && <div className="context-list">{mail && <span className="context-chip" title={[mail.from, mail.accountName].filter(Boolean).join(' · ')}><Mail size={14}/><span>{mail.subject || '(Kein Betreff)'}</span><button type="button" aria-label="E-Mail aus Kontext entfernen" onClick={onRemoveEmail}><X size={13}/></button></span>}{linked && <span className="context-chip"><Link2 size={14}/><span>{linked.title}</span><button type="button" aria-label="Chat aus Kontext entfernen" onClick={() => setSessionRef(undefined)}><X size={13}/></button></span>}{references.map(reference => <span key={moduleReferenceKey(reference)} className="context-chip" title={reference.description || reference.title}><Link2 size={14} aria-hidden="true"/><span>{reference.title}</span><button type="button" aria-label={`Referenz ${reference.title} entfernen`} onClick={() => onRemoveModuleReference(reference)}><X size={13}/></button></span>)}</div>}
+      {(mail || linked || references.length > 0) && <div className="context-list">{mail && <span className="context-chip" title={[mail.from, mail.accountName].filter(Boolean).join(' · ')}><Mail size={14}/><span>{mail.subject || '(Kein Betreff)'}</span><button type="button" aria-label="E-Mail aus Kontext entfernen" onClick={onRemoveEmail}><X size={13}/></button></span>}{linked && <span className="context-chip"><Link2 size={14}/><span>{linked.title}</span><button type="button" aria-label="Chat aus Kontext entfernen" onClick={() => setSessionRef(undefined)}><X size={13}/></button></span>}{references.map(reference => <span key={moduleReferenceKey(reference)} className="context-chip" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={14} aria-hidden="true"/> : <Link2 size={14} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Skill: ' : ''}{reference.title}</span><button type="button" aria-label={`Referenz ${reference.title} entfernen`} onClick={() => onRemoveModuleReference(reference)}><X size={13}/></button></span>)}</div>}
       {dragging && <div className="reference-drop-target" role="status"><Link2 size={16} aria-hidden="true"/>Hier ablegen, um eine Referenz hinzuzufügen</div>}
       {emailLoading && <div className="chat-notice" role="status">Mailreferenz wird geladen … <button type="button" onClick={onRemoveEmail}>Abbrechen</button></div>}
       {emailError && <div className="chat-error" role="alert">{emailError}</div>}
       {referencesLoading && <div className="chat-notice" role="status">Referenzen werden geladen … <button type="button" onClick={onCancelModuleReferences}>Abbrechen</button></div>}
       {referenceError && <div className="chat-error" role="alert">{referenceError}</div>}
       {mail && <p className="reference-content-note">Beim Senden wird der Mailtext an den gewählten KI-Anbieter übermittelt und im Chat lokal gespeichert. Dateiinhalte von Anhängen werden nicht übertragen; Dateinamen können zum Kontext gehören.</p>}
-      {references.length > 0 && <p className="reference-content-note">Beim Senden werden Metadaten und verfügbare Textausschnitte der ausgewählten Referenzen an den KI-Anbieter übermittelt und im Chat lokal gespeichert. Weitere Inhalte kann der Assistent bei Bedarf über das jeweilige Modul nachladen.</p>}
+      {references.some(reference => reference.usage === 'instructions') && <p className="reference-content-note">Ausgewählte Skills gelten als Arbeitsanweisungen für diese Anfrage. Beim Senden werden ihre vollständigen Anweisungen an den KI-Anbieter übermittelt und im Chat lokal gespeichert.</p>}
+      {references.some(reference => reference.usage !== 'instructions') && <p className="reference-content-note">Beim Senden werden Metadaten und verfügbare Textausschnitte der ausgewählten Referenzen an den KI-Anbieter übermittelt und im Chat lokal gespeichert. Weitere Inhalte kann der Assistent bei Bedarf über das jeweilige Modul nachladen.</p>}
       {sending && !active?.messages.some(message => message.status === 'streaming') && <div className="chat-notice">{state.sessions.some(session => session.id !== state.activeSessionId && session.messages.some(message => message.status === 'streaming')) ? 'Eine Antwort läuft in einem anderen Chat. Du kannst sie hier stoppen.' : 'Nachricht wird vorbereitet …'}</div>}
       {(error || copyError) && <div className="chat-error" role="alert">{error || copyError}</div>}
       <div className="modern-composer">

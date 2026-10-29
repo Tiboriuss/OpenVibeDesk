@@ -8,10 +8,16 @@ import { ModuleRuntimeManager } from './module-runtime';
 import { type CapabilityContext, type WorkspaceCapabilityRegistry } from './workspace-capabilities';
 import type { ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { ModuleToolProvider } from '../shared/module-tool-provider';
+import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
 import { ATTENTION_PULSE_MS, MAX_ATTENTION, MAX_MODULE_ATTENTION, attentionAcknowledgementSchema, attentionKeySchema, moduleAttentionInputSchema, type ModuleAttention, type ModuleAttentionInput } from '../shared/module-attention';
+import { moduleReferenceInputSchema, moduleReferenceSchema, type ModuleReference } from '../shared/references';
 
 type HostOptions = {
   builtInRoot: string; userRoot: string; dataRoot: string; configFile: string;
+  /** Hash of the executing host/adapter implementation, captured once at startup. */
+  operationHostFingerprint?: string;
+  /** Read the live user grant; a run's captured configuration cannot retain revoked access. */
+  agentExecutionAllowed?(): boolean;
   capabilities: WorkspaceCapabilityRegistry;
   activateBuiltin(id: string): Promise<void>;
   beforeDisable(id: string): Promise<void>;
@@ -25,6 +31,10 @@ type HostOptions = {
   confirm(context: CapabilityContext, message: string, detail: string, options?: { alwaysAsk?: boolean }): Promise<boolean>;
 };
 type Binding = { descriptor: ModuleToolDescriptor; action: string; kind: 'capability' | 'process' | 'view' | 'settings' | 'window'; validate?: ValidateFunction; confirmation?: { title?: string; message: string } };
+export type ModuleOperationAdapter = {
+  prepare(action: string, args: Record<string, unknown>, context: CapabilityContext): { args: Record<string, unknown>; resource?: OperationBinding['resource']; effect?: OperationBinding['effect'] } | Promise<{ args: Record<string, unknown>; resource?: OperationBinding['resource']; effect?: OperationBinding['effect'] }>;
+  reconcile?(action: string, args: Record<string, unknown>, operation: OperationIdentity, context: CapabilityContext, binding: OperationBinding): Promise<OperationReconciliation>;
+};
 export interface ModulePackageInstall {
   moduleId: string;
   stagedDirectory: string;
@@ -40,6 +50,10 @@ const moduleQuerySchema = z.object({ query: z.string().trim().max(200).optional(
 const fold = (text: string) => text.normalize('NFKC').toLocaleLowerCase('de-DE');
 const MAX_PROVIDER_OFFERS = 5000;
 const safeName = (moduleId: string, action: string, kind: string) => `${moduleId}_${action}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 49) + '_' + createHash('sha256').update(moduleId + '\0' + kind + '\0' + action).digest('hex').slice(0, 12);
+function canonicalOperationArgs(value: unknown): string {
+  const sort = (item: unknown): unknown => Array.isArray(item) ? item.map(sort) : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort((item as Record<string, unknown>)[key])])) : item;
+  return JSON.stringify(sort(value));
+}
 
 /** Host owns activation and dispatch; the model only sees bounded metadata and selected schemas. */
 export class ModuleHost {
@@ -55,6 +69,7 @@ export class ModuleHost {
   private readonly toolProviders = new Map<string, ModuleToolProvider<CapabilityContext>>();
   private readonly providerOffers = new Map<string, { fingerprint: string; retired: boolean }>();
   private readonly attention = new Map<string, ModuleAttention>();
+  private readonly operationAdapters = new Map<string, ModuleOperationAdapter>();
 
   constructor(private readonly options: HostOptions) {
     this.runtimes = new ModuleRuntimeManager({ dataRoot: options.dataRoot,
@@ -131,6 +146,137 @@ export class ModuleHost {
     if (!parent || parent.source !== 'builtin' || parent.manifest?.runtime.type !== 'host-adapter') throw new Error('Dynamische Werkzeugquellen benötigen einen eingebauten Hostadapter.');
     if (this.toolProviders.has(provider.parentModuleId)) throw new Error('Diese dynamische Werkzeugquelle wurde bereits registriert.');
     this.toolProviders.set(provider.parentModuleId, provider);
+  }
+  registerOperationAdapter(moduleId: string, adapter: ModuleOperationAdapter): void {
+    const module = this.registry.getModule(moduleId);
+    if (!module || module.source !== 'builtin' || module.manifest?.runtime.type !== 'host-adapter') throw new Error('Aktionsadapter benötigen einen eingebauten Hostadapter.');
+    if (this.operationAdapters.has(moduleId)) throw new Error('Dieser Aktionsadapter wurde bereits registriert.');
+    this.operationAdapters.set(moduleId, adapter);
+  }
+  private operationArgs(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Ungültige Modulargumente.');
+    const encoded = JSON.stringify(value);
+    if (encoded.length > 16000) throw new Error('Ungültige Modulargumente.');
+    return JSON.parse(encoded) as Record<string, unknown>;
+  }
+  private validateBindingArgs(binding: Binding, args: Record<string, unknown>): Record<string, unknown> {
+    if (binding.kind === 'capability') return this.options.capabilities.validate(binding.action, args);
+    if (binding.kind === 'window') return z.object({ action: z.enum(['minimize', 'toggleMaximize', 'close']) }).strict().parse(args);
+    if (binding.kind === 'view' || binding.kind === 'settings') {
+      if (Object.keys(args).length) throw new Error('Diese Funktion benötigt keine Argumente.');
+      return {};
+    }
+    if (!binding.validate!(args)) throw new Error('Die Argumente entsprechen nicht dem deklarierten Modulschema.');
+    return args;
+  }
+  private async startProcess(id: string) {
+    const record = this.requireReady(id);
+    let starting = this.activation.get(id);
+    if (!starting) { starting = this.registry.verifyUnchanged(id).then(() => this.runtimes.start(record)); this.activation.set(id, starting); }
+    await starting;
+    this.requireReady(id);
+    return record;
+  }
+  private assertAgentAccess(context: CapabilityContext): void {
+    if (context.origin === 'agent' && this.options.agentExecutionAllowed?.() === false) throw new Error('Die Workspace-Werkzeuge wurden vom Nutzer deaktiviert. Es wird keine weitere Assistentenaktion gestartet.');
+  }
+  /** Resolve logical journal identity to a fresh offer; never reuse a retired transport name. */
+  async getOperationTool(binding: OperationBinding): Promise<ModuleToolDescriptor | undefined> {
+    if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
+    const provider = this.providerFor(binding.moduleId);
+    if (provider) {
+      this.requireReady(provider.parentModuleId); await this.registry.verifyUnchanged(provider.parentModuleId);
+      const raw = provider.getOperationTool?.(binding);
+      if (!raw) return;
+      const tool = this.providerDescriptor(raw), current = provider.getTool(binding.moduleId, tool.name);
+      if (!current || this.providerFingerprint(this.providerDescriptor(current)) !== this.providerFingerprint(tool)) throw new Error('Die aktuelle Werkzeugbindung hat sich während der Auswahl geändert.');
+      this.rememberProviderOffer(binding.moduleId, tool);
+      return tool;
+    }
+    this.requireReady(binding.moduleId); await this.registry.verifyUnchanged(binding.moduleId);
+    const current = [...(this.bindings.get(binding.moduleId) ?? this.buildBindings(binding.moduleId)).values()].find(item => item.action === binding.action);
+    return current ? structuredClone(current.descriptor) : undefined;
+  }
+  /** Freeze validated resource arguments before durable intent is written. No domain tool executes here. */
+  async prepareOperation(id: string, name: string, rawArgs: unknown, context: CapabilityContext): Promise<{ binding: OperationBinding; args: Record<string, unknown>; label: string }> {
+    this.assertAgentAccess(context);
+    if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
+    context.signal.throwIfAborted();
+    const args = this.operationArgs(rawArgs), provider = this.providerFor(id);
+    if (provider) {
+      this.requireReady(provider.parentModuleId);
+      await this.registry.verifyUnchanged(provider.parentModuleId);
+      const current = provider.getTool(id, name), offered = this.providerOffers.get(`${id}\0${name}`);
+      if (!current || current.name !== name || !offered || offered.retired || offered.fingerprint !== this.providerFingerprint(this.providerDescriptor(current))) throw new Error('Dieses dynamische Werkzeug ist nicht mehr in der angebotenen Version verfügbar. Bitte passende Modulwerkzeuge neu laden.');
+      if (provider.prepareOperation) {
+        const prepared = await provider.prepareOperation(id, name, args, context);
+        this.assertAgentAccess(context);
+        if (prepared.binding.moduleId !== id || !prepared.binding.action || !prepared.binding.fingerprint || !['read', 'write', 'unknown'].includes(prepared.binding.effect)) throw new Error('Die dynamische Quelle hat keine gültige Aktionsbindung geliefert.');
+        const after = provider.getTool(id, name);
+        if (!after || this.providerFingerprint(this.providerDescriptor(after)) !== offered.fingerprint) throw new Error('Die dynamische Werkzeugbindung wurde während der Vorbereitung geändert.');
+        return { binding: structuredClone(prepared.binding), args: this.operationArgs(prepared.args), label: prepared.label?.slice(0, 160) || current.label || name };
+      }
+      this.assertAgentAccess(context);
+      return { binding: { moduleId: id, action: name, fingerprint: offered.fingerprint, effect: 'unknown' }, args, label: current.label || name };
+    }
+    const record = this.requireReady(id);
+    await this.registry.verifyUnchanged(id);
+    const binding = (this.bindings.get(id) ?? this.buildBindings(id)).get(name);
+    if (!binding) throw new Error('Diese Funktion gehört nicht zum ausgewählten Modul.');
+    let normalized = this.validateBindingArgs(binding, args), resource: OperationBinding['resource'], effect: OperationBinding['effect'] = 'unknown';
+    const adapter = this.operationAdapters.get(id);
+    if (adapter) {
+      const prepared = await adapter.prepare(binding.action, normalized, context);
+      normalized = this.validateBindingArgs(binding, this.operationArgs(prepared.args)); resource = prepared.resource; effect = prepared.effect ?? 'unknown';
+    } else if (binding.kind === 'process') {
+      const processRecord = await this.startProcess(id);
+      context.signal.throwIfAborted();
+      const prepared = await this.runtimes.prepareOperation(processRecord, binding.action, normalized, context.signal);
+      normalized = this.validateBindingArgs(binding, this.operationArgs(prepared.args ?? normalized)); resource = prepared.resource;
+    }
+    context.signal.throwIfAborted(); this.assertAgentAccess(context); this.requireReady(id);
+    const fingerprint = createHash('sha256').update(JSON.stringify([this.options.operationHostFingerprint ?? '', record.fingerprint, binding.kind, binding.action, binding.descriptor.parameters])).digest('hex');
+    return { binding: { moduleId: id, action: binding.action, fingerprint, effect, ...(resource ? { resource: structuredClone(resource) } : {}) }, args: normalized, label: binding.descriptor.label || binding.action };
+  }
+  /** A status hook is separate from execution. Unknown outcomes never fall back to invoking the original tool. */
+  async reconcileOperation(binding: OperationBinding, args: Record<string, unknown>, operation: OperationIdentity, context: CapabilityContext): Promise<OperationReconciliation> {
+    context.signal.throwIfAborted();
+    if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
+    const provider = this.providerFor(binding.moduleId);
+    if (provider) {
+      if ((this.pending.get(provider.parentModuleId) ?? 0) > 0) return { state: 'unknown', detail: 'In dieser Quelle läuft noch ein Vorgang. Bitte seinen Abschluss abwarten; es wird kein weiterer Aufruf gestartet.' };
+      this.requireReady(provider.parentModuleId); await this.registry.verifyUnchanged(provider.parentModuleId);
+      this.pending.set(provider.parentModuleId, 1);
+      try { return provider.reconcileOperation ? await provider.reconcileOperation(binding, this.operationArgs(args), operation, context) : { state: 'unknown', detail: 'Diese Quelle bietet keinen Statusabgleich für frühere Aktionen an.' }; }
+      finally { this.pending.set(provider.parentModuleId, Math.max(0, (this.pending.get(provider.parentModuleId) ?? 1) - 1)); }
+    }
+    if ((this.pending.get(binding.moduleId) ?? 0) > 0 || this.runtimes.isBusy(binding.moduleId)) return { state: 'unknown', detail: 'In diesem Modul läuft noch ein Vorgang. Bitte seinen Abschluss abwarten; es wird keine Aktion wiederholt.' };
+    const record = this.requireReady(binding.moduleId);
+    const current = [...(this.bindings.get(binding.moduleId) ?? this.buildBindings(binding.moduleId)).values()].find(item => item.action === binding.action);
+    if (!current) throw new Error('Die frühere Modulfunktion ist nicht mehr verfügbar.');
+    const prepared = await this.prepareOperation(binding.moduleId, current.descriptor.name, args, context);
+    if (prepared.binding.fingerprint !== binding.fingerprint || prepared.binding.effect !== binding.effect || prepared.binding.resource?.id !== binding.resource?.id || canonicalOperationArgs(prepared.args) !== canonicalOperationArgs(this.operationArgs(args))) throw new Error('Die frühere Aktion gehört nicht mehr zu derselben Modul- und Ressourcenbindung.');
+    const adapter = this.operationAdapters.get(binding.moduleId);
+    this.pending.set(binding.moduleId, (this.pending.get(binding.moduleId) ?? 0) + 1);
+    try {
+      if (adapter?.reconcile) return await adapter.reconcile(binding.action, prepared.args, operation, context, binding);
+      if (current.kind === 'process') return await this.runtimes.reconcile(await this.startProcess(record.module.id), current.action, prepared.args, operation, context.signal);
+      return { state: 'unknown', detail: 'Dieses Modul bietet keinen Statusabgleich für frühere Aktionen an.' };
+    } finally { this.pending.set(binding.moduleId, Math.max(0, (this.pending.get(binding.moduleId) ?? 1) - 1)); }
+  }
+  private async beforeOperationDispatch(context: CapabilityContext): Promise<void> {
+    this.assertAgentAccess(context);
+    context.signal.throwIfAborted();
+    await context.validateOperation?.();
+    context.signal.throwIfAborted();
+    this.assertAgentAccess(context);
+    await context.beforeDispatch?.();
+    context.signal.throwIfAborted();
+    // Intent acknowledgement can yield to settings/resource changes. Recheck
+    // once more after fsync, then enter the actual handler without that gap.
+    await context.validateOperation?.();
+    context.signal.throwIfAborted();
+    this.assertAgentAccess(context);
   }
   private providerModules(): { provider: ModuleToolProvider<CapabilityContext>; summary: ModuleSummary }[] {
     const result: { provider: ModuleToolProvider<CapabilityContext>; summary: ModuleSummary }[] = [];
@@ -231,7 +377,27 @@ export class ModuleHost {
     const offset = query.offset ?? 0, limit = query.limit ?? 6, hasMore = offset + limit < all.length;
     return { moduleId: query.moduleId, tools: all.slice(offset, offset + limit).map(({ item }) => item.descriptor), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   }
+  /** Resolve only an approved module's declared resource. Roles come from its approved manifest. */
+  async resolveReference(raw: unknown, context: CapabilityContext): Promise<ModuleReference> {
+    const input = moduleReferenceInputSchema.parse(raw), record = this.requireReady(input.moduleId);
+    const contribution = record.module.manifest?.contributions.referenceTypes?.find(item => item.id === input.type);
+    if (record.module.manifest?.runtime.type !== 'process' || !contribution?.snapshotTool) throw new Error('Dieses Modul bietet keine lesbare Referenz dieses Typs an.');
+    await this.registry.verifyUnchanged(input.moduleId);
+    const result = await this.invoke(input.moduleId, contribution.snapshotTool, { id: input.id }, context, true);
+    context.signal.throwIfAborted();
+    this.requireReady(input.moduleId);
+    await this.registry.verifyUnchanged(input.moduleId);
+    if (this.requireReady(input.moduleId).fingerprint !== record.fingerprint) throw new Error('Das Modul wurde während des Lesens geändert. Bitte die Referenz erneut auswählen.');
+    // A backend cannot promote ordinary resource data to instructions by returning a role.
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Das Modul hat keine gültige Referenz zurückgegeben.');
+    const { usage: _ignoredUsage, ...snapshot } = result as Record<string, unknown>;
+    const reference = moduleReferenceSchema.parse({ ...snapshot, usage: contribution.usage ?? 'context' });
+    if (reference.moduleId !== input.moduleId || reference.type !== input.type || reference.id !== input.id) throw new Error('Das Modul hat eine andere Referenz zurückgegeben.');
+    if (contribution.usage === 'instructions' && (!reference.readable || reference.truncated || !reference.text?.trim())) throw new Error('Die Arbeitsanweisung konnte nicht vollständig gelesen werden. Bitte den Skill erneut öffnen.');
+    return reference;
+  }
   async invoke(id: string, name: string, args: unknown, context: CapabilityContext, fromUi = false): Promise<unknown> {
+    this.assertAgentAccess(context);
     if (this.changing) throw new Error('Die Modulverwaltung wird gerade geändert. Bitte danach erneut versuchen.');
     const provider = this.providerFor(id);
     if (provider) {
@@ -242,7 +408,13 @@ export class ModuleHost {
       this.touchProviderOffer(`${id}\0${name}`, offered);
       const parent = provider.parentModuleId;
       this.pending.set(parent, (this.pending.get(parent) ?? 0) + 1);
-      try { return await provider.invoke(id, name, args, context); }
+      try {
+        // Providers with operation preparation own their actual dispatch boundary
+        // (after any remote-tool approval). Older providers remain conservative.
+        if (!provider.prepareOperation) await this.beforeOperationDispatch(context);
+        this.assertAgentAccess(context);
+        return await provider.invoke(id, name, args, context);
+      }
       finally { this.pending.set(parent, Math.max(0, (this.pending.get(parent) ?? 1) - 1)); }
     }
     const record = this.requireReady(id);
@@ -253,26 +425,34 @@ export class ModuleHost {
     context.signal.throwIfAborted();
     this.pending.set(id, (this.pending.get(id) ?? 0) + 1);
     try {
-      if (binding.kind === 'capability') return await this.options.capabilities.invoke(binding.action, args, context);
+      this.assertAgentAccess(context);
+      if (binding.kind === 'capability') return await this.options.capabilities.invoke(binding.action, args, { ...context, validateOperation: async () => {
+        this.assertAgentAccess(context);
+        await context.validateOperation?.();
+        this.assertAgentAccess(context);
+      } });
       if (binding.kind === 'window') {
         const parsed = z.object({ action: z.enum(['minimize', 'toggleMaximize', 'close']) }).strict().parse(args);
+        await this.beforeOperationDispatch(context);
         return this.options.controlView(id, binding.action.slice(7), parsed.action);
       }
       if (binding.kind === 'view' || binding.kind === 'settings') {
         if (Object.keys(args).length) throw new Error('Diese Funktion benötigt keine Argumente.');
         const localId = binding.action.slice(binding.action.indexOf('.') + 1);
+        await this.beforeOperationDispatch(context);
         if (binding.kind === 'view') await this.openView(id, localId);
         else await this.options.openSettings(record.module.source === 'builtin' ? localId : `${id}:${localId}`);
         return { opened: true };
       }
       if (!binding.validate!(args)) throw new Error('Die Argumente entsprechen nicht dem deklarierten Modulschema.');
-      if (binding.confirmation && !await this.options.confirm(context, binding.confirmation.title ?? record.module.title, binding.confirmation.message)) return { cancelled: true };
+      if (binding.confirmation && !await this.options.confirm(context, binding.confirmation.title ?? record.module.title, binding.confirmation.message)) return { outcome: 'cancelled', cancelled: true, message: 'Die Modulfunktion wurde nicht ausgeführt.' };
       this.requireReady(id);
       let starting = this.activation.get(id);
       if (!starting) { starting = this.registry.verifyUnchanged(id).then(() => this.runtimes.start(record)); this.activation.set(id, starting); }
       await starting;
       context.signal.throwIfAborted();
-      return await this.runtimes.invoke(record, binding.action, args, context.signal);
+      await this.beforeOperationDispatch(context);
+      return await this.runtimes.invoke(record, binding.action, args, context.signal, context.operation);
     } finally { this.pending.set(id, Math.max(0, (this.pending.get(id) ?? 1) - 1)); }
   }
   async setEnabled(id: string, enabled: boolean, context: CapabilityContext): Promise<void> {

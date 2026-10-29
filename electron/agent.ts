@@ -1,6 +1,7 @@
 import { inspectToolResult, ModuleToolRuntime } from './agent-tools';
 import { streamTurn, requestCompleteTurn, ToolStreamError, type ProviderMessage, type StreamTurn, type ToolCall } from './stream';
 import { normalizeAgentSettings } from '../shared/agent-settings';
+import { createChatEvidenceCollector, type ChatEvidence, type ChatEvidenceStatus } from '../shared/chat-evidence';
 import type { AgentRunLimit, AgentSettings, AiConfig, ChatOptions, ToolEvent } from '../shared/model';
 import type { ModuleListing, ModuleQuery, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 
@@ -8,10 +9,14 @@ export type AgentDependencies = {
   settings?: AgentSettings;
   getModules(options?: ModuleQuery): ModuleListing | Promise<ModuleListing>;
   getModuleTools(options: ModuleToolQuery): ModuleToolListing | Promise<ModuleToolListing>;
-  invokeModuleTool(moduleId: string, toolName: string, args: unknown, signal: AbortSignal): Promise<unknown>;
+  invokeModuleTool(moduleId: string, toolName: string, args: unknown, signal: AbortSignal, callId?: string): Promise<unknown>;
+  onToolPlan?(calls: { id: string; moduleId: string; name: string; args: Record<string, unknown>; label: string }[], signal: AbortSignal): Promise<void>;
   onToolEvent?(event: ToolEvent): void;
   onReplaceText?(text: string): void;
   onLimitReached?(info: AgentRunLimit): void;
+  onEvidence?(evidence: ChatEvidence): void;
+  /** A host-controlled handoff ends this run before any more calls or provider turns. */
+  finishAfterTool?(): string | undefined;
 };
 const isDiscovery = (name: string) => name === 'find_modules' || name === 'get_module_tools';
 function callKind(calls: readonly ToolCall[]): AgentRunLimit['nextToolType'] {
@@ -32,6 +37,8 @@ export async function runAgent(
   const combined = AbortSignal.any([signal, timeout.signal]);
   const conversation = [...messages];
   const runtime = new ModuleToolRuntime(settings);
+  const evidence = createChatEvidenceCollector(deps.onEvidence);
+  let evidenceStatus: Exclude<ChatEvidenceStatus, 'running'> = 'completed';
   let toolRounds = 0, callCount = 0, discoveryCalls = 0, actionCalls = 0, visibleText = '', turnPrefix = '';
   let stoppedAtLimit = false, awaitingAction = false;
   let inFlightCall: { name: string; label: string; discovery: boolean } | undefined;
@@ -41,6 +48,7 @@ export async function runAgent(
   const stopAtLimit = (reason: AgentRunLimit['reason'], nextToolType: AgentRunLimit['nextToolType']) => {
     if (stoppedAtLimit) return;
     stoppedAtLimit = true;
+    evidenceStatus = 'limited';
     const limit = reason === 'tool_rounds' ? settings.maxToolRounds : reason === 'tool_calls' ? settings.maxToolCalls : settings.timeoutSeconds;
     const info: AgentRunLimit = { status: 'limit_reached', reason, toolRounds, toolCalls: callCount, discoveryCalls, actionCalls, elapsedMs: Math.max(0, Date.now() - startedAt), limit, nextToolType };
     const reached = reason === 'tool_rounds' ? `Das eingestellte Limit von ${limit} Werkzeugrunden ist erreicht.` : reason === 'tool_calls' ? `Das eingestellte Limit von ${limit} Werkzeugaufrufen ist erreicht.` : `Das eingestellte Zeitlimit von ${limit} Sekunden ist erreicht.`;
@@ -101,6 +109,20 @@ export async function runAgent(
         return;
       }
       if (deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
+      if (deps.onToolPlan) {
+        const plan = turn.toolCalls.flatMap(call => {
+          const tool = offer.active.get(call.function.name);
+          if (!tool || !offeredNames.has(call.function.name)) return [];
+          let args: unknown;
+          try { args = JSON.parse(call.function.arguments); } catch { return []; }
+          if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
+          return [{ id: call.id, moduleId: tool.moduleId, name: call.function.name, args: args as Record<string, unknown>, label: runtime.label(call.function.name, offer.active) }];
+        });
+        // Persist accepted, offered steps even when a configured execution limit
+        // stops this batch. Continuation cannot invent an unrecorded mutation.
+        if (plan.length) await withinDeadline(deps.onToolPlan(plan, combined));
+        if (checkAbort()) return;
+      }
       if (toolRounds >= settings.maxToolRounds) { stopAtLimit('tool_rounds', callKind(turn.toolCalls)); return; }
       if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls)); return; }
       toolRounds++;
@@ -113,19 +135,22 @@ export async function runAgent(
         if (discovery) discoveryCalls++; else actionCalls++;
         awaitingAction = !discovery;
         inFlightCall = { name: call.function.name, label: runtime.label(call.function.name, offer.active), discovery };
+        if (!discovery) evidence.start();
         const result = await withinDeadline(runtime.execute(call.function.name, call.function.arguments, {
           getModules: async query => { combined.throwIfAborted(); return deps.getModules(query); },
           getModuleTools: async query => { combined.throwIfAborted(); return deps.getModuleTools(query); },
           // A host result can arrive after the deadline. Preserve its actual
           // outcome before stopping; never discard a completed side effect.
-          invokeModuleTool: async (moduleId, name, args) => { combined.throwIfAborted(); return deps.invokeModuleTool(moduleId, name, args, combined); }
+          invokeModuleTool: async (moduleId, name, args) => { combined.throwIfAborted(); return deps.invokeModuleTool(moduleId, name, args, combined, call.id); }
         }, offeredNames, offer.active));
         let parsed: unknown;
         try { parsed = JSON.parse(result); } catch { parsed = { ok: false, error: 'Die Modulfunktion hat kein gültiges Ergebnis geliefert.' }; }
         const outcome = inspectToolResult(parsed), label = runtime.label(call.function.name, offer.active);
         const interruptedAction = !discovery && timeout.signal.aborted && !outcome.explicit && outcome.status === 'failed';
-        deps.onToolEvent?.({ name: call.function.name, status: interruptedAction ? 'uncertain' : outcome.status, label,
-          ...(interruptedAction ? { detail: 'Das Zeitlimit wurde während des Aufrufs erreicht. Bitte den tatsächlichen Status prüfen; der Aufruf wird nicht wiederholt.' } : outcome.detail ? { detail: outcome.detail } : {}) });
+        const event: ToolEvent = { name: call.function.name, status: interruptedAction ? 'uncertain' : outcome.status, label,
+          ...(interruptedAction ? { detail: 'Das Zeitlimit wurde während des Aufrufs erreicht. Bitte den tatsächlichen Status prüfen; der Aufruf wird nicht wiederholt.' } : outcome.detail ? { detail: outcome.detail } : {}) };
+        if (!discovery) evidence.record(event, result, offer.active.get(call.function.name)?.moduleId);
+        deps.onToolEvent?.(event);
         inFlightCall = undefined;
         conversation.push({ role: 'tool', tool_call_id: call.id, content: result });
         if (!interruptedAction) awaitingAction = false;
@@ -135,6 +160,8 @@ export async function runAgent(
           emitMessage(`${label}: ${statusText}.${outcome.detail ? ` ${outcome.detail}` : ''}`);
           return;
         }
+        const handoff = deps.finishAfterTool?.();
+        if (handoff) { emitMessage(handoff); return; }
         if (outcome.explicit && outcome.status === 'completed' && parsed && typeof parsed === 'object' && 'warning' in parsed && typeof parsed.warning === 'string' && parsed.warning.trim()) {
           const warning = parsed.warning.trim().slice(0, 500);
           const message = 'message' in parsed && typeof parsed.message === 'string' ? parsed.message.trim().slice(0, 500) : '';
@@ -144,16 +171,26 @@ export async function runAgent(
       }
     }
   } catch (error) {
+    evidenceStatus = 'failed';
     if (signal.aborted) {
-      if (inFlightCall) deps.onToolEvent?.({ name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'cancelled' : 'uncertain', detail: inFlightCall.discovery ? 'Die Modul-/Werkzeugsuche wurde gestoppt.' : 'Der Assistent wurde gestoppt. Der gestartete Vorgang kann noch laufen; bitte den tatsächlichen Status prüfen. Kein automatischer weiterer Versuch.' });
+      evidenceStatus = 'cancelled';
+      if (inFlightCall) {
+        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'cancelled' : 'uncertain', detail: inFlightCall.discovery ? 'Die Modul-/Werkzeugsuche wurde gestoppt.' : 'Der Assistent wurde gestoppt. Der gestartete Vorgang kann noch laufen; bitte den tatsächlichen Status prüfen. Kein automatischer weiterer Versuch.' };
+        if (!inFlightCall.discovery) evidence.record(event);
+        deps.onToolEvent?.(event);
+      }
       throw new DOMException('Abgebrochen', 'AbortError');
     }
     if (timeout.signal.aborted) {
-      if (inFlightCall) deps.onToolEvent?.({ name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'failed' : 'uncertain', detail: inFlightCall.discovery ? 'Das Zeitlimit wurde während der Modul-/Werkzeugsuche erreicht.' : 'Das Zeitlimit wurde während des Aufrufs erreicht. Der Vorgang kann noch laufen; bitte seinen Status prüfen. Kein automatischer weiterer Versuch.' });
+      if (inFlightCall) {
+        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'failed' : 'uncertain', detail: inFlightCall.discovery ? 'Das Zeitlimit wurde während der Modul-/Werkzeugsuche erreicht.' : 'Das Zeitlimit wurde während des Aufrufs erreicht. Der Vorgang kann noch laufen; bitte seinen Status prüfen. Kein automatischer weiterer Versuch.' };
+        if (!inFlightCall.discovery) evidence.record(event);
+        deps.onToolEvent?.(event);
+      }
       if (!awaitingAction && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
       stopAtLimit('timeout', 'none'); return;
     }
     if (error instanceof ToolStreamError && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); evidence.finish(evidenceStatus); }
 }

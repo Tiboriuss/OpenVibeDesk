@@ -6,6 +6,8 @@ export const moduleReferenceInputSchema = z.object({ moduleId: resourceId, type:
 export type ModuleReferenceInput = z.infer<typeof moduleReferenceInputSchema>;
 export const moduleReferenceSummarySchema = moduleReferenceInputSchema.extend({
   title: z.string().max(300), description: z.string().max(500).optional(), mediaType: z.string().max(160).optional(),
+  /** Assigned by the host from the approved contribution, never by a drag payload. */
+  usage: z.enum(['context', 'instructions']).optional(),
   size: z.number().finite().nonnegative().optional(), icon: z.string().max(40).optional()
 }).strict();
 export type ModuleReferenceSummary = z.infer<typeof moduleReferenceSummarySchema>;
@@ -20,7 +22,7 @@ export const moduleReferenceInputsSchema = z.array(moduleReferenceInputSchema).m
 export function moduleReferenceKey(reference: ModuleReferenceInput): string { return JSON.stringify([reference.moduleId, reference.type, reference.id]); }
 export function moduleReferenceInput(reference: ModuleReferenceInput): ModuleReferenceInput { return { moduleId: reference.moduleId, type: reference.type, id: reference.id }; }
 export function moduleReferenceSummary(reference: ModuleReferenceSummary): ModuleReferenceSummary {
-  return moduleReferenceSummarySchema.parse({ ...moduleReferenceInput(reference), title: reference.title, ...(reference.description !== undefined ? { description: reference.description } : {}), ...(reference.mediaType !== undefined ? { mediaType: reference.mediaType } : {}), ...(reference.size !== undefined ? { size: reference.size } : {}), ...(reference.icon !== undefined ? { icon: reference.icon } : {}) });
+  return moduleReferenceSummarySchema.parse({ ...moduleReferenceInput(reference), title: reference.title, ...(reference.description !== undefined ? { description: reference.description } : {}), ...(reference.usage !== undefined ? { usage: reference.usage } : {}), ...(reference.mediaType !== undefined ? { mediaType: reference.mediaType } : {}), ...(reference.size !== undefined ? { size: reference.size } : {}), ...(reference.icon !== undefined ? { icon: reference.icon } : {}) });
 }
 
 /** Drag payloads identify resources only. The module resolves metadata and content. */

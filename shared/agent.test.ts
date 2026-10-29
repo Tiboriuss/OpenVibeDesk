@@ -5,6 +5,7 @@ import { runAgent } from '../electron/agent';
 import { applyUiAction, initialState, type UiAction } from './actions';
 import type { AgentRunLimit, AiConfig, ToolEvent } from './model';
 import { defaultAgentSettings } from './agent-settings';
+import type { ChatEvidence } from './chat-evidence';
 import { WorkspaceCapabilityRegistry } from '../electron/workspace-capabilities';
 import { mailCapabilityDefinitions } from '../modules/ovd-mail/backend/capabilities';
 
@@ -146,6 +147,45 @@ describe('workspace agent integration', () => {
         expect(visible).toContain(outcome === 'failed' ? 'SMTP-Verbindung nicht eingerichtet.' : outcome === 'completed' ? 'Ein Empfänger wurde abgelehnt.' : 'Tatsächliches Ergebnis prüfen.');
       } finally { await server.close(); }
     }
+  });
+
+  it('ends an accepted host handoff before a later mutation in the same response, even without confirmations', async () => {
+    let requests = 0, writes = 0, pendingReformulation = false, visible = '';
+    const invoked: string[] = [], events: ToolEvent[] = [], evidence: ChatEvidence[] = [];
+    const server = await serve((req, res) => collect(req, () => {
+      requests++; res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (requests === 1) res.end(sse(call('load', 'get_module_tools', '{"moduleId":"ovd-assistant"}'), finishCalls));
+      else if (requests === 2) res.end(sse({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: 'handoff', type: 'function', function: { name: 'chat_reformulate', arguments: '{}' } },
+        { index: 1, id: 'unexpected-write', type: 'function', function: { name: 'synthetic_write', arguments: '{}' } }
+      ] }, finish_reason: null }] }, finishCalls));
+      else res.end(sse(finishText('Unexpected further provider turn.')));
+    }));
+    const handoffMessage = 'Die Antwort wird aus gespeicherten Belegen neu formuliert. Es wird kein Auftrag erneut ausgeführt.';
+    const deps = {
+      ...workspace(),
+      getModuleTools: async () => ({ moduleId: 'ovd-assistant', tools: ['chat_reformulate', 'synthetic_write'].map(name => ({ name, description: name, parameters: { type: 'object', properties: {}, additionalProperties: false } })), hasMore: false }),
+      invokeModuleTool: async (_moduleId: string, name: string) => {
+        invoked.push(name);
+        if (name === 'chat_reformulate') { pendingReformulation = true; return { outcome: 'completed', queued: true, actionsEnabled: false, sourceMessageId: 'answer-1' }; }
+        writes++; return { outcome: 'completed', written: true };
+      },
+      finishAfterTool: () => pendingReformulation ? handoffMessage : undefined,
+      onToolEvent: (event: ToolEvent) => events.push(event),
+      onEvidence: (snapshot: ChatEvidence) => evidence.push(snapshot)
+    };
+    try {
+      await runAgent({ ...server.config, confirmationMode: 'never' }, null, [{ role: 'user', content: 'Formuliere die vorherige Antwort neu.' }], { tier: 'smart' }, new AbortController().signal, text => { visible += text; }, deps);
+      expect(pendingReformulation).toBe(true);
+      expect(invoked).toEqual(['chat_reformulate']);
+      expect(writes).toBe(0);
+      expect(requests).toBe(2);
+      expect(visible).toBe(handoffMessage);
+      expect(events.map(event => [event.name, event.status])).toEqual([['get_module_tools', 'completed'], ['chat_reformulate', 'completed']]);
+      expect(evidence.at(-1)).toMatchObject({ status: 'completed', toolsUsed: true, outcomeCounts: { completed: 1, failed: 0, cancelled: 0, uncertain: 0 }, entries: [{ name: 'chat_reformulate', moduleId: 'ovd-assistant', status: 'completed' }] });
+      expect(evidence.at(-1)?.entries).toHaveLength(1);
+      expect(JSON.parse(evidence.at(-1)!.entries[0].result!)).toMatchObject({ outcome: 'completed', queued: true, actionsEnabled: false, sourceMessageId: 'answer-1' });
+    } finally { await server.close(); }
   });
 
   it.each([0, 1, 2])('uses only the configured %i effect-free protocol recovery attempts', async retries => {

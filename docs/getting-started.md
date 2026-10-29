@@ -82,6 +82,28 @@ Streaming is required for chat. Workspace control additionally requires the prov
 
 Messages, selected references, and tool results may be sent to that endpoint. Saved secrets are stored through the operating system's credential store.
 
+### Reformulate an answer
+
+Use **Reformulate answer** (**Antwort neu formulieren**) beside an assistant answer to create a new branch from its saved results. The branch is marked **Reformulated · no actions** (currently **Neu formuliert · keine Aktionen**). OVD sends the recorded context to the selected model to rewrite the answer; it does not run tools or reread source mail, files or integrations. **Without confirmations** does not change this behavior.
+
+New answers retain bounded result evidence locally for this purpose. For an older answer without usable evidence, OVD explains that it cannot safely reformulate it and leaves the original chat intact. There is no automatic retry of the original task. Your unsent text and reference selections remain with their existing chat while you inspect the branch.
+
+To change the task itself, use **Edit request as a new chat** (**Auftrag als neuen Chat bearbeiten**) on the user message. It opens an editable draft; selecting **Send** starts a new execution under your saved permissions. Continuing unfinished actions and durable action recovery are separate work in the [maturation plan](maturation-plan.md#r01-safe-regeneration-and-operation-lifecycle).
+
+You can also ask the Assistant to reformulate a stored answer through `chats.reformulate`. That queues the same text-only operation after the current agent run finishes successfully. Stopping the current run, an error or a reached limit discards the queued request. See [answer reformulation](architecture.md#answer-reformulation) for evidence limits and behavior after restart.
+
+### Continue an interrupted task
+
+**Continue task** (**Auftrag fortsetzen**) is available on eligible interrupted, failed, limited or uncertain recorded tasks. It opens a continuation branch using the saved action plan. Completed matching steps supply their historical results without running again. Only known-safe unfinished original steps with unchanged resource/code/approval bindings, plus explicitly audited reads, may execute. New unplanned changes require a separate request that you intentionally send. Continuing can therefore stop with a clear explanation when the source or module has changed; it is not a general “try everything again” action.
+
+A failed Mail search/query can be continued: those audited reads may display their results in the Mail window but neither change mailbox content/read status nor send a message. Current access permissions still apply. **Reformulate answer** remains completely tool-free and does not perform a search.
+
+Expand **Task status** (**Auftragsstatus**) to inspect the saved steps and whether a change is confirmed, absent or unknown. For an uncertain step, **Check status** (**Status prüfen**) asks its module for a status check without repeating the original tool. A module may be unable to prove what happened; that step remains blocked. For Mail, existing SMTP-acceptance and Sent-copy records remain authoritative, and a status check never sends or appends a message. **Without confirmations** does not bypass these recovery restrictions.
+
+After an app restart, interrupted actions are shown as uncertain and never restart automatically. Older tasks without a durable journal cannot be continued automatically. Keep the operation-journal file with the local profile; deleting it removes execution evidence rather than repairing an action. The journal's own durable writes do not imply that every chat/composer/settings save already has the broader recovery design planned under R05.
+
+The Assistant reaches the same workflow with `chats.continue`, `operations.get_run`, `operations.read_result`, `operations.retry` and `operations.reconcile`. During an explicit continuation, `operations.retry` selects one saved step by its action ID; the host supplies its exact original arguments and applies current permissions and recovery guards. It cannot start an arbitrary new step or run outside a continuation. Result retrieval is bounded and historical; it does not fetch current source content or execute the old task. See [durable operations](architecture.md#durable-operations-and-explicit-continuation) for limits and module requirements.
+
 ### Add a mail account
 
 Open **Settings → Email** (**Einstellungen → E-Mail**) and add an IMAP account. IMAP reception and SMTP sending are configured and checked separately within the same account group. Save both configurations if you intend to send mail. A successful IMAP connection alone does not configure SMTP.
@@ -125,6 +147,7 @@ Important entries include:
 | Path under `userData` | Purpose |
 | --- | --- |
 | `workspace.sqlite` | Workspace state and chat sessions; currently unencrypted. |
+| `operation-journal/operations.json` | Durable agent run/action records, ordinary frozen arguments and bounded redacted results; currently unencrypted. Preserve it to retain recovery guards. |
 | `modules/<module-folder>/module.json` | Custom module discovery. |
 | `module-settings.json` | Module approvals and disabled module IDs. |
 | `module-data/<moduleId>/` | Module-owned local data. |

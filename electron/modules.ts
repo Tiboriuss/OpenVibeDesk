@@ -32,10 +32,10 @@ function safeToolSchema(value: unknown): value is Record<string, unknown> {
 const tool = z.object({ name: capabilityName, label: text(120).optional(), description: text(500), parameters: z.record(z.string(), z.unknown()).refine(safeToolSchema, 'Begrenztes Objekt-JSON-Schema ohne Referenzen erforderlich.'), confirmation: z.object({ title: text(120).optional(), message: text(1000) }).strict().optional() }).strict();
 export const moduleManifestSchema = z.object({
   apiVersion: z.literal(1), id: moduleId, title: text(120), version: text(40).regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/), description: text(400),
-  keywords: z.array(text(40)).max(30).optional(), required: z.boolean().optional(), capabilities: z.array(capabilityName).max(100).default([]), permissions: z.array(text(100)).max(30).default([]),
+  keywords: z.array(text(40)).max(50).optional(), required: z.boolean().optional(), capabilities: z.array(capabilityName).max(100).default([]), permissions: z.array(text(100)).max(30).default([]),
   runtime: z.discriminatedUnion('type', [z.object({ type: z.literal('host-adapter'), adapter: localId }).strict(), z.object({ type: z.literal('process'), entry: relativeEntry }).strict()]),
   tools: z.array(tool).max(64).optional(),
-  contributions: z.object({ views: z.array(view).max(20).default([]), navigation: z.array(z.object({ id: localId, title: text(120), view: localId, icon: icon.optional(), order: z.number().int().min(-1000).max(1000).optional() }).strict()).max(20).default([]), settings: z.array(settings).max(20).default([]), referenceTypes: z.array(z.object({ id: localId, title: text(120) }).strict()).max(20).optional() }).strict().default({ views: [], navigation: [], settings: [] })
+  contributions: z.object({ views: z.array(view).max(20).default([]), navigation: z.array(z.object({ id: localId, title: text(120), view: localId, icon: icon.optional(), order: z.number().int().min(-1000).max(1000).optional() }).strict()).max(20).default([]), settings: z.array(settings).max(20).default([]), referenceTypes: z.array(z.object({ id: localId, title: text(120), snapshotTool: capabilityName.optional(), usage: z.enum(['context', 'instructions']).optional() }).strict()).max(20).optional() }).strict().default({ views: [], navigation: [], settings: [] })
 }).strict();
 
 export interface ModuleDiscoveryOptions {
@@ -89,7 +89,7 @@ async function resolveModuleFile(directory: string, entry: string): Promise<stri
   return resolved;
 }
 function validateContributions(manifest: ModuleManifest): void {
-  const sets = [manifest.capabilities, (manifest.tools ?? []).map(item => item.name), manifest.contributions.views.map(item => item.id), manifest.contributions.navigation.map(item => item.id), manifest.contributions.settings.map(item => item.id)];
+  const sets = [manifest.capabilities, (manifest.tools ?? []).map(item => item.name), manifest.contributions.views.map(item => item.id), manifest.contributions.navigation.map(item => item.id), manifest.contributions.settings.map(item => item.id), (manifest.contributions.referenceTypes ?? []).map(item => item.id)];
   if (sets.some(values => new Set(values).size !== values.length)) throw new Error('Das Modul enthält doppelte IDs oder Funktionen.');
   const views = new Set(manifest.contributions.views.map(item => item.id));
   if (manifest.contributions.navigation.some(item => !views.has(item.view))) throw new Error('Ein Moduleintrag verweist auf eine unbekannte Ansicht.');
@@ -101,6 +101,13 @@ function validateContributions(manifest: ModuleManifest): void {
     if (names.some(name => !name.startsWith(manifest.id + '.'))) throw new Error('Modulfunktionen müssen mit der eigenen Modul-ID beginnen.');
     if (manifest.capabilities.some(name => !names.includes(name)) || names.some(name => !manifest.capabilities.includes(name))) throw new Error('Funktionen und deklarierte Capabilities des Prozessmoduls stimmen nicht überein.');
     if (manifest.contributions.views.some(item => !item.entry) || manifest.contributions.settings.some(item => !item.entry)) throw new Error('Fremdmodulansichten benötigen eigene HTML-Einstiege.');
+    for (const reference of manifest.contributions.referenceTypes ?? []) {
+      if (reference.usage === 'instructions' && !reference.snapshotTool) throw new Error('Anweisungsreferenzen benötigen eine eigene Snapshot-Funktion.');
+      if (reference.snapshotTool) {
+        const snapshot = manifest.tools.find(item => item.name === reference.snapshotTool);
+        if (!snapshot || !snapshot.name.startsWith(manifest.id + '.') || snapshot.confirmation) throw new Error('Referenz-Snapshots benötigen eine eigene deklarierte Lesefunktion ohne Aktionsbestätigung.');
+      }
+    }
   }
 }
 

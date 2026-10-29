@@ -7,6 +7,7 @@ import { McpConfigStore } from './store';
 import { McpService } from './service';
 
 export interface McpModuleHost {
+  operationFingerprint?: string;
   dataRoot: string;
   verifySender(event: Electron.IpcMainInvokeEvent): void;
   verifySettings(event: Electron.IpcMainInvokeEvent): void;

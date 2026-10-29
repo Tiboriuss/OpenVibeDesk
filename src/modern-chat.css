@@ -25,6 +25,19 @@
 .message-ref>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .message-status { display:flex; align-items:center; gap:6px; margin-top:5px; font-size:10px; color:#64748c; }
 .message-status.failed { color:#a43748; }
+.operation-journal-content { display:grid; gap:7px; margin:7px 0 4px 8px; padding-left:10px; border-left:1px solid var(--line); font-size:11px; color:#61718a; }
+.operation-journal-content p { margin:0; line-height:1.45; }
+.operation-action { display:grid; gap:2px; padding:4px 0; }
+.operation-action-heading { display:flex; justify-content:space-between; align-items:baseline; gap:10px; color:#34445e; }
+.operation-action-heading>span { min-width:0; overflow-wrap:anywhere; }
+.operation-action-heading>small { flex:none; }
+.operation-action-detail { overflow-wrap:anywhere; }
+.operation-effect-unknown,.operation-action.uncertain .operation-action-heading { color:#94672d; }
+.operation-journal-error,.operation-action.failed .operation-action-heading { color:#a43748; }
+.operation-journal-content button { justify-self:start; width:auto; margin:3px 0 0; padding:4px 7px; border:1px solid var(--line); border-radius:5px; background:var(--paper); color:#435773; font:inherit; }
+.operation-journal-content button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.operation-journal-content button:disabled { opacity:.5; cursor:not-allowed; }
+.operation-journal-note { font-size:10px; }
 .message-status.streaming>span { width:5px; height:5px; border-radius:50%; background:var(--accent); animation:chat-pulse 1.2s ease-in-out infinite; }
 @keyframes chat-pulse { 50% { opacity:.35; } }
 .message-actions { display:flex; align-items:center; gap:2px; width:fit-content; margin-top:5px; opacity:0; pointer-events:none; transition:opacity .12s; }

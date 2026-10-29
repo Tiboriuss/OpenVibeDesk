@@ -86,6 +86,37 @@ exports.activate = async ({ moduleId, dataDirectory }) => ({
 
 Implement every manifest tool exactly once. Interface actions and the assistant must use the same functions; every implemented domain action available in the interface needs an assistant entry point. Validate domain inputs and resource IDs, exclude secrets from results, respect cancellation, and return bounded JSON with clear errors and search limits. Persist changes safely and never automatically repeat side effects after an uncertain result.
 
+### Durable action hooks
+
+Journalled agent calls receive an optional `context.operation` alongside `signal`: `{runId, actionId, attemptId, argsHash}`. The host owns these IDs. `actionId` identifies a logical recorded step across explicit continuation attempts; `attemptId` changes for a permitted new attempt. An unrelated new user request gets a separate root task, even if its text/arguments match. Normal UI calls may have no operation identity. IDs do not grant access or override confirmations.
+
+The activated process module can optionally provide two hooks in addition to `tools` and `dispose`:
+
+```js
+exports.activate = async () => ({
+  tools: {
+    'my-module.list': async (args, { signal, operation }) => ({ items: [] })
+  },
+  prepareOperation: async ({ toolName, args }, { signal }) => {
+    signal.throwIfAborted();
+    // Resolve omitted targets to stable explicit IDs here. When available,
+    // include resource: { id: stableResourceId, version: currentRevision }.
+    return { args };
+  },
+  reconcile: async ({ toolName, args, operation }, { signal }) => {
+    signal.throwIfAborted();
+    // Check durable receipts/status for this action; never call tools[toolName].
+    return { state: 'unknown', detail: 'No authoritative status is available.' };
+  }
+});
+```
+
+`prepareOperation` returns `{args?, resource?: {id, version}}`. Keep it free of business changes: resolve mutable selections, validate identity and report the revision without executing the requested action. The host validates the returned arguments against the original tool schema, freezes them and binds them to approved module code/schema. A process module cannot classify itself as effect-free simply by returning an annotation. Changed code or resource versions block execution of an old pending step.
+
+`reconcile` returns `{state: 'completed' | 'not_applied' | 'unknown', result?, detail?}`. Return `completed` only with authoritative evidence of the earlier effect; `not_applied` requires proof that no effect occurred. Otherwise retain `unknown`. A timeout, missing receipt or disconnected server is not proof of non-application. Store receipts under the module's own data directory or use a remote idempotency/status API where supported. A module without reliable hooks can execute a new approved request, but an uncertain earlier write remains blocked. Hooks are optional compatibility additions, not new manifest tools or automatic retries.
+
+The host's [operation journal](docs/architecture.md#durable-operations-and-explicit-continuation) stores ordinary arguments and bounded redacted results unencrypted. Never pass credentials as operation arguments or hide them in text/results; use the existing protected settings/credential flow. Public summaries omit arguments and result blobs; the Assistant retrieves bounded historical results deliberately through lazy tools. During explicit continuation, `operations.retry({actionId})` lets the host reuse the exact saved arguments without asking the model to reconstruct them. Whole catalogs and journal contents must not be injected into every prompt. A local journal cannot guarantee exactly-once remote execution across a crash, and approved process code still runs with normal user permissions rather than an OS sandbox.
+
 ### Module attention indicators
 
 The activation context also provides an optional attention publisher. Use it for a short hint that the user should visit the module:
@@ -141,6 +172,8 @@ parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*');
 
 They receive `ovd:result` with the same `requestId`, `ok`, and either `result` or `error`. Check `event.source === parent` when handling replies. The host accepts only the corresponding sender window and that module's own tools. The sample uses inline assets; arbitrary external content is not loaded. See the [view host](src/ModuleViewHost.tsx) and [sample view](examples/notes-module/notes.html).
 
+To select one of the module's own declared references in chat without dragging, send `parent.postMessage({ type: 'ovd:reference', requestId, reference: { moduleId, type, id } }, '*')`. The reply uses the same `ovd:result` envelope. The host validates the sender, owning module and reference, resolves its metadata, and opens chat with the reference selected. Selection does not submit a question or execute the reference's instructions. This is the keyboard-accessible alternative to a draggable resource.
+
 ### Execution model and package limits
 
 A separate backend process provides crash isolation, **not an operating-system sandbox**. Approved code runs with the user's normal permissions. Manifest `permissions` do not enforce filesystem or network restrictions; module authors are responsible for those accesses.
@@ -157,7 +190,30 @@ Built-in adapters with dynamic tools can register the generic [ModuleToolProvide
 
 References carry a stable resource ID and a bounded snapshot with an explicit scope and timestamp. The responsible module also needs a targeted content-reading tool with continuation so even long individual resources remain fully accessible. Opening a resource and reading its content are separate functions. Nested references are not resolved automatically.
 
-The shared [reference contract](shared/references.ts) carries only `{moduleId,type,id}` during drag and drop. Built-in host adapters register resolution through [ModuleReferenceRegistry](electron/module-references.ts); renderers cannot submit arbitrary text as a trusted snapshot. Preserve selection, removal, sending, local restoration, and chat branching. Declaring `referenceTypes` alone does not execute module code or install a resolver.
+The shared [reference contract](shared/references.ts) carries only `{moduleId,type,id}` during drag and drop. Use the `application/x-openvibedesk-reference` MIME type and a `text/plain` fallback containing `openvibedesk-reference:` followed by the same JSON object; set `effectAllowed` to `copy`. Do not include content, metadata or instruction roles in the payload. Built-in host adapters register resolution through [ModuleReferenceRegistry](electron/module-references.ts); renderers cannot submit arbitrary text as a trusted snapshot. Preserve selection, removal, sending, local restoration, and chat branching.
+
+A process module can declare a `snapshotTool` on a reference contribution:
+
+```json
+{
+  "referenceTypes": [
+    {
+      "id": "procedure",
+      "title": "Procedure",
+      "snapshotTool": "my-module.reference",
+      "usage": "instructions"
+    }
+  ]
+}
+```
+
+This is the `contributions.referenceTypes` portion of the manifest, not a complete module. Declare `my-module.reference` in `tools` and `capabilities` with parameters accepting `{ "id": "<stable-resource-id>" }`. It must be an own-module function without `confirmation`; resolving a reference is a read and must not change business data. Return a bounded [ModuleReference](shared/references.ts) with the same `moduleId`, `type` and `id`, a title, `readable`, `truncated`, `capturedAt` and available `text`. Include source revision/time where available. The host derives summaries from the snapshot without sending its text to the renderer. Declaring a type without `snapshotTool` does not install a process resolver.
+
+The host's `ModuleHost.resolveReference` invokes this declared function through the normal schema, approved-code, identity and cancellation checks. `ModuleReferenceRegistry` validates the snapshot before chat can use it. `usage` defaults to ordinary `context`. The host assigns it from the approved manifest and ignores any role supplied by the backend. Reference-type IDs must be unique, and process contributions with `usage: "instructions"` require a snapshot function.
+
+An explicitly selected `instructions` reference supplies reusable working instructions for the current submitted request, including other selected mail or file context. It does not grant workspace permissions, bypass confirmations or become a system instruction. Ordinary mail, file content and tool results remain source data. Instructions must be readable, complete and nonempty; an unavailable, deleted, disabled or changed module must not silently fall back to a historical instruction snapshot. Historical snapshots remain available as records, but do not automatically apply to later requests. Authors must still provide a targeted reading function for inspecting stored instructions.
+
+`snapshotTool`, `usage` and `ovd:reference` are additions to the current API-1 host contract. Older hosts with strict manifest validation do not accept the new contribution fields; distribute modules using them with a host build containing this reference support.
 
 ### Validate a module
 

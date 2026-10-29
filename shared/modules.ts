@@ -1,4 +1,5 @@
 /** Public module contracts contain metadata, never backend code, tool schemas or secrets. */
+export type { OperationBinding, OperationIdentity, OperationReconciliation } from './operations';
 export interface ModuleSummary { id: string; title: string; description: string; }
 export interface ModuleQuery { query?: string; offset?: number; limit?: number; }
 export interface ModuleListing { modules: ModuleSummary[]; hasMore: boolean; nextOffset?: number; }
@@ -9,7 +10,7 @@ export type ModuleIcon = 'mail' | 'file' | 'folder' | 'chat' | 'settings' | 'cal
 export interface ModuleViewContribution { id: string; title: string; renderer?: string; entry?: string; icon?: ModuleIcon; order?: number; }
 export interface ModuleNavigationContribution { id: string; title: string; view: string; icon?: ModuleIcon; order?: number; }
 export interface ModuleSettingsContribution { id: string; title: string; description?: string; keywords?: string[]; renderer?: string; entry?: string; icon?: ModuleIcon; order?: number; }
-export interface ModuleReferenceContribution { id: string; title: string; }
+export interface ModuleReferenceContribution { id: string; title: string; snapshotTool?: string; usage?: 'context' | 'instructions'; }
 export interface ModuleManifest {
   apiVersion: 1;
   id: string;

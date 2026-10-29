@@ -11,12 +11,13 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CapabilityContext } from '../../../electron/workspace-capabilities';
 import type { ModuleToolProvider } from '../../../shared/module-tool-provider';
 import type { ModuleSummary, ModuleToolDescriptor, ModuleToolQuery } from '../../../shared/modules';
+import type { OperationBinding } from '../../../shared/operations';
 import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, mcpServerInputSchema, mcpToolQuerySchema, type McpAuditEntry, type McpAuditPage, type McpAuditQuery, type McpCallResult, type McpServerConfig, type McpServerInput, type McpServerSummary, type McpToolInfo, type McpToolPermissions, type McpToolQuery } from '../../../shared/mcp';
 import { McpConfigStore, validateMcpUrl } from './store';
 
 type CachedTool = { name: string; info: McpToolInfo; validate?: ValidateFunction; fingerprint: string };
 type Connection = { id: string; generation: string; client: Client; transport: Transport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
-type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number };
+type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const fold = (value: string) => value.normalize('NFKC').toLocaleLowerCase('de-DE');
 
@@ -104,6 +105,23 @@ export class McpService {
         return { moduleId: query.moduleId, tools: ranked.slice(offset, offset + limit).map(item => item.tool), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
       },
       getTool: (moduleId, name) => this.toolsForModule(moduleId).find(tool => tool.name === name),
+      getOperationTool: binding => {
+        const id = this.serverIdForModule(binding.moduleId), tool = this.requireConnection(id).tools.get(binding.action);
+        return tool && this.allowed(id, tool) && this.operationBinding(id, tool).fingerprint === binding.fingerprint ? this.descriptor(id, tool) : undefined;
+      },
+      prepareOperation: async (moduleId, name, args, context) => {
+        this.assertActive(context);
+        const id = this.serverIdForModule(moduleId), connection = this.requireConnection(id);
+        const tool = [...connection.tools.values()].find(item => this.allowed(id, item) && this.descriptor(id, item).name === name);
+        if (!tool || !tool.validate!(args)) throw new Error('Die MCP-Funktion oder ihre Argumente sind nicht mehr in der freigegebenen Version verfügbar.');
+        return { binding: this.operationBinding(id, tool), args: structuredClone(args), label: (tool.info.title ?? tool.name).slice(0, 120) };
+      },
+      reconcileOperation: async (binding, _args, _operation, context) => {
+        this.assertActive(context);
+        const id = this.serverIdForModule(binding.moduleId), tool = this.requireConnection(id).tools.get(binding.action);
+        if (!tool || !this.allowed(id, tool) || this.operationBinding(id, tool).fingerprint !== binding.fingerprint) throw new Error('MCP-Konfiguration, Schema oder Freigabe haben sich geändert. Der alte Aufruf wird nicht erneut ausgeführt.');
+        return { state: 'unknown', detail: 'Dieser MCP-Server bietet keinen verlässlichen Abgleich über die OVD-Aktions-ID. Bitte den tatsächlichen Status im verbundenen System prüfen; der Aufruf wird nicht wiederholt.' };
+      },
       invoke: async (moduleId, name, args, context) => {
         const id = this.serverIdForModule(moduleId), connection = this.requireConnection(id);
         const tool = [...connection.tools.values()].find(tool => this.allowed(id, tool) && this.descriptor(id, tool).name === name);
@@ -298,6 +316,10 @@ export class McpService {
     const connection = this.requireConnection(id), config = this.store.get(id), revision = hash(`${connection.generation}\0${JSON.stringify(config)}\0${tool.fingerprint}`);
     return { name: `mcp_${hash(id).slice(0, 10)}_${revision.slice(0, 32)}`, description: tool.info.description || `MCP-Werkzeug ${tool.name}.`, parameters: JSON.parse(JSON.stringify(tool.info.inputSchema)), label: (tool.info.title ?? tool.name).slice(0, 120) };
   }
+  private operationBinding(id: string, tool: CachedTool): OperationBinding {
+    // Reconnecting changes the offered name, not the durable logical action.
+    return { moduleId: `ovd-mcp.${id}`, action: tool.name, fingerprint: hash(`ovd-mcp-operation-v1\0${this.host.operationFingerprint ?? 'unversioned'}\0${JSON.stringify(this.store.get(id))}\0${tool.fingerprint}`), effect: 'unknown' };
+  }
   private serverIdForModule(moduleId: string) { if (!moduleId.startsWith('ovd-mcp.')) throw new Error('Unbekannte MCP-Quelle.'); return mcpServerIdSchema.parse(moduleId.slice('ovd-mcp.'.length)); }
   private toolsForModule(moduleId: string): ModuleToolDescriptor[] { const id = this.serverIdForModule(moduleId), connection = this.connections.get(id); if (!this.active || !connection || connection.status !== 'connected' || this.changing.has(id)) return []; return [...connection.tools.values()].filter(tool => this.allowed(id, tool)).map(tool => this.descriptor(id, tool)); }
   private sourceModules(): ModuleSummary[] { if (!this.active) return []; return this.listServers().filter(server => server.status === 'connected' && server.allowedToolCount > 0).map(server => ({ id: `ovd-mcp.${server.id}`, title: server.name, description: server.description || 'Verbundener MCP-Server mit ausdrücklich freigegebenen Werkzeugen.' })); }
@@ -315,6 +337,12 @@ export class McpService {
     if (current !== connection || !currentTool || !this.allowed(id, currentTool) || this.descriptor(id, currentTool).name !== offered) throw new Error('MCP-Verbindung, Schema oder Freigabe wurden geändert. Bitte das Werkzeug neu laden.');
     let sent = false;
     try {
+      await context.validateOperation?.();
+      await context.beforeDispatch?.();
+      await context.validateOperation?.();
+      this.assertActive(context);
+      const latest = this.requireConnection(id), latestTool = latest.tools.get(name);
+      if (latest !== connection || !latestTool || !this.allowed(id, latestTool) || this.descriptor(id, latestTool).name !== offered) throw new Error('MCP-Verbindung, Schema oder Freigabe wurden während der Speicherung geändert. Es wurde kein MCP-Aufruf gestartet.');
       context.signal.throwIfAborted(); sent = true;
       const result = await connection.client.callTool({ name, arguments: args as Record<string, unknown> }, undefined, { signal: context.signal, timeout: this.timeout(), resetTimeoutOnProgress: false });
       const outcome = result.isError === true ? 'failed' : 'completed'; this.audit(server, 'call', outcome, start, name); return callResult(id, name, outcome, connection.secrets, result);

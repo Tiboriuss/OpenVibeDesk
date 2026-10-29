@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ModuleRuntimeRecord } from './modules';
 import { attentionKeySchema, moduleAttentionInputSchema, type ModuleAttentionInput } from '../shared/module-attention';
+import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const INVOCATION_TIMEOUT_MS = 60_000;
@@ -112,7 +113,29 @@ export class ModuleRuntimeManager {
     try { pending.resolve(JSON.parse(message.json)); } catch { pending.reject(new Error('Das Modul hat kein gültiges JSON-Ergebnis geliefert.')); }
   }
 
-  async invoke(record: ModuleRuntimeRecord, toolName: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
+  async invoke(record: ModuleRuntimeRecord, toolName: string, args: unknown, signal?: AbortSignal, operation?: OperationIdentity): Promise<unknown> {
+    return this.request(record, 'invoke', toolName, args, signal, operation);
+  }
+  async prepareOperation(record: ModuleRuntimeRecord, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ args?: Record<string, unknown>; resource?: OperationBinding['resource'] }> {
+    const result = await this.request(record, 'prepare', toolName, args, signal);
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Das Modul hat keine gültige Aktionsbindung geliefert.');
+    const raw = result as Record<string, unknown>;
+    if (Object.keys(raw).some(key => !['args', 'resource'].includes(key)) || (raw.args !== undefined && (!raw.args || typeof raw.args !== 'object' || Array.isArray(raw.args)))) throw new Error('Das Modul hat keine gültige Aktionsbindung geliefert.');
+    if (raw.resource !== undefined) {
+      if (!raw.resource || typeof raw.resource !== 'object' || Array.isArray(raw.resource)) throw new Error('Das Modul hat keine gültige Ressourcenbindung geliefert.');
+      const resource = raw.resource as Record<string, unknown>;
+      if (Object.keys(resource).some(key => !['id', 'version'].includes(key)) || typeof resource.id !== 'string' || !resource.id || resource.id.length > 1024 || typeof resource.version !== 'string' || !resource.version || resource.version.length > 1024) throw new Error('Das Modul hat keine gültige Ressourcenbindung geliefert.');
+    }
+    return { ...(raw.args ? { args: raw.args as Record<string, unknown> } : {}), ...(raw.resource ? { resource: raw.resource as OperationBinding['resource'] } : {}) };
+  }
+  async reconcile(record: ModuleRuntimeRecord, toolName: string, args: unknown, operation: OperationIdentity, signal?: AbortSignal): Promise<OperationReconciliation> {
+    const result = await this.request(record, 'reconcile', toolName, args, signal, operation);
+    if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Das Modul hat keinen gültigen Statusabgleich geliefert.');
+    const raw = result as Record<string, unknown>;
+    if (!['completed', 'not_applied', 'unknown'].includes(String(raw.state)) || (raw.detail !== undefined && (typeof raw.detail !== 'string' || raw.detail.length > 1000))) throw new Error('Das Modul hat keinen gültigen Statusabgleich geliefert.');
+    return { state: raw.state as OperationReconciliation['state'], ...(Object.hasOwn(raw, 'result') ? { result: raw.result } : {}), ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}) };
+  }
+  private async request(record: ModuleRuntimeRecord, kind: 'invoke' | 'reconcile' | 'prepare', toolName: string, args: unknown, signal?: AbortSignal, operation?: OperationIdentity): Promise<unknown> {
     signal?.throwIfAborted();
     const runtime = this.runtimes.get(record.module.id);
     if (!runtime || runtime.fingerprint !== record.fingerprint || record.module.status !== 'ready') throw new Error('Das Modul ist nicht gestartet oder seine Freigabe ist nicht mehr gültig.');
@@ -134,7 +157,9 @@ export class ModuleRuntimeManager {
         timer: setTimeout(() => this.fail(runtime, 'Eine Modulfunktion hat die Frist von 60 Sekunden überschritten. Ihr Ergebnis ist unklar; es wird kein weiterer Versuch gestartet.'), INVOCATION_TIMEOUT_MS) };
       runtime.pending.set(id, pending);
       signal?.addEventListener('abort', onAbort, { once: true });
-      try { runtime.child!.postMessage({ type: 'invoke', id, toolName, json }); }
+      // Each RPC keeps its own transport ID even when reconciliation references
+      // an older action/attempt. A late result can only resolve its original RPC.
+      try { runtime.child!.postMessage({ type: kind, id, toolName, json, ...(operation ? { operation } : {}) }); }
       catch { this.fail(runtime, 'Der Modulaufruf konnte nicht übertragen werden.'); }
       if (signal?.aborted) onAbort();
     });

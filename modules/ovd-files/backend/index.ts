@@ -1,5 +1,8 @@
 import { app, dialog, ipcMain, type BrowserWindow } from 'electron';
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
+import type { ModuleOperationAdapter } from '../../../electron/module-host';
 import type { CapabilityContext, WorkspaceCapabilityRegistry } from '../../../electron/workspace-capabilities';
 import { fileIdSchema, fileOpenRequestSchema, fileChooseRequestSchema, type FileChooseKind, type FileListRequest, type FileOpenRequest, type FileOpenResult, type FileReadRequest } from '../../../shared/files';
 import type { ModuleReference, ModuleReferenceSummary } from '../../../shared/references';
@@ -85,11 +88,28 @@ export function createFilesModule(host: FilesModuleHost) {
     ipcMain.handle('files:choose-entry', (event, kind: unknown) => { host.verifySender(event); return choose(fileChooseRequestSchema.parse({ kind }).kind, host.uiOperationContext(event)); });
     ipcMain.handle('files:reference', (event, id: unknown) => { host.verifySender(event); return reference(fileIdSchema.parse(id), host.uiOperationContext(event)); });
   }
+  const operationAdapter: ModuleOperationAdapter = {
+    async prepare(action, raw, context) {
+      assertActive(context);
+      const args = { ...raw };
+      let source: string | undefined;
+      if (action === 'files.list' || action === 'files.open' && !args.id) {
+        args.path ??= service.documents();
+        source = await service.resolve(String(args.path), context.signal);
+        args.path = source;
+      } else if (typeof args.id === 'string') source = await service.pathForId(args.id, context.signal);
+      if (!source) return { args, effect: 'write' };
+      const stat = await fs.stat(source);
+      const version = createHash('sha256').update(JSON.stringify([stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs])).digest('hex');
+      return { args, effect: action === 'files.list' || action === 'files.read' ? 'read' : 'write', resource: { id: createHash('sha256').update(source).digest('hex'), version } };
+    },
+    async reconcile() { return { state: 'unknown', detail: 'Für diese Ansichts- oder Referenzänderung gibt es keinen verlässlichen nachträglichen Ausführungsnachweis. Sie wird nicht automatisch wiederholt.' }; }
+  };
   return {
     async initialize() { await service.initialize(); active = true; },
     activate() { active = true; },
     deactivate() { active = false; },
-    registerCapabilities, registerIpc, list, read, open, choose, getReference, snapshotReference
+    registerCapabilities, registerIpc, list, read, open, choose, getReference, snapshotReference, operationAdapter
   };
 }
 export type FilesModule = ReturnType<typeof createFilesModule>;

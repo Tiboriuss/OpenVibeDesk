@@ -49,7 +49,7 @@ These screenshots show the current app with **fictional sample data in isolated 
 
 | Area | Current scope |
 | --- | --- |
-| **Assistant** | Streaming, Markdown, session management, chat branches, mail/chat/file references, time and calculation tools, and configurable agent execution. |
+| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable agent execution. |
 | **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML/text reading, attachments, local drafts, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
@@ -107,6 +107,8 @@ Custom modules are discovered at startup under `<userData>/modules/`. Their exac
 
 - **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
 - **AI provider:** Messages, selected references, and requested tool results are sent to the configured provider. A local desktop app can use either a local or remote model endpoint.
+- **Answer reformulation:** Uses saved snapshots and bounded result evidence in a text-only branch, even with **Without confirmations** enabled. Older answers without usable evidence cannot be reformulated safely. Editing and sending a request starts a separate new execution. See [the chat workflow](docs/getting-started.md#reformulate-an-answer).
+- **Task recovery:** A separate unencrypted local journal records agent actions before dispatch and their known outcomes. Explicit continuation reuses completed results, restricts retries to eligible original steps, and blocks unknown effects until a module can reconcile them. New unplanned changes require a new request; restarting the app never resumes actions automatically. See [task continuation](docs/getting-started.md#continue-an-interrupted-task).
 - **Mail:** OAuth, full synchronization, HTML composition and a durable offline cache are not implemented. The HTML reader supports a restricted subset of sender formatting; remote images start blocked and are enabled per message. SMTP server acceptance does not guarantee delivery. Sent-copy filing has its own visible status and retry; a filing failure never triggers another SMTP send.
 - **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
 - **Extensions:** MCP OAuth, resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
@@ -121,8 +123,8 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 
 | Priority | Focus | Next work |
 | --- | --- | --- |
-| First | Trustworthy existing workflows | Prevent action replay on answer regeneration; bound complete agent context; add long-content continuation, aggregate memory budgets and visible save recovery. |
-| Foundation | Storage and module lifecycle | Add migrations, backup/restore, durable operation records and complete external-module reference/settings contracts; assess current MCP compatibility early. |
+| First | Trustworthy existing workflows | Bound complete agent context (R02); add long-content continuation (R03), aggregate memory budgets and visible save recovery. Tool-free answer reformulation (R01a) is implemented and practically verified. |
+| Foundation | Storage and module lifecycle | Add migrations, backup/restore and complete external-module reference/settings contracts; assess current MCP compatibility early. Durable operation records and restricted explicit continuation (R01b) are implemented and practically verified. |
 | Daily use | Existing modules and interface | Complete everyday mail actions, synchronization and composition; refine Chat, Files, MCP, settings and accessibility. |
 | Release | Reproducible distribution | Validate signed macOS packages and updates first; make broader platform claims only after practical verification. |
 
