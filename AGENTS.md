@@ -2,7 +2,7 @@
 
 - Validate features practically in the application first. Do not routinely add automated tests; match further checks to the user's needs.
 - Respect existing workspace changes and user data.
-- Do not introduce GitHub Actions workflows. Run checks locally and in proportion to the affected workflow.
+- Keep routine checks local and proportionate; do not introduce push/PR test workflows. The user-authorized exception is the release installer workflow: build unsigned macOS/Windows packages when a release is published, plus an explicit manual build for validation. Keep that exception focused on packaging and release assets.
 - Maintain repository documentation in English. Keep relative links and heading anchors valid, link new guides from the [documentation index](docs/README.md), and distinguish implemented features from design targets. Keep actual code identifiers and interface labels intact when citing them.
 
 # Settings

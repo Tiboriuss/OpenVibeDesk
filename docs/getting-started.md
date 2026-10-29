@@ -2,7 +2,37 @@
 
 [Documentation](README.md) · [Repository overview](../README.md) · [Contributing](../CONTRIBUTING.md)
 
-OpenVibeDesk is an early desktop app for one user. macOS development has been exercised in practice. Windows and Linux packaging targets exist, but wider platform and installer validation is still pending.
+OpenVibeDesk is an early desktop app for one user. The release workflow builds unsigned macOS and Windows installers. macOS development has been exercised in practice; build automation alone does not establish full platform or upgrade validation. Linux remains a local packaging target.
+
+## Install or update the app
+
+Open [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) and wait for the release build to finish. Select the installer matching your computer:
+
+| Computer | Download |
+| --- | --- |
+| Mac with Apple Silicon (M-series) | macOS `arm64` DMG |
+| Mac with an Intel processor | macOS `x64` DMG |
+| Windows with an Intel/AMD 64-bit processor | Windows `x64` EXE |
+
+The first releases are unsigned; the Mac app is also not notarized. macOS Gatekeeper or Windows SmartScreen may warn or block opening. Only approve the specific downloaded OVD app if you trust its source. Do not disable operating-system protections globally. The release assets include checksums for verifying downloaded files; see [Releases and installers](releases.md).
+
+### macOS
+
+Open the DMG and drag **OpenVibeDesk.app** to **Applications**. Eject the disk image, then open the copy in Applications. If macOS blocks a trusted download, use the app-specific approval offered in **System Settings → Privacy & Security**; its availability depends on system policy.
+
+For a newer version, finish running work, quit OVD completely, and copy the new **OpenVibeDesk.app** to the same Applications folder. Choose **Replace** when Finder asks. Keep the same application name rather than creating a second copy with a different name. The local profile is stored outside the application bundle and is retained.
+
+### Windows
+
+Run the EXE installer using your usual Windows account. Installation uses the per-user app location and does not require an all-users deployment. Launch OVD from its shortcut after setup finishes.
+
+For a newer version, finish running work, quit OVD, and run the new installer using the same account. It recognizes the existing OVD installation and replaces its application files. Reuse the existing installation location. You do not need to uninstall first; settings, drafts, chats, installed modules and credentials remain separate from the installer files.
+
+### Data and update scope
+
+These are manual installer upgrades. OVD currently has no automatic update checker or in-app installer. Application releases and updates to optional modules are separate: manage module updates under **Settings → Modules**.
+
+App updates retain the `ai-workspace` user profile and existing OS credential entries. See [Local data](#local-data) for storage locations. Do not delete that profile when replacing the app. While OVD is still an early version, keep a backup of important local data before changing versions; downgrading to an older version is not an established recovery method.
 
 ## Install the development tools
 

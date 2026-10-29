@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-artifacts/
+release-publish/
 *.log
 .DS_Store
 .env

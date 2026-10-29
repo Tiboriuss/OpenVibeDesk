@@ -58,6 +58,12 @@ Mail, chat, files, and settings open in separate windows. The dock and its modul
 
 Modules can signal new activity with a small dot on their Dock and Settings icons: it briefly breathes, then stays visible until acknowledged. The Mail module uses this for newly observed Inbox activity.
 
+## Download and install
+
+Installer downloads appear on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) after the release build finishes: a macOS DMG for Apple Silicon, a macOS DMG for Intel, and a Windows x64 installer. These early packages are unsigned and macOS packages are not notarized, so the operating system may warn or require approval before opening them.
+
+To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and OS-stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Updates are installed manually; there is no in-app automatic updater yet.
+
 ## Run locally
 
 Install **Node.js 22.13 or newer** and **pnpm 11.25.0**, then run these commands in a checkout of this repository:
