@@ -8,9 +8,9 @@ OpenVibeDesk is an open-source project for people who want to get their daily wo
 
 The assistant works with the same app you see. Ask it to find an email, and it can open that message in the mail window. Ask for a reply, and it can prepare an editable draft. The interface and assistant use the same functions, so the conversation connects to visible work you can inspect and continue yourself.
 
-This is an early, single-user development version. Development and practical use have been exercised on **macOS**. Windows and Linux build targets exist; broader platform, installer, and release validation is still pending. The application interface is currently primarily German; this repository's documentation is maintained in English.
+This is an early, single-user **alpha**. Releases include installers for **macOS Apple Silicon, macOS Intel and Windows x64**. Development and practical use have been exercised on macOS; automated package checks do not establish complete Windows runtime or upgrade validation. Linux remains a local build target. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-[Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md) · [Contributing and modules](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Add modules](#modules-and-a-small-ai-context) · [Download](#download-and-install) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md)
 
 ## Who we are building this for
 
@@ -26,7 +26,7 @@ This is the direction of the project. The early version already has Mail, Files,
 
 Read a message, bring it into Chat as a reference, and let the Assistant prepare a reply in a separate draft window. Files and approved MCP tools join the same workspace.
 
-These screenshots show the current app with **fictional sample data in isolated profiles**. The interface is currently primarily German. Click any image to view it at full size.
+These screenshots show the running app with **fictional sample data in isolated profiles**, captured on 28 October 2026. They illustrate the workspace; later layout refinements and the module catalog are not pictured. The interface is currently primarily German. Click any image to view it at full size.
 
 | Assistant | Mail |
 | --- | --- |
@@ -53,10 +53,44 @@ These screenshots show the current app with **fictional sample data in isolated 
 | **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML/text reading, attachments, local drafts, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
+| **Module management** | Multiple public/private repositories, searchable catalogs, module installation and updates, local code approval, and shared Assistant access. |
 
 Mail, chat, files, and settings open in separate windows. The dock and its module order are configurable. Settings use compact groups and global search.
 
 Modules can signal new activity with a small dot on their Dock and Settings icons: it briefly breathes, then stays visible until acknowledged. The Mail module uses this for newly observed Inbox activity.
+
+## Modules and a small AI context
+
+OVD can grow with the tools a person or small business actually uses. A module can contribute its own windows, settings, navigation entries, chat references and Assistant tools. Its interface and the Assistant call the same functions. Installing a module does not require modifying the chat or adding its entire tool catalog to every conversation.
+
+| Extension | How it fits |
+| --- | --- |
+| **Included modules** | The Assistant (`ovd-assistant`) is required. [Mail](modules/ovd-mail/), [Files](modules/ovd-files/) and [MCP](modules/ovd-mcp/README.md) ship with the app and can be disabled individually. |
+| **Modules from repositories** | Add independent modules from public/private GitHub repositories or HTTPS catalogs. Each source can publish multiple modules, with their own versioned updates. |
+| **MCP servers** | Connect external tools through the included MCP module. An MCP server is configured there; it is not an OVD module package and does not automatically add its own OVD interface. |
+
+### Install your first additional module
+
+1. Open **Settings → Modules → Module sources** (**Einstellungen → Module → Modulquellen**).
+2. Choose **Repository hinzufügen** and save [OpenVibeDesk-Modules](https://github.com/Tiboriuss/OpenVibeDesk-Modules) as the source URL. The public catalog needs no token.
+3. Select **Katalog laden**, choose a module and click **Installieren**.
+4. Review and select **Freigeben & aktivieren**. Its declared views, settings and tools become available in the running app.
+
+The separate [module repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) currently publishes **Notes** (`sample-notes`), a small example of shared UI/Assistant functions, and **Skill Library** (`skill-library`), for storing and explicitly attaching reusable working instructions to a request. These are optional downloads, not bundled features. Check each module's documentation for host requirements.
+
+Reload the catalog to check for updates, then select **Aktualisieren** for the chosen module. Updates preserve its separate data directory, but changed code needs renewed approval before running. Module updates and application installer upgrades are separate; neither happens automatically. See the [repository guide](docs/module-repositories.md) for the complete workflow and troubleshooting.
+
+### Private modules for your company
+
+Use the same settings to add a private company repository alongside public sources. A repository access token is entered locally and kept in the OS credential store. An IT service provider can publish a prebuilt ERP or order-management module for its customers without putting that integration in the OVD core. The repository supplies the module list and packages; each module owns its business functions, interface and Assistant integration.
+
+Start with the [module authoring contract](CONTRIBUTING.md#building-modules), the [Notes example](examples/notes-module/README.md), and the [publishing guide](docs/module-repositories.md#publish-a-module). Packages are checked before installation, and third-party code requires local approval. Approved backends run with the user's OS rights; they are not sandboxed plugins.
+
+### Discover only what the task needs
+
+The Assistant initially sees short descriptions of available modules and just two discovery tools: `find_modules` finds relevant modules; `get_module_tools` loads the selected functions. Repository catalogs and unused schemas stay out of the initial context. References carry a stable resource ID and a bounded snapshot; the owning module supplies reading tools for more content.
+
+The Assistant can also inspect module sources, refresh catalogs, find updates and request installation. Source credentials and code approval stay in the local interface. See [repository control through Chat](docs/module-repositories.md#assistant-control).
 
 ## Download and install
 
@@ -88,21 +122,6 @@ Configure an OpenAI-compatible endpoint and models in **Settings → AI & connec
 
 The build targets do not imply verified cross-compilation, signing, or production-ready distribution. See [development and validation](CONTRIBUTING.md#development).
 
-## Modules and a small AI context
-
-Under **Settings → Modules**, add public or private GitHub repositories or HTTPS catalogs, browse their modules, and install or update selected versions. Access tokens stay in the OS credential store; downloaded code requires explicit local approval. See [module repositories](docs/module-repositories.md) for setup and publishing your own company modules.
-
-The **Assistant is the required module**, `ovd-assistant`. [Mail](modules/ovd-mail/), [Files](modules/ovd-files/), and [MCP](modules/ovd-mcp/README.md) are optional modules with their own domain logic, interfaces, and registration.
-
-The assistant initially receives short module descriptions and two discovery tools:
-
-1. `find_modules` finds modules relevant to the task.
-2. `get_module_tools` loads the specific tools needed before calling them.
-
-Complete tool catalogs are loaded only as needed. References carry a stable resource ID and a bounded snapshot; more content can be retrieved explicitly.
-
-Custom modules are discovered at startup under `<userData>/modules/`. Their exact file contents require local approval before execution. Connected MCP servers with approved tools use the same discovery mechanism. See the [module contract](CONTRIBUTING.md#building-modules), [sample notes module](examples/notes-module/README.md), and [sample MCP server](examples/mcp-server/README.md).
-
 ## Data and current limitations
 
 - **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
@@ -124,9 +143,9 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 | Priority | Focus | Next work |
 | --- | --- | --- |
 | First | Trustworthy existing workflows | Bound complete agent context (R02); add long-content continuation (R03), aggregate memory budgets and visible save recovery. Tool-free answer reformulation (R01a) is implemented and practically verified. |
-| Foundation | Storage and module lifecycle | Add migrations, backup/restore and complete external-module reference/settings contracts; assess current MCP compatibility early. Durable operation records and restricted explicit continuation (R01b) are implemented and practically verified. |
+| Foundation | Storage and module lifecycle | Add migrations and backup/restore; finish module compatibility and settings lifecycle contracts; assess MCP compatibility. External reference resolution, explicit instruction references and durable task continuation are implemented. |
 | Daily use | Existing modules and interface | Complete everyday mail actions, synchronization and composition; refine Chat, Files, MCP, settings and accessibility. |
-| Release | Reproducible distribution | Validate signed macOS packages and updates first; make broader platform claims only after practical verification. |
+| Release | Reproducible distribution | macOS/Windows installers and integrity checks are available. Trusted publisher signing, notarization and broader runtime/upgrade validation remain. |
 
 The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.
 

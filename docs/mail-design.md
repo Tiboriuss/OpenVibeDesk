@@ -15,7 +15,7 @@ The initial protocol foundation is **IMAP for reading and synchronization** and 
 | Accounts | Multiple editable account groups, separate IMAP/SMTP checks, TLS and OS credential storage. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
 | Reading | Account/folder navigation, paged metadata, HTML/text reading, bounded inline images, per-message remote-image controls, message details, attachment downloads and explicit read/unread changes. | Broader sender-format compatibility and richer previews. |
 | Organizing | Server folder browsing and local view filters. | Stars/flags, move/archive/trash/restore/delete actions, folder editing and a unified inbox. |
-| Composing | Separate plain-text draft window, account selection, To/CC/BCC, attachments and a reply to the sender or `Reply-To`. | Recipient chips, reply-all, forwarding, signatures and rich-text composition. |
+| Composing | Separate plain-text draft window, account selection, To/CC/BCC, attachments, per-account signatures and a reply to the sender or `Reply-To`. | Recipient chips, reply-all, forwarding and rich-text composition. |
 | Sending | SMTP, confirmed manual send, separate Sent-copy filing/reconciliation and protection against repeating accepted or uncertain sends. | Complete delivery-state handling and wider provider synchronization. |
 | Search and storage | Bounded server search plus shared `mail.query`/`mail.count` filters; local drafts and explicit chat snapshots. | Threaded conversations, persistent offline mail cache, local full-text index and full synchronization. |
 | Assistant | Mail discovery, queries/counts, reading/opening, draft preparation/editing, send requests, account-form preparation and mail references. | Every future Mail feature must expose the same validated assistant access when implemented. |
@@ -194,7 +194,7 @@ Composition belongs in a separate window or clearly separated editor. A **dedica
 
 CC and BCC may start collapsed, with an obvious control to reveal them.
 
-**Current implementation:** the [draft editor](../modules/ovd-mail/frontend/DraftView.tsx) has account selection, To/CC/BCC, subject, plain text, attachments and send-state feedback. Signatures and rich-text editing are not implemented.
+**Current implementation:** the [draft editor](../modules/ovd-mail/frontend/DraftView.tsx) has account selection, To/CC/BCC, subject, plain text, attachments and send-state feedback. Per-account signatures are inserted into new messages and replies as editable draft text; they are not appended again at send time. Rich-text editing remains future work.
 
 ### Recipients
 

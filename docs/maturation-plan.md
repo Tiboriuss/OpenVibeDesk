@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Architecture](architecture.md) · [Mail design](mail-design.md) · [Settings design](settings-design.md) · [Module contract](../CONTRIBUTING.md#building-modules)
 
-**Baseline:** 28 October 2026, commit `e52f3a1`. **Status:** implementation backlog with progress recorded below; package descriptions are not feature-completion claims.
+**Baseline:** 28 October 2026, commit `e52f3a1`. **Last status review:** 30 October 2026, after release `v0.1.2`. **Status:** implementation backlog with progress recorded below; package descriptions are not feature-completion claims.
 
 Make the existing workspace dependable for daily use: an action has the same meaning in the interface and Assistant, acknowledged data survives restart, large workloads remain bounded, and failures have a visible recovery path. Keep the required Assistant and the existing optional Mail, Files and MCP modules. This plan adds no new product modules.
 
@@ -19,12 +19,14 @@ This plan covers the desktop host, Assistant/chat, Mail, Files, MCP, settings, m
 - Preserve generic references, cross-window drag and drop, chat branches, account identities, drafts and accepted-send records.
 - Preserve the saved confirmation mode. `Ohne Abfragen` skips individual confirmations for requested assistant actions; it does not grant access, approve changed module code or let the assistant change its own permissions.
 - External content is data. Mail, files, tool output and MCP prompts cannot authorize actions or change host policy.
-- Keep checks local and practical. Use synthetic profiles or designated test mailboxes, existing focused tests where relevant, and no GitHub Actions. Add a regression test only when it protects a meaningful boundary that is difficult to verify reliably by hand.
+- Keep checks local and practical. Use synthetic profiles or designated test mailboxes and existing focused tests where relevant; do not add routine push/PR test workflows. The authorized exception is the release installer workflow and its manual packaging validation. Add a regression test only when it protects a meaningful boundary that is difficult to verify reliably by hand.
 - Keep repository documentation in English and update current-scope claims when each package ships. This planning change does not start implementation, upgrade dependencies or authorize external actions.
 
 A later user-requested extension added [module repository sources](module-repositories.md) on 29 October 2026. This is an implemented host distribution feature; the baseline and unfinished work packages below remain a historical planning snapshot.
 
 **Implementation update — 29 October 2026:** R01a's text-only answer reformulation and bounded evidence capture, plus R01b's separate durable action journal, optional module recovery hooks and restricted explicit continuation, are implemented and practically verified in [commit `cae81b5`](https://github.com/Tiboriuss/OpenVibeDesk/commit/cae81b5e8379ee3c39f2d2e5b43dc1c4b61d694f). Evidence is recorded under [R01](#r01-safe-regeneration-and-operation-lifecycle). Current behavior is described under [answer reformulation](architecture.md#answer-reformulation) and [durable operations](architecture.md#durable-operations-and-explicit-continuation). R05's broader workspace-save recovery remains unfinished.
+
+**Implementation update — 30 October 2026:** [v0.1.2](https://github.com/Tiboriuss/OpenVibeDesk/releases/tag/v0.1.2) includes autonomous Mail research with Workspace tools enabled, without per-message selection or a separate general-mail access switch. Tool transport accepts batches beyond the former hidden eight-call cap and can use the configured non-streaming fallback for malformed, missing or oversized call fields before dispatch; completed actions are retained. These fixes do not implement R02's whole-request context budget or remove bounded transport checks. External modules can resolve context and explicitly selected instruction references through the shared contract; R10 still tracks compatibility and lifecycle gaps. macOS arm64/x64 and Windows x64 installers, checksums and release metadata were produced successfully; trusted publisher signing and full platform/upgrade validation remain open under R20.
 
 ## Verified starting point
 
@@ -32,14 +34,14 @@ These are source observations at the baseline, not a new runtime audit. The [arc
 
 | Area | Already implemented | Maturation gap |
 | --- | --- | --- |
-| Assistant execution | Streaming, stop, configurable limits, lazy tools, frozen offers and explicit outcomes. | Generic operation identity/recovery and safe regeneration; no whole-request budget for accumulated results. |
+| Assistant execution | Streaming, stop, configurable limits, lazy tools, frozen offers and explicit outcomes. | Operation recovery and safe regeneration were gaps at baseline, now implemented under R01. Whole-request budgeting remains open under R02. |
 | Chat and references | CommonMark/GFM, sessions, branches, persisted snapshots, paged chat/file reads and generic drag identities. | Reference inspection, large-history performance and visible save failures outside mail drafts. |
 | Mail reading | Real accounts, folders, search/query/count, read status, attachments, isolated HTML/text reader and per-message image control. | Paged long-message reading, aggregate cache limits, cancellable body fetching and everyday mutations. |
 | Drafts and sending | Local save status/recovery, SMTP outcome handling, prepared MIME, separate Sent filing/reconciliation and draft/outbox/history classification. | Managed attachment recovery, complete draft reads/list pagination, reply-all/forward and richer composition. |
 | Mail synchronization | UID/UIDVALIDITY checks, bounded server queries and session memory. | Persistent cache, incremental sync, offline reads and explicit conflict handling. |
 | Files | OS-accessible paths, browse/sort/filter, paged UTF-8 reads, chat references and draft attachment handoff. | Large-folder cost, bounded identity caches, missing/changed source UX and a small set of everyday file actions. |
 | MCP | Stdio/Streamable HTTP, saved credentials, explicit tool approvals, lazy virtual sources and bounded activity. | Current protocol compatibility, OAuth, richer status/recovery and bounded resource/prompt integration. |
-| Module host | Manifests, approval fingerprints, process isolation, own views/settings and typed capabilities. | Contract versioning, external-module reference resolution and complete dirty/busy lifecycle integration. |
+| Module host | Manifests, approval fingerprints, process isolation, own views/settings and typed capabilities. | External reference resolution is now implemented; contract versioning and complete dirty/busy lifecycle integration remain open under R10. |
 | Settings and desktop | Searchable categories, compact retained forms, account groups, Dock ordering and close guards. | Consistent recovery, keyboard/assistive-technology coverage and finer state subscriptions. |
 | Persistence and release | Atomic workspace snapshots, secure credentials and packaging scripts. | Versioned migrations, backup/restore, operational diagnostics and verified signed releases. |
 
@@ -318,9 +320,11 @@ Finally integrate resources as backend-resolved, bounded references with continu
 
 **Outcome:** contributors can reproduce the app and users can upgrade without losing their workspace.
 
+**Current delivery:** [the release workflow](releases.md) builds macOS Apple Silicon/Intel DMGs and a Windows x64 installer, checks the complete asset set and attaches installers, checksums and metadata to a published release. Mac bundles use ad-hoc signatures for integrity; they have no trusted Developer ID or notarization, and Windows installers are unsigned. Manual installation over the existing app retains the separate profile. Successful packaging is not a completed runtime, migration or interrupted-upgrade assessment. Linux remains a local packaging target, and there is no automatic app updater.
+
 Keep `pnpm install --frozen-lockfile` and the existing build workflow documented. Add an isolated development/test profile and optional renderer hot reload only if it preserves single-instance and process-restart semantics; do not change the production profile during checks. Record a small provider/server/platform compatibility matrix, dependency licenses and a local release checklist. Keep diagnostic exports opt-in, bounded and redacted, with model/protocol/version, durations and error categories rather than message content.
 
-Release macOS first: validate packaged resources, keychain, native dependencies, multi-window drag/drop, shutdown and migration. Sign/notarize before wider distribution. Add a signed update path with verified metadata/packages, user-visible release notes and safe restart; never interrupt unsaved work or an external action. Data rollback must respect migration compatibility. Validate Windows/Linux on those platforms before claiming support. Electron documents [signing and notarization](https://www.electronjs.org/docs/latest/tutorial/code-signing); its [support policy](https://www.electronjs.org/docs/latest/tutorial/electron-timelines) supports the latest three stable major lines, so review runtime support at release time.
+Complete practical macOS release validation first: packaged resources, keychain, native dependencies, multi-window drag/drop, shutdown and migration. Add trusted signing/notarization beyond the current alpha packages. A future automatic update path needs verified metadata/packages, user-visible release notes and safe restart; never interrupt unsaved work or an external action. Data rollback must respect migration compatibility. Validate Windows/Linux on those platforms before broader support claims. Electron documents [signing and notarization](https://www.electronjs.org/docs/latest/tutorial/code-signing); review its [support policy](https://www.electronjs.org/docs/latest/tutorial/electron-timelines) at release time.
 
 **Acceptance:** fresh install, upgrade from the previous profile, failed/interrupted update, uninstall/reinstall and restored backup retain expected data and R09's protection against resurrecting old actionable records. Invalid updates are rejected. No secret enters release artifacts. A version is called supported only with recorded practical platform evidence. Signing credentials and provider registrations are external prerequisites, not assumed to exist.
 
@@ -338,7 +342,7 @@ These are outcome gates, not mandatory serial departments. R16/R18 and the read-
 
 ## Practical validation and measurements
 
-Maintain one small, repeatable acceptance worksheet, with fixture/profile, UI path, equivalent assistant request, expected result, observed result and evidence. Use isolated synthetic content and controllable local endpoints. Run the relevant existing checks; add only a focused guard for a high-impact regression when needed. Do not build a large new test framework or introduce CI workflows.
+Maintain one small, repeatable acceptance worksheet, with fixture/profile, UI path, equivalent assistant request, expected result, observed result and evidence. Use isolated synthetic content and controllable local endpoints. Run the relevant existing checks; add only a focused guard for a high-impact regression when needed. Do not build a large new test framework or add routine CI beyond the authorized release-packaging workflow.
 
 | Scenario | Required evidence |
 | --- | --- |

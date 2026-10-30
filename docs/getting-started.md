@@ -88,7 +88,7 @@ Use **Reformulate answer** (**Antwort neu formulieren**) beside an assistant ans
 
 New answers retain bounded result evidence locally for this purpose. For an older answer without usable evidence, OVD explains that it cannot safely reformulate it and leaves the original chat intact. There is no automatic retry of the original task. Your unsent text and reference selections remain with their existing chat while you inspect the branch.
 
-To change the task itself, use **Edit request as a new chat** (**Auftrag als neuen Chat bearbeiten**) on the user message. It opens an editable draft; selecting **Send** starts a new execution under your saved permissions. Continuing unfinished actions and durable action recovery are separate work in the [maturation plan](maturation-plan.md#r01-safe-regeneration-and-operation-lifecycle).
+To change the task itself, use **Edit request as a new chat** (**Auftrag als neuen Chat bearbeiten**) on the user message. It opens an editable draft; selecting **Send** starts a new execution under your saved permissions. To recover unfinished work instead, use the separate [task continuation workflow](#continue-an-interrupted-task).
 
 You can also ask the Assistant to reformulate a stored answer through `chats.reformulate`. That queues the same text-only operation after the current agent run finishes successfully. Stopping the current run, an error or a reached limit discards the queued request. See [answer reformulation](architecture.md#answer-reformulation) for evidence limits and behavior after restart.
 
@@ -108,6 +108,8 @@ The Assistant reaches the same workflow with `chats.continue`, `operations.get_r
 
 Open **Settings → Email** (**Einstellungen → E-Mail**) and add an IMAP account. IMAP reception and SMTP sending are configured and checked separately within the same account group. Save both configurations if you intend to send mail. A successful IMAP connection alone does not configure SMTP.
 
+The account's **Absender, Signatur & Abruf** group sets the outgoing sender name, plain-text signature and retrieval interval. These preferences save separately from connection details. With Mail enabled and an interval selected, OVD checks Inbox status while running, even with the Mail window closed; it does not download full message bodies in the background or run after quitting the app. Newly observed Inbox activity can show a dot on the Mail icon.
+
 Use the Mail window to browse folders and messages. Drag a message into chat to reference it. The [mail design guide](mail-design.md) describes the intended workflow and identifies work that remains beyond the current implementation.
 
 ### Read HTML mail
@@ -120,11 +122,27 @@ The assistant can perform the same actions, for example: “Show this email as H
 
 ### Configure optional modules and MCP
 
-Open **Settings → Modules** (**Einstellungen → Module**) to manage optional modules. The Assistant is required. The module navigation order is configurable under **Modules → Sidebar & dock** (**Module → Seitenleiste & Dock**).
+Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. The Assistant is required; Mail, Files and MCP are included optional modules. Enable or disable them here. Arrange their available navigation entries under **Modules → Sidebar & dock** (**Module → Seitenleiste & Dock**).
+
+#### Install from a module repository
+
+1. Expand **Modulquellen**, then **Repository hinzufügen**.
+2. Enter a name and repository URL. Start with the public [OpenVibeDesk-Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules), which currently offers Notes and Skill Library. You can add multiple sources, including private company repositories or direct HTTPS JSON catalogs.
+3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the OS credential store. Save the source with **Quelle hinzufügen**.
+4. Expand **Modulkatalog** and select **Katalog laden**. Search or filter by source, then choose **Installieren** beside a module.
+5. Select **Freigeben & aktivieren**, review its declared access and approve the downloaded code. Its views, settings and Assistant tools are registered without restarting the app.
+
+To check for updates, load the catalog again and choose **Aktualisieren** where offered. Updated code requires renewed approval. Installed module data stays in its own directory. These are deliberate module updates, separate from app installer updates; OVD does not install new versions in the background.
+
+The Assistant can help with requests such as “Show available modules,” “Check my module sources for updates,” or “Install Notes from this catalog.” It can prepare a source form, but you save source access and approve new code locally. **Without confirmations** does not replace that code approval.
+
+See the [module repository guide](module-repositories.md) for private access, source removal, conflicts and publishing your own modules. For development without a repository, [manual installation](../CONTRIBUTING.md#installation-and-approval) copies a prebuilt folder to `<userData>/modules/`; that discovery path requires a restart and subsequent code approval.
+
+#### Connect an MCP server
 
 To connect a local or remote MCP server, follow the [MCP module guide](../modules/ovd-mcp/README.md). Only saved servers and currently approved tools can be used. The [sample server](../examples/mcp-server/README.md) provides a small local example.
 
-To install a custom module, follow [module installation](../CONTRIBUTING.md#installation-and-approval). Copying a folder requires a restart; third-party code also requires approval of its current file fingerprint.
+MCP servers supply tools through the MCP module. Configure them in **Settings → MCP**; do not enter their URLs as module repository sources. Module repositories distribute OVD packages with manifests and can add their own views and settings.
 
 ### Adjust agent execution
 
@@ -150,6 +168,7 @@ Important entries include:
 | `operation-journal/operations.json` | Durable agent run/action records, ordinary frozen arguments and bounded redacted results; currently unencrypted. Preserve it to retain recovery guards. |
 | `modules/<module-folder>/module.json` | Custom module discovery. |
 | `module-settings.json` | Module approvals and disabled module IDs. |
+| `module-repositories.json` | Source URLs and installation receipts; access tokens are stored separately in the OS credential store. |
 | `module-data/<moduleId>/` | Module-owned local data. |
 
 Other account and configuration files may also live here. Credentials are managed separately by the OS credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
@@ -163,6 +182,10 @@ Other account and configuration files may also live here. Credentials are manage
 | An agent cannot find module tools | Check the module's enabled/approval state, provider tool-calling support, and configured agent limits. |
 | Mail can be read but not sent | Check and save the account's SMTP settings independently of IMAP. |
 | A module does not appear | Check its `module.json`, runtime files, compatibility, and approval status; see the [module contract](../CONTRIBUTING.md#building-modules). |
+| A saved repository shows no modules | Load its catalog with **Katalog laden**. Catalog lists are session-local; saving a source alone does not fetch it. Check the source's error/status. |
+| A private repository cannot be loaded | Check the source URL and saved token's repository access. See [private sources](module-repositories.md#private-company-repositories). |
+| An installed module is not active | Select **Freigeben & aktivieren** after installation or an update. Downloading does not grant execution approval. |
+| A module update shows a conflict | The installed ID may belong to another source or a manually modified package. OVD will not silently replace it; see [module repositories](module-repositories.md). |
 | Files open at Documents | Navigate with the path bar. Documents is a starting location; access follows OS permissions. |
 | A binary file has no text preview | PDF, Office, and other binary formats currently provide metadata rather than extracted content. |
 

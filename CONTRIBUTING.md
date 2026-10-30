@@ -34,24 +34,37 @@ Do not commit user data, API keys, `.env` files, databases, or generated applica
 
 ## Building modules
 
-The OVD Assistant is the required `ovd-assistant` module. Domain modules register through a manifest; the chat must not need module-specific prompts or hardcoded tool catalogs. Built-in examples are:
+The OVD Assistant is the required `ovd-assistant` module. Domain modules register through a manifest; the chat must not need module-specific prompts or hardcoded tool catalogs. A company module can own its windows, settings, domain functions and chat references without changing OVD core.
+
+Choose the extension path that matches the work:
+
+| Need | Extension path |
+| --- | --- |
+| Install or update an existing module | Add a source under **Settings → Modules**; follow [module repositories](docs/module-repositories.md). |
+| Build a company integration with its own interface | Create a standalone **process module** using the contract below. Distribute its prebuilt files through a public/private catalog or copy its folder locally. |
+| Make an existing MCP server's tools available | Configure the bundled [MCP module](modules/ovd-mcp/README.md). An MCP server is a connection, not an installed OVD module with its own views. |
+| Change a bundled OVD domain or the host itself | Work in this checkout and retain the shared UI/Assistant services and [process boundaries](docs/architecture.md#processes-and-trust-boundaries). |
+
+These examples demonstrate different parts of the contract. The built-in adapters are architecture references; they cannot be copied unchanged into a repository package.
 
 | Example | Demonstrates |
 | --- | --- |
 | [Mail](modules/ovd-mail/) | Domain views, account settings, shared services, and mail references. |
 | [Files](modules/ovd-files/) | File navigation, paged content, and generic module references. |
 | [MCP](modules/ovd-mcp/README.md) | Connection settings, credential storage, and dynamic tool sources. |
-| [Sample notes module](examples/notes-module/README.md) | A standalone process module with HTML views, installable without core changes. |
+| [Sample notes module](examples/notes-module/README.md) | The runnable starting point for a standalone process module with HTML views and settings. |
+
+A practical authoring sequence is: start with Notes, choose a stable module ID, implement shared domain tools and their schemas, connect the interface to those tools, then add references or attention hints where useful. Exercise that module through both the interface and a concrete Assistant request before [publishing its package](docs/module-repositories.md#publish-a-module). Adding a module does not require editing the Assistant prompt.
 
 ### Installation and approval
 
 Custom modules are discovered at startup from `<userData>/modules/<module-folder>/module.json`. On macOS, `userData` is currently `~/Library/Application Support/ai-workspace/`. Built-in modules are discovered under `<appPath>/modules/`.
 
-For distribution through a public or private repository, see [module repositories](docs/module-repositories.md). The catalog helper prepares versioned packages and checksums without executing module code. Repository installs are discovered immediately.
+For distribution through a public or private repository, see [module repositories](docs/module-repositories.md). The catalog helper prepares versioned packages and checksums without executing module code. Repository installs and updates are discovered immediately, but installation and execution approval remain separate steps. A repository is a catalog plus prebuilt files; OVD does not clone an arbitrary source checkout or build it on the user's machine.
 
 After manually copying a module, restart OVD and open **Settings → Modules** (currently **Einstellungen → Module**). Third-party modules require explicit approval of their current file fingerprint. Changed files require new approval. Disabling a module removes its contributions and capabilities without deleting its data.
 
-Approvals and disabled IDs are stored in `<userData>/module-settings.json`; module-owned data belongs under `<userData>/module-data/<moduleId>/`. See [local data](docs/getting-started.md#local-data).
+Approvals and disabled IDs are stored in `<userData>/module-settings.json`; module-owned data belongs under `<userData>/module-data/<moduleId>/`. Keep the module ID stable across updates: it identifies its data, references, tools and installation provenance. Never write user data into the installed package directory: it changes the approved fingerprint and conflicts with repository updates. Updates preserve the data directory; the author must handle any data-format migration safely. See [local data](docs/getting-started.md#local-data).
 
 ### Manifest and contributions
 
@@ -68,10 +81,12 @@ my-module/
 Start from the [sample manifest](examples/notes-module/module.json). The contract is defined by [ModuleManifest](shared/modules.ts) and the [validated manifest schema](electron/modules.ts):
 
 - Set `apiVersion: 1`, a unique `id`, `title`, semantic `version`, a short `description`, and relevant discovery `keywords`. Third-party modules cannot claim `ovd-` IDs, required-module status, or internal host adapters.
-- Use `runtime: { "type": "process", "entry": "backend.cjs" }` for a prepared JavaScript backend. Bundle dependencies beforehand; OVD does not install packages when loading a module.
+- Use `runtime: { "type": "process", "entry": "backend.cjs" }` for a prepared **CommonJS** backend exporting `activate`. The worker loads it with `require`; compile TypeScript or ESM sources to a compatible entry beforehand. Bundle dependencies beforehand; OVD does not install packages when loading a module.
 - Describe each function in `tools` with its name, useful description, optional activity label, and bounded object JSON Schema without `$ref`. Names start with the module ID, such as `my-module.list`. `capabilities` must list exactly the same names. The host derives provider-compatible names; the backend and module interface continue to use the manifest names.
 - Declare intended access in `permissions`. Requested non-mutating domain reads and view navigation should work autonomously with Workspace tools enabled; do not add per-resource read confirmations or require the user to attach every resource first. A tool's `confirmation` uses the host's shared approval flow for actions that need it. Sending, destructive changes and protected settings need an understandable, reviewable confirmation flow by default. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can approve requested assistant actions automatically; approval of new or changed module code and configured MCP tool permissions remain separate.
 - Point `contributions.views` and `.settings` at local HTML files through `entry`; `.navigation` references a view declared by the module. IDs must be unique within each contribution type. Process-module views and settings must also use distinct IDs across those two types. Integrate descriptions and search terms with the [settings design](docs/settings-design.md).
+
+The host automatically adds discoverable actions to open each process-module view, minimize/maximize/close its window, and open contributed settings. Authors supply the domain operations behind those views. A settings contribution supplies an entry in OVD's category/search navigation; its HTML form still needs its own load, validation, save and error behavior through declared module tools. The host does not generate fields or persist arbitrary settings for it.
 
 ### Backend lifecycle
 
@@ -85,6 +100,12 @@ exports.activate = async ({ moduleId, dataDirectory }) => ({
 ```
 
 Implement every manifest tool exactly once. Interface actions and the assistant must use the same functions; every implemented domain action available in the interface needs an assistant entry point. Validate domain inputs and resource IDs, exclude secrets from results, respect cancellation, and return bounded JSON with clear errors and search limits. Persist changes safely and never automatically repeat side effects after an uncertain result.
+
+Process activation is lazy: approval makes contributions discoverable, and the first backend invocation starts the process. Do not assume `activate` runs at app startup or when a window merely opens. Once started, the process can retain connections or timers until it is stopped; release them in `dispose`. There is no general process-module startup scheduler. The bundled Mail polling lifecycle belongs to its host adapter.
+
+The activation context contains `moduleId`, `dataDirectory` and `attention`; tool handlers receive `signal` and, for journalled calls, `operation`. It is not the main-process workspace API or a credential-store bridge. OVD does not forward saved provider, mail or repository credentials to modules. Design a module's own configuration and credential handling explicitly, keeping secrets out of ordinary tool arguments/results, reference snapshots and logs.
+
+Use structured domain results for expected failures, for example `{ outcome: 'failed', message: 'The order no longer exists.' }`, and `cancelled` or `uncertain` where appropriate. The host deliberately hides arbitrary backend exception details; throwing an exception is not a way to show a useful domain error. Successful JSON output must describe what actually happened, including whether a remote system accepted a change or its result is still unknown.
 
 ### Durable action hooks
 
@@ -144,18 +165,6 @@ A dot appears on the module's primary Dock icon and contributed Settings categor
 
 The Assistant discovers `modules.attention` and `modules.acknowledge_attention` lazily to inspect or acknowledge the same state. Hints grant no permissions, execute no actions and are not automatically copied into provider context. See [attention types](shared/module-attention.ts) and the [host](electron/module-host.ts).
 
-The [process runtime](electron/module-runtime.ts) currently enforces these bounds:
-
-| Boundary | Limit |
-| --- | --- |
-| Activation | 10 seconds |
-| Individual invocation | 60 seconds |
-| Encoded arguments | 16 KiB |
-| Encoded result | 32 KiB |
-| Pending invocations per module | 16 |
-
-These process-module boundaries are distinct from the configurable [agent execution budgets](shared/agent-settings.ts). Do not treat a timed-out external write as a confirmed failure that is safe to repeat.
-
 ### Queries, time, and result completeness
 
 Prefer a small set of composable domain tools. Listing and counting must share validated filters. A count must not simply count the loaded page. Include `scope`, `observedAt`, `countExact`, and `complete` where applicable; when an exact count is unavailable, `count` is a lower bound.
@@ -164,7 +173,7 @@ Distinguish received time from the sender's date. Resolve relative calendar peri
 
 ### HTML views
 
-HTML views run in an isolated iframe without Node or the workspace API. They send:
+HTML views run in an isolated iframe without Node or the workspace API. Package each view/settings entry as self-contained HTML: the current host permits inline scripts/styles and data/blob images, but not external scripts, linked stylesheets, relative asset fetches, direct network requests, embedded frames or form navigation. Put domain network and filesystem work behind the backend tools. Views send:
 
 ```js
 parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*');
@@ -180,11 +189,25 @@ A separate backend process provides crash isolation, **not an operating-system s
 
 The [loader](electron/modules.ts) limits a manifest to 64 KiB and a module to 16 MiB, 200 files, and 12 directory levels. Symbolic links are not allowed.
 
+The [process runtime](electron/module-runtime.ts) currently enforces these bounds:
+
+| Boundary | Limit |
+| --- | --- |
+| Activation | 10 seconds |
+| Individual invocation | 60 seconds |
+| Encoded arguments | 16 KiB |
+| Encoded result | 32 KiB |
+| Pending invocations per module | 16 |
+
+These process-module boundaries are distinct from the configurable [agent execution budgets](shared/agent-settings.ts). Do not treat a timed-out external write as a confirmed failure that is safe to repeat.
+
+API version **1** is the current contract. Catalogs and manifests validate that API version; they do not negotiate a minimum OVD app version, an OS/CPU-specific package, or dependencies between modules. Record the required OVD release in your module's documentation and exercise it on the platforms you claim to support. Native dependencies need particular care because packages are not rebuilt for the user's Electron version or architecture. See [repository publishing](docs/module-repositories.md#publish-a-module) for the versioned package layout and update rules.
+
 ### Discovery and context budgets
 
 The assistant initially sees up to 20 short module descriptions and only `find_modules` and `get_module_tools`. Support narrow queries and paginated discovery. The active tool count is configurable: **12 by default**, within the current **1–24** range in [agent settings](shared/agent-settings.ts). Schema and history budgets are configurable too. Descriptions must be sufficient to discover a tool without placing full catalogs, user data, or schemas in module summaries or durable chat messages.
 
-Built-in adapters with dynamic tools can register the generic [ModuleToolProvider](shared/module-tool-provider.ts). It exposes short virtual sources, paginated schema selection, and lookup of the exact current offer. Source IDs are namespaced under the parent module; tool offers are tied to the current configuration/schema version. The host tracks parent status and in-flight calls. The provider must recheck permissions and arguments immediately before execution. External server instructions do not become system instructions. [MCP](modules/ovd-mcp/README.md) uses this contract without a special branch in the agent loop.
+Built-in adapters with dynamic tools can register the generic [ModuleToolProvider](shared/module-tool-provider.ts). It exposes short virtual sources, paginated schema selection, and lookup of the exact current offer. Source IDs are namespaced under the parent module; tool offers are tied to the current configuration/schema version. The host tracks parent status and in-flight calls. The provider must recheck permissions and arguments immediately before execution. External server instructions do not become system instructions. [MCP](modules/ovd-mcp/README.md) uses this contract without a special branch in the agent loop. This registration API is host-only: installed process modules expose the static tool definitions in their manifest, not arbitrary dynamic child catalogs.
 
 ### Resource references
 
@@ -219,6 +242,6 @@ An explicitly selected `instructions` reference supplies reusable working instru
 
 ### Validate a module
 
-Exercise installation, approval and restart, the view and settings, the equivalent assistant task, cancellation, required confirmation, and disabling. Preserve existing mail references, drag and drop, drafts, attachments, and local data. Use synthetic fixtures or a designated test mailbox without sending real messages.
+Exercise installation, approval and restart, the view and settings, the equivalent assistant task, cancellation, required confirmation, and disabling. For a repository release, also exercise an update with retained module data and fresh code approval. Confirm that the Assistant discovers only the needed tools and that missing/stale references or uncertain changes produce an honest outcome. Preserve existing mail references, drag and drop, drafts, attachments, and local data. Use synthetic fixtures or a designated test mailbox without sending real messages.
 
 Continue with the [architecture](docs/architecture.md), [notes module example](examples/notes-module/README.md), or [MCP server example](examples/mcp-server/README.md).
