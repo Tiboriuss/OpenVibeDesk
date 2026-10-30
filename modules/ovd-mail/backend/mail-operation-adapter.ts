@@ -15,7 +15,7 @@ interface Dependencies {
   account(id: unknown): MailAccountConfig;
   smtp(accountId: string): SmtpSettings | undefined;
   activeDraftId(id?: string): string;
-  authorizedMailId(id: string | undefined, context: CapabilityContext): string;
+  resolveMailId(id: string | undefined, context: CapabilityContext): string;
   reference(id: string, context: CapabilityContext): EmailReference;
   live(id: string): { accountId: string; folder: string; message: ImapMessage } | undefined;
   activeView(): MailViewContext | null;
@@ -89,19 +89,19 @@ export function createMailOperationAdapter(deps: Dependencies): ModuleOperationA
         return { args, effect, resource: { id: `draft:${id}:${identity}${copy}`, version: digest(version) } };
       }
       if (mailTargets.has(action)) {
-        const id = deps.authorizedMailId(typeof args.emailId === 'string' ? args.emailId : undefined, context);
+        const id = deps.resolveMailId(typeof args.emailId === 'string' ? args.emailId : undefined, context);
         args.emailId = id;
         return { args, effect, resource: mailResource(id, context, action !== 'mail.read') };
       }
       if (action === 'mail.previews') {
-        const ids = [...new Set((args.emailIds as string[]).map(id => deps.authorizedMailId(id, context)))];
+        const ids = [...new Set((args.emailIds as string[]).map(id => deps.resolveMailId(id, context)))];
         args.emailIds = ids;
         const resources = ids.map(id => mailResource(id, context, true));
         return { args, effect, resource: { id: `mail-previews:${digest(resources.map(item => item.id))}`, version: digest(resources) } };
       }
       if (action === 'drafts.create') {
         const usesSource = !!args.sourceEmailId || !!args.recipientFromSource || args.mode === 'reply';
-        const sourceId = usesSource ? deps.authorizedMailId(typeof args.sourceEmailId === 'string' ? args.sourceEmailId : undefined, context) : undefined;
+        const sourceId = usesSource ? deps.resolveMailId(typeof args.sourceEmailId === 'string' ? args.sourceEmailId : undefined, context) : undefined;
         if (sourceId) args.sourceEmailId = sourceId;
         const source = sourceId ? deps.reference(sourceId, context) : undefined;
         const accounts = deps.accounts();

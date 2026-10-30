@@ -5,7 +5,7 @@ import { preparationValues, SettingsPreparationNotice, useSettingsPreparation, t
 import './ai-settings.css';
 
 type Thinking = 'off' | 'low' | 'medium' | 'high';
-type AiConfiguration = { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; realMailAccess: boolean; confirmationMode: 'ask' | 'never'; hasApiKey: boolean; configured: boolean };
+type AiConfiguration = { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; confirmationMode: 'ask' | 'never'; hasApiKey: boolean; configured: boolean };
 type AiGroups = { connection: boolean; models: boolean; workspace: boolean };
 const groupStorageKey = 'openvibedesk.settings.aiGroups';
 function loadGroups(): AiGroups {
@@ -41,7 +41,6 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const [smartThinking, setSmartThinking] = useState<Thinking>('off');
   const [simpleThinking, setSimpleThinking] = useState<Thinking>('off');
   const [workspaceTools, setWorkspaceTools] = useState(true);
-  const [realMailAccess, setRealMailAccess] = useState(false);
   const [confirmationMode, setConfirmationMode] = useState<'ask' | 'never'>('ask');
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<string[]>([]);
@@ -55,7 +54,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const discoveryId = useRef(0);
   const urlChanged = !!configuration && baseUrl.trim().replace(/\/+$/, '') !== configuration.baseUrl.replace(/\/+$/, '');
   const connectionChanged = urlChanged || apiKey.length > 0;
-  const dirty = !!configuration && (connectionChanged || smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking || workspaceTools !== configuration.workspaceTools || realMailAccess !== configuration.realMailAccess || confirmationMode !== configuration.confirmationMode);
+  const dirty = !!configuration && (connectionChanged || smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking || workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode);
   const prepared = useSettingsPreparation(preparation, !!configuration, !dirty && !busy, applyPreparation);
   useEffect(() => { if (preparation) setOpenGroups({ connection: true, models: true, workspace: true }); }, [preparation]);
   function applyPreparation(suggestion: SettingsSuggestion) {
@@ -67,8 +66,6 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     if (typeof values.simpleThinking === 'string') setSimpleThinking(values.simpleThinking as Thinking);
     if (values.confirmationMode === 'ask' || values.confirmationMode === 'never') setConfirmationMode(values.confirmationMode);
     if (typeof values.workspaceTools === 'boolean') setWorkspaceTools(values.workspaceTools);
-    if (values.workspaceTools === false) setRealMailAccess(false);
-    else if (typeof values.realMailAccess === 'boolean') setRealMailAccess((values.workspaceTools ?? workspaceTools) === true && values.realMailAccess);
     setOpenGroups({ connection: true, models: true, workspace: true });
     setError(''); setNotice('KI-Vorschlag vorbereitet. Bitte prüfen und selbst speichern. Schlüssel wurden nicht übernommen.');
   }
@@ -76,7 +73,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     if (!configuration || busy) return;
     setBaseUrl(configuration.baseUrl); setSmartModel(configuration.smartModel); setSimpleModel(configuration.simpleModel);
     setSmartThinking(configuration.smartThinking); setSimpleThinking(configuration.simpleThinking);
-    setWorkspaceTools(configuration.workspaceTools); setRealMailAccess(configuration.realMailAccess); setConfirmationMode(configuration.confirmationMode); setApiKey('');
+    setWorkspaceTools(configuration.workspaceTools); setConfirmationMode(configuration.confirmationMode); setApiKey('');
     setError(''); setNotice('Eigene Änderungen verworfen. Der Vorschlag wartet auf deine Übernahme.');
   }
   const searching = searchQuery.trim().length > 0;
@@ -109,8 +106,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     let active = true;
     window.workspace.getAiSettings().then(value => {
       if (!active) return;
-      const access = !!(value.workspaceTools && value.realMailAccess);
-      setConfiguration({ ...value, realMailAccess: access, confirmationMode: value.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(value.baseUrl); setSmartModel(value.smartModel); setSimpleModel(value.simpleModel); setSmartThinking(value.smartThinking); setSimpleThinking(value.simpleThinking); setWorkspaceTools(value.workspaceTools); setRealMailAccess(access); setConfirmationMode(value.confirmationMode === 'never' ? 'never' : 'ask');
+      setConfiguration({ ...value, confirmationMode: value.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(value.baseUrl); setSmartModel(value.smartModel); setSimpleModel(value.simpleModel); setSmartThinking(value.smartThinking); setSimpleThinking(value.simpleThinking); setWorkspaceTools(value.workspaceTools); setConfirmationMode(value.confirmationMode === 'never' ? 'never' : 'ask');
       if (value.configured) void discover();
     }).catch(reason => { if (active) setError(`Einstellungen konnten nicht geladen werden: ${String(reason)}`); });
     return () => { active = false; discoveryId.current++; };
@@ -127,10 +123,9 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     }
     setBusy(true);
     try {
-      await window.workspace.saveAiSettings({ baseUrl: baseUrl.trim(), smartModel: smartModel.trim(), simpleModel: simpleModel.trim(), smartThinking, simpleThinking, workspaceTools, realMailAccess: workspaceTools && realMailAccess, confirmationMode, ...(apiKey ? { apiKey } : {}) });
+      await window.workspace.saveAiSettings({ baseUrl: baseUrl.trim(), smartModel: smartModel.trim(), simpleModel: simpleModel.trim(), smartThinking, simpleThinking, workspaceTools, confirmationMode, ...(apiKey ? { apiKey } : {}) });
       const updated = await window.workspace.getAiSettings();
-      const access = !!(updated.workspaceTools && updated.realMailAccess);
-      setConfiguration({ ...updated, realMailAccess: access, confirmationMode: updated.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(updated.baseUrl); setSmartModel(updated.smartModel); setSimpleModel(updated.simpleModel); setSmartThinking(updated.smartThinking); setSimpleThinking(updated.simpleThinking); setWorkspaceTools(updated.workspaceTools); setRealMailAccess(access); setConfirmationMode(updated.confirmationMode === 'never' ? 'never' : 'ask'); setApiKey('');
+      setConfiguration({ ...updated, confirmationMode: updated.confirmationMode === 'never' ? 'never' : 'ask' }); setBaseUrl(updated.baseUrl); setSmartModel(updated.smartModel); setSimpleModel(updated.simpleModel); setSmartThinking(updated.smartThinking); setSimpleThinking(updated.simpleThinking); setWorkspaceTools(updated.workspaceTools); setConfirmationMode(updated.confirmationMode === 'never' ? 'never' : 'ask'); setApiKey('');
       setNotice('KI-Einstellungen gespeichert.');
       void discover();
     } catch (reason) { setError(`Speichern fehlgeschlagen: ${String(reason)}`); }
@@ -170,12 +165,11 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       <p className="ai-model-hint">Bei „Aus“ wird kein Thinking-Parameter gesendet. Das Modell kann dennoch intern nachdenken.</p>
       </div></details>
       <details className="ai-section" hidden={searching && !matches('workspace')} open={groupOpen('workspace')} onToggle={event => onGroupToggle('workspace', event.currentTarget.open)}>
-      <summary><span><strong>Workspace-Zugriff</strong><small>Werkzeuge {configuration.workspaceTools ? 'aktiviert' : 'deaktiviert'} · Postfach {configuration.workspaceTools && configuration.realMailAccess ? 'allgemein freigegeben' : 'Einzelzugriff'} · {configuration.confirmationMode === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen'}{workspaceTools !== configuration.workspaceTools || realMailAccess !== configuration.realMailAccess || confirmationMode !== configuration.confirmationMode ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-      <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Chat kann Informationen im Workspace suchen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => { setWorkspaceTools(event.target.checked); if (!event.target.checked) setRealMailAccess(false); }} /></div>
-      <div className="setting-row ai-mail-access"><div><label htmlFor="ai-real-mail-access">Allgemeinen Postfachzugriff erlauben</label><p id="ai-real-mail-description">Erlaubt zusätzliche Ordner- und Nachrichtenabfragen am IMAP-Server. Gewählte Referenzen und einzelne beauftragte Suchen bleiben auch ohne diese Freigabe möglich; Suchen nutzen den Bestätigungsmodus. Mailinhalte und Ergebnisse können an den KI-Anbieter übermittelt und im Chat gespeichert werden.</p>{!workspaceTools && <p className="ai-mail-disabled">Aktiviere zuerst die Workspace-Werkzeuge.</p>}</div><input id="ai-real-mail-access" className="setting-toggle" type="checkbox" aria-describedby="ai-real-mail-description" disabled={!workspaceTools} checked={workspaceTools && realMailAccess} onChange={event => setRealMailAccess(event.target.checked)} /></div>
-      <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus, auch Mailversand und Kontoentfernung. Bestehende Zugriffsrechte gelten weiter. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
+      <summary><span><strong>Workspace-Zugriff</strong><small>Werkzeuge {configuration.workspaceTools ? 'aktiviert' : 'deaktiviert'} · {configuration.confirmationMode === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen'}{workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Assistent kann für deine Aufträge selbstständig in verfügbaren Modulen suchen, Inhalte lesen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
+      <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Suchen und Lesen laufen bereits selbstständig. Dieser Schalter überspringt auch Bestätigungen für angeforderte Aktionen wie Senden und Löschen. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
       </details>
-      <div className="ai-privacy"><ShieldCheck size={15} /><span>Der Schlüssel liegt im Zugangsdaten-Speicher des Systems. Chatverlauf, referenzierte Inhalte und Ergebnisse von Workspace-Werkzeugen, einschließlich gefundener E-Mails, werden an den eingestellten Endpunkt gesendet.</span></div>
+      <div className="ai-privacy"><ShieldCheck size={15} /><span>Der Schlüssel liegt im Zugangsdaten-Speicher des Systems.</span></div>
       <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Änderungen noch nicht gespeichert' : 'Änderungen werden mit Speichern übernommen.'}</span><button className="ai-save" type="submit" disabled={busy}>{busy ? 'Bitte warten …' : 'KI-Einstellungen speichern'}</button></div>
     </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}

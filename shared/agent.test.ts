@@ -209,6 +209,42 @@ describe('workspace agent integration', () => {
     } finally { await server.close(); }
   });
 
+  it.each(['size', 'empty_optional'])('recovers an unexecuted %s turn without repeating its completed query', async malformed => {
+    const requests: any[] = [], events: ToolEvent[] = [];
+    let queries = 0, visible = '';
+    const server = await serve((req, res) => collect(req, payload => {
+      requests.push(payload);
+      if (!payload.stream) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'recovered-open', type: 'function', function: { name: 'mail_open', arguments: '{"emailId":"m1"}' } }] }, finish_reason: 'tool_calls' }] }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (requests.length === 1) res.end(sse(call('load', 'get_module_tools', '{"moduleId":"mail"}'), finishCalls));
+      else if (requests.length === 2) res.end(sse(call('query', 'mail_search', '{"query":"Launch"}'), finishCalls));
+      else if (requests.length === 3) res.end(sse({ choices: [{ delta: { content: 'Vorläufiger Text.' } }] }, malformed === 'size' ? call('oversized', 'n'.repeat(129), '{"emailId":"m1"}') : call('empty-optional', 'mail_open', ''), finishCalls));
+      else res.end(sse(finishText('Die Mail ist geöffnet.')));
+    }));
+    const base = workspace();
+    const deps = { ...base, onReplaceText: (text: string) => { visible = text; }, onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async (...args: Parameters<typeof base.invokeModuleTool>) => {
+      if (args[1] === 'mail_search') queries++;
+      return base.invokeModuleTool(...args);
+    } };
+    try {
+      await runAgent(server.config, null, [{ role: 'user', content: 'Suche und öffne die Launch-Mail.' }], { tier: 'smart' }, new AbortController().signal, text => { visible += text; }, deps);
+      expect(requests.map(payload => payload.stream)).toEqual([true, true, true, false, true]);
+      expect(requests[3].messages).toEqual(requests[2].messages);
+      expect(requests[3].tools).toEqual(requests[2].tools);
+      const retained = requests[3].messages.filter((message: any) => message.role === 'tool' && message.tool_call_id === 'query');
+      expect(retained).toHaveLength(1);
+      expect(JSON.parse(retained[0].content)).toMatchObject({ ok: true, matches: [{ id: 'm1' }] });
+      expect(queries).toBe(1);
+      expect(deps.actions).toEqual([{ type: 'read_email', emailId: 'm1' }]);
+      expect(events.map(event => [event.name, event.status])).toEqual([['get_module_tools', 'completed'], ['mail_search', 'completed'], ['mail_open', 'completed']]);
+      expect(visible).toBe('Die Mail ist geöffnet.');
+    } finally { await server.close(); }
+  });
+
   it('stops at the configured round limit with counts and retained results', async () => {
     let requests = 0, visible = '';
     const limits: AgentRunLimit[] = [], events: ToolEvent[] = [];
@@ -228,21 +264,32 @@ describe('workspace agent integration', () => {
     } finally { await server.close(); }
   });
 
-  it('executes the fitting prefix of a batch before stopping at the call limit', async () => {
-    let requests = 0;
+  it('executes the fitting prefix of a large batch without repeating its earlier query', async () => {
+    let requests = 0, queryReads = 0;
+    let retainedQuery: unknown;
     const limits: AgentRunLimit[] = [], events: ToolEvent[] = [];
-    const server = await serve((req, res) => collect(req, () => {
+    const server = await serve((req, res) => collect(req, payload => {
       requests++; res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       if (requests === 1) res.end(sse(call('load', 'get_module_tools', '{"moduleId":"mail"}'), finishCalls));
-      else res.end(sse({ choices: [{ delta: { tool_calls: [0, 1, 2].map(index => ({ index, id: 'action-' + index, type: 'function', function: { name: 'mail_open', arguments: '{"emailId":"m1"}' } })) }, finish_reason: null }] }, finishCalls));
+      else if (requests === 2) res.end(sse(call('query', 'mail_search', '{"query":"Launch"}'), finishCalls));
+      else {
+        retainedQuery = JSON.parse(payload.messages.find((message: any) => message.role === 'tool' && message.tool_call_id === 'query').content);
+        res.end(sse({ choices: [{ delta: { tool_calls: Array.from({ length: 10 }, (_, index) => ({ index, id: 'action-' + index, type: 'function', function: { name: 'mail_open', arguments: '{"emailId":"m1"}' } })) }, finish_reason: null }] }, finishCalls));
+      }
     }));
-    const deps = { ...workspace(), settings: { ...defaultAgentSettings, maxToolCalls: 3 }, onLimitReached: (info: AgentRunLimit) => limits.push(info), onToolEvent: (event: ToolEvent) => events.push(event) };
+    const base = workspace();
+    const deps = { ...base, settings: { ...defaultAgentSettings, maxToolCalls: 4 }, onLimitReached: (info: AgentRunLimit) => limits.push(info), onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async (...args: Parameters<typeof base.invokeModuleTool>) => {
+      if (args[1] === 'mail_search') queryReads++;
+      return base.invokeModuleTool(...args);
+    } };
     try {
       await runAgent(server.config, null, [{ role: 'user', content: 'Öffne die Mail.' }], { tier: 'smart' }, new AbortController().signal, () => {}, deps);
-      expect(requests).toBe(2);
+      expect(requests).toBe(3);
+      expect(queryReads).toBe(1);
+      expect(retainedQuery).toMatchObject({ ok: true, matches: [{ id: 'm1' }] });
       expect(deps.actions).toHaveLength(2);
-      expect(events).toHaveLength(3);
-      expect(limits).toMatchObject([{ reason: 'tool_calls', toolRounds: 2, toolCalls: 3, discoveryCalls: 1, actionCalls: 2, limit: 3, nextToolType: 'action' }]);
+      expect(events).toHaveLength(4);
+      expect(limits).toMatchObject([{ reason: 'tool_calls', toolRounds: 3, toolCalls: 4, discoveryCalls: 1, actionCalls: 3, limit: 4, nextToolType: 'action' }]);
     } finally { await server.close(); }
   });
 

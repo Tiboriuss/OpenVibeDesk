@@ -97,7 +97,6 @@
 .tool-event-list .failed,.tool-event-list .failed small { color:#a43748; }
 .modern-chat.is-dragging .modern-composer-area { background:var(--accent-soft); box-shadow:inset 0 0 0 2px var(--accent); }
 .reference-drop-target { display:flex; align-items:center; justify-content:center; gap:8px; margin:0 0 8px; padding:10px; border:1px dashed var(--accent); border-radius:9px; color:var(--accent-dark); font-size:12px; font-weight:600; }
-.reference-content-note { margin:5px 0 8px; color:var(--muted); font-size:10px; line-height:1.45; }
 @media (hover:none) { .message-actions { opacity:1; pointer-events:auto; } .message-actions button { width:30px; height:30px; } }
 @media (max-width:480px) { .modern-messages { padding:14px 12px 10px; } .modern-chat-head { padding:0 12px; } .modern-composer-area { padding:8px 10px; } .composer-actions { gap:5px; } .tier-select select { max-width:155px; } .composer-hint { font-size:9px; } }
 @media (prefers-reduced-motion:reduce) { .message-status.streaming>span { animation:none; } .message-actions,.modern-composer,.tool-events summary>svg:first-child { transition:none; } }

@@ -8,7 +8,6 @@ import type { MailOperationContext } from './index';
 
 type Snapshot = { account: MailAccountConfig; epoch: number };
 type Target = { accountId: string; folder: string };
-type Cancelled = { outcome: 'cancelled'; cancelled: true; message: string };
 type ScopeDetails = { accounts: { id: string; name: string }[]; foldersQueried: number; foldersRequested: number; foldersRemaining: number; copiesCountedSeparately: true; completedAt: string };
 type CountResult = MailCountResult & { scopeDetails: ScopeDetails };
 type QueryResult = MailQueryResult & { scopeDetails: ScopeDetails };
@@ -25,10 +24,7 @@ interface Dependencies {
   assertCurrent(snapshot: Snapshot): void;
   folders(id: string): Promise<ImapFolder[]>;
   cache(snapshot: Snapshot, folder: string, messages: ImapQueryResult['messages'], uidValidity: string): ImapMessage[];
-  grant(messages: ImapMessage[], context: MailOperationContext): void;
-  mailAllowed(): boolean;
-  confirm(context: MailOperationContext, message: string, detail: string): Promise<boolean>;
-  provider(): string;
+  remember(messages: ImapMessage[], context: MailOperationContext): void;
   present(result: MailQueryResult, request: MailQueryRequest): Promise<void>;
 }
 
@@ -46,11 +42,6 @@ export function createMailQueryHost(deps: Dependencies) {
     const chosen = raw.allAccounts ? undefined : raw.accountId ?? deps.activeAccountId() ?? accounts[0].id;
     if (chosen && !accounts.some(account => account.id === chosen)) throw new Error('Mailkonto nicht gefunden.');
     return { ...(chosen ? { accountId: chosen } : { allAccounts: true }), ...(raw.allFolders ? { allFolders: true } : raw.folders ? { folders: [...new Set(raw.folders)].sort() } : {}), ...(raw.filter ? { filter: raw.filter } : {}), sort: raw.sort ?? 'received_desc', limit: raw.limit ?? 10, ...(raw.cursor ? { cursor: raw.cursor } : {}) };
-  }
-  async function authorize(request: MailQueryRequest, context: MailOperationContext, countOnly: boolean): Promise<boolean> {
-    if (context.origin !== 'agent' || deps.mailAllowed()) return true;
-    const selected = request.allAccounts ? deps.accounts() : deps.accounts().filter(account => account.id === request.accountId);
-    return deps.confirm(context, countOnly ? 'Diese Mailzählung einmalig erlauben?' : 'Diese Mailabfrage einmalig erlauben?', `Konten: ${selected.map(account => account.name).join(', ')}\nOrdner: ${request.allFolders ? 'alle auswählbaren Ordner (Kopien zählen getrennt)' : request.folders?.join(', ') || 'Posteingang'}\nFilter: ${JSON.stringify(request.filter ?? {})}\n\n${countOnly ? 'Nur Anzahl und Umfang' : 'Begrenzte Nachrichtenmetadaten und bei gezieltem Nachfragen deren Mailtext'} können an ${deps.provider()} übermittelt werden. Antworten werden lokal im Chat gespeichert; Anhangdateien werden nicht übertragen. Die allgemeine Mailfreigabe bleibt unverändert.`);
   }
   async function resolveScope(request: MailQueryRequest, context: MailOperationContext) {
     const accounts = request.allAccounts ? deps.accounts() : deps.accounts().filter(account => account.id === request.accountId);
@@ -94,7 +85,7 @@ export function createMailQueryHost(deps: Dependencies) {
     return (sort.endsWith('_asc') ? left - right : right - left) || b.uid - a.uid || a.id.localeCompare(b.id);
   }
 
-  async function execute(raw: unknown, context: MailOperationContext, countOnly: boolean): Promise<CountResult | QueryResult | Cancelled> {
+  async function execute(raw: unknown, context: MailOperationContext, countOnly: boolean): Promise<CountResult | QueryResult> {
     const parsed = countOnly ? mailCountSchema.parse(raw) : mailQuerySchema.parse(raw);
     const request = canonical(parsed), stamp = new Date();
     context.signal.throwIfAborted();
@@ -102,7 +93,6 @@ export function createMailQueryHost(deps: Dependencies) {
     const previous = request.cursor ? pages.get(request.cursor) : undefined;
     if (request.cursor && (!previous || previous.signature !== signature(request) || context.origin === 'agent' && previous.sessionId !== context.sessionId)) throw new Error('Diese Abfrageseite ist abgelaufen oder gehört zu anderen Filtern. Bitte die erste Seite neu abrufen.');
     if (previous) assertSnapshots(previous.snapshots);
-    if (!await authorize(request, context, countOnly)) return { outcome: 'cancelled', cancelled: true, message: 'Die Mailabfrage wurde nicht freigegeben. Es wurden keine Ordner oder Nachrichten abgerufen.' };
     context.signal.throwIfAborted();
     const scope = await resolveScope(request, context);
     assertSnapshots(scope.snapshots);
@@ -167,12 +157,12 @@ export function createMailQueryHost(deps: Dependencies) {
       while (pages.size > 100) pages.delete(pages.keys().next().value!);
     }
     const queryResult: QueryResult = { ...result, messages, hasMore: !!nextCursor, ...(nextCursor ? { nextCursor } : {}), request: { ...request, cursor: undefined } };
-    deps.grant(messages, context);
+    deps.remember(messages, context);
     if (context.origin === 'agent') await deps.present(queryResult, { ...request, cursor: undefined });
     return queryResult;
   }
   return {
-    query: (request: unknown, context: MailOperationContext) => execute(request, context, false) as Promise<QueryResult | Cancelled>,
-    count: (request: unknown, context: MailOperationContext) => execute(request, context, true) as Promise<CountResult | Cancelled>
+    query: (request: unknown, context: MailOperationContext) => execute(request, context, false) as Promise<QueryResult>,
+    count: (request: unknown, context: MailOperationContext) => execute(request, context, true) as Promise<CountResult>
   };
 }

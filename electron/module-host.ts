@@ -393,7 +393,7 @@ export class ModuleHost {
     const { usage: _ignoredUsage, ...snapshot } = result as Record<string, unknown>;
     const reference = moduleReferenceSchema.parse({ ...snapshot, usage: contribution.usage ?? 'context' });
     if (reference.moduleId !== input.moduleId || reference.type !== input.type || reference.id !== input.id) throw new Error('Das Modul hat eine andere Referenz zurückgegeben.');
-    if (contribution.usage === 'instructions' && (!reference.readable || reference.truncated || !reference.text?.trim())) throw new Error('Die Arbeitsanweisung konnte nicht vollständig gelesen werden. Bitte den Skill erneut öffnen.');
+    if (contribution.usage === 'instructions' && (!reference.readable || reference.truncated || !reference.text?.trim())) throw new Error('Die Arbeitsanweisung konnte nicht vollständig gelesen werden. Bitte die Referenz erneut öffnen.');
     return reference;
   }
   async invoke(id: string, name: string, args: unknown, context: CapabilityContext, fromUi = false): Promise<unknown> {

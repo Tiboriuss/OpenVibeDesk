@@ -57,7 +57,7 @@ The module-management category includes an expandable control for arranging the 
 
 A prepared assistant change is not an applied setting. For protected configuration, the assistant opens the appropriate form and supplies allowed public fields; the user reviews and saves them. Existing unsaved inputs must survive that preparation flow. MCP tool permissions likewise require an explicit save and must not be granted merely because a suggestion was displayed. See [MCP module behavior](../modules/ovd-mcp/README.md) and [architecture](architecture.md).
 
-The saved “Without confirmations” mode (`Ohne Abfragen` in the current UI) governs individual confirmations for requested assistant actions. It does not let the assistant enable that mode itself, read credentials, or approve new/changed third-party module code. Explain immediate changes, prepared changes and user-saved access settings distinctly.
+The saved “Without confirmations” mode (`Ohne Abfragen` in the current UI) governs individual confirmations for requested assistant actions that need approval, such as sending, destructive actions and protected settings. Ordinary requested domain reads and view navigation already work autonomously with Workspace tools enabled, including in the default confirmation mode; do not add a separate Mail access toggle or per-message read approval. The mode does not let the assistant enable itself, read credentials, approve new/changed third-party module code or expand configured MCP tool permissions. Explain immediate changes, prepared changes and user-saved access settings distinctly.
 
 ## Adding or changing settings
 

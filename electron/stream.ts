@@ -6,36 +6,56 @@ export type ProviderMessage =
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 export type StreamTurn = { text: string; toolCalls: ToolCall[] };
-export type ToolStreamDiagnostics = { reason: 'finish' | 'metadata' | 'arguments' | 'duplicate_ids'; finishReason?: string; callCount: number; missingIds: number; missingNames: number; emptyArguments: number };
+type ToolCallField = 'tool_calls' | 'index' | 'type' | 'id' | 'function' | 'name' | 'arguments';
+export type ToolStreamDiagnostics = { reason: 'finish' | 'metadata' | 'arguments' | 'duplicate_ids' | 'structure' | 'size'; field?: ToolCallField; callIndex?: number; observedLength?: number; limit?: number; finishReason?: string; callCount: number; missingIds: number; missingNames: number; emptyArguments: number };
 /** Protocol details intentionally contain no arguments, mail content, keys or provider payloads. */
 export class ToolStreamError extends Error {
   constructor(readonly diagnostics: ToolStreamDiagnostics, readonly transport: 'stream' | 'complete' = 'stream') {
-    const explanation = { finish: 'Der Abschluss der Werkzeugantwort fehlt oder wurde abgebrochen.', metadata: 'Name oder Kennung eines Werkzeugaufrufs fehlen.', arguments: 'Die Werkzeugargumente sind nicht vollständig als JSON angekommen.', duplicate_ids: 'Mehrere Werkzeugaufrufe haben dieselbe Kennung.' }[diagnostics.reason];
-    super(`${transport === 'complete' ? 'Der Endpunkt hat auch ohne Streaming unvollständige Werkzeugaufrufe geliefert.' : 'Der Endpunkt hat unvollständige Werkzeugaufrufe geliefert.'} ${explanation} Es wurde kein Aufruf dieser Antwort ausgeführt.`);
+    const explanation = { finish: 'Der Abschluss der Werkzeugantwort fehlt oder wurde abgebrochen.', metadata: 'Name oder Kennung eines Werkzeugaufrufs fehlen.', arguments: 'Die Werkzeugargumente sind nicht vollständig als JSON angekommen.', duplicate_ids: 'Mehrere Werkzeugaufrufe haben dieselbe Kennung.', structure: `Das Feld „${diagnostics.field ?? 'tool_calls'}“ hat ein ungültiges Format.`, size: `Das Feld „${diagnostics.field}“ von Aufruf ${(diagnostics.callIndex ?? 0) + 1} umfasst ${diagnostics.observedLength} Zeichen (Grenze: ${diagnostics.limit}).` }[diagnostics.reason];
+    const kind = diagnostics.reason === 'size' ? 'zu große' : diagnostics.reason === 'structure' ? 'ungültige' : 'unvollständige';
+    super(`Der Endpunkt hat${transport === 'complete' ? ' auch ohne Streaming' : ''} ${kind} Werkzeugaufrufe geliefert. ${explanation} Es wurde kein Aufruf dieser Antwort ausgeführt.`);
     this.name = 'ToolStreamError';
   }
 }
 
+function toolCallError(reason: ToolStreamDiagnostics['reason'], calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream', field?: ToolCallField, size?: Pick<ToolStreamDiagnostics, 'callIndex' | 'observedLength' | 'limit'>): ToolStreamError {
+  return new ToolStreamError({ reason, ...(field ? { field } : {}), ...size, ...(finishReason ? { finishReason } : {}), callCount: calls.length, missingIds: calls.filter(call => !call.id).length, missingNames: calls.filter(call => !call.function.name).length, emptyArguments: calls.filter(call => !call.function.arguments.trim()).length }, transport);
+}
 
-type DeclaredTool = { required: string[] };
+function validateToolCallSize(call: ToolCall, callIndex: number, calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream'): void {
+  const fields = [{ field: 'id', value: call.id, limit: 200 }, { field: 'name', value: call.function.name, limit: 128 }, { field: 'arguments', value: call.function.arguments, limit: 16_000 }] as const;
+  for (const { field, value, limit } of fields) if (value.length > limit) {
+    throw toolCallError('size', calls, finishReason, transport, field, { callIndex, observedLength: value.length, limit });
+  }
+}
+
+type DeclaredTool = { required: string[]; parameterless: boolean };
 function declaredToolSchemas(tools?: readonly unknown[]): Map<string, DeclaredTool> {
   const declared = new Map<string, DeclaredTool>();
   for (const raw of tools ?? []) {
     if (!raw || typeof raw !== 'object') continue;
-    const fn = (raw as { function?: { name?: unknown; parameters?: { required?: unknown } } }).function;
-    if (typeof fn?.name === 'string') declared.set(fn.name, { required: Array.isArray(fn.parameters?.required) ? fn.parameters.required.filter((item): item is string => typeof item === 'string') : [] });
+    const fn = (raw as { function?: { name?: unknown; parameters?: { type?: unknown; properties?: unknown; required?: unknown; patternProperties?: unknown; additionalProperties?: unknown } } }).function;
+    if (typeof fn?.name === 'string') {
+      const schema = fn.parameters;
+      const required = Array.isArray(schema?.required) ? schema.required.filter((item): item is string => typeof item === 'string') : [];
+      const properties = schema?.properties;
+      const parameterless = schema?.type === 'object' && !!properties && typeof properties === 'object' && !Array.isArray(properties) && Object.keys(properties).length === 0 && required.length === 0 && schema.patternProperties === undefined && schema.additionalProperties !== true && typeof schema.additionalProperties !== 'object';
+      declared.set(fn.name, { required, parameterless });
+    }
   }
   return declared;
 }
 function validateToolCalls(toolCalls: ToolCall[], finishReason: string | undefined, complete: boolean, tools?: readonly unknown[], transport: 'stream' | 'complete' = 'stream'): void {
   const declaredTools = declaredToolSchemas(tools);
-  const fail = (reason: ToolStreamDiagnostics['reason']): never => { throw new ToolStreamError({ reason, ...(finishReason ? { finishReason } : {}), callCount: toolCalls.length, missingIds: toolCalls.filter(call => !call.id).length, missingNames: toolCalls.filter(call => !call.function.name).length, emptyArguments: toolCalls.filter(call => !call.function.arguments.trim()).length }, transport); };
+  const fail = (reason: ToolStreamDiagnostics['reason']): never => { throw toolCallError(reason, toolCalls, finishReason, transport); };
   if (finishReason !== 'tool_calls' && finishReason !== 'stop' && !(transport === 'stream' && complete && finishReason === undefined)) fail('finish');
   if (toolCalls.some(call => !call.id || !call.function.name)) fail('metadata');
   if (new Set(toolCalls.map(call => call.id)).size !== toolCalls.length) fail('duplicate_ids');
   for (const call of toolCalls) {
     const declared = declaredTools.get(call.function.name);
-    if (!call.function.arguments.trim() && declared && declared.required.length === 0) call.function.arguments = '{}';
+    // Optional parameters still carry choices (for example a target ID). An
+    // empty stream is not evidence that the model deliberately chose defaults.
+    if (!call.function.arguments.trim() && declared?.parameterless) call.function.arguments = '{}';
     let args: unknown;
     try { args = JSON.parse(call.function.arguments); } catch { fail('arguments'); }
     if (!args || typeof args !== 'object' || Array.isArray(args)) fail('arguments');
@@ -88,13 +108,21 @@ export async function requestCompleteTurn(
     const text: string = message.content ?? '';
     if (text.length > 200_000) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
     const rawCalls = message.tool_calls ?? [];
-    if (!Array.isArray(rawCalls) || rawCalls.length > 8 || (rawCalls.length && !tools?.length)) throw new Error('Der Endpunkt hat auch ohne Streaming ungültige Werkzeugaufrufe geliefert.');
-    const toolCalls: ToolCall[] = rawCalls.map((call: any) => {
-      if (!call || typeof call !== 'object' || Array.isArray(call) || (call.type !== undefined && call.type !== 'function') || (call.id !== undefined && typeof call.id !== 'string') || !call.function || typeof call.function !== 'object' || Array.isArray(call.function) || (call.function.name !== undefined && typeof call.function.name !== 'string') || (call.function.arguments !== undefined && call.function.arguments !== null && typeof call.function.arguments !== 'string')) throw new Error('Der Endpunkt hat auch ohne Streaming ungültige Werkzeugaufrufe geliefert.');
+    const toolCalls: ToolCall[] = [];
+    const invalid = (field: ToolCallField): never => { throw toolCallError('structure', toolCalls, choice.finish_reason ?? undefined, 'complete', field); };
+    if (!Array.isArray(rawCalls) || (rawCalls.length && !tools?.length)) invalid('tool_calls');
+    // Transport byte bounds limit parsing; execution budgets belong to the agent.
+    for (const [index, call] of rawCalls.entries()) {
+      if (!call || typeof call !== 'object' || Array.isArray(call)) invalid('tool_calls');
+      if (call.type !== undefined && call.type !== 'function') invalid('type');
+      if (call.id !== undefined && typeof call.id !== 'string') invalid('id');
+      if (!call.function || typeof call.function !== 'object' || Array.isArray(call.function)) invalid('function');
+      if (call.function.name !== undefined && typeof call.function.name !== 'string') invalid('name');
+      if (call.function.arguments !== undefined && call.function.arguments !== null && typeof call.function.arguments !== 'string') invalid('arguments');
       const normalized: ToolCall = { id: call.id ?? '', type: 'function', function: { name: call.function.name ?? '', arguments: call.function.arguments ?? '' } };
-      if (normalized.id.length > 200 || normalized.function.name.length > 128 || normalized.function.arguments.length > 16000) throw new Error('Der Endpunkt hat auch ohne Streaming zu große Werkzeugaufrufe geliefert.');
-      return normalized;
-    });
+      toolCalls.push(normalized);
+      validateToolCallSize(normalized, index, toolCalls, choice.finish_reason ?? undefined, 'complete');
+    }
     const finishReason: string | undefined = choice.finish_reason ?? undefined;
     if (toolCalls.length) validateToolCalls(toolCalls, finishReason, false, tools, 'complete');
     else if (finishReason !== 'stop' || !text.trim()) throw new Error('Der Endpunkt hat auch ohne Streaming keine vollständig abgeschlossene Antwort geliefert.');
@@ -144,6 +172,7 @@ export async function streamTurn(
     let line = '', pendingCR = false, data: string[] = [], eventSize = 0, wireSize = 0;
     let answer = '', complete = false, finishReason: string | undefined;
     const calls = new Map<number, ToolCall>();
+    const invalid = (field: ToolCallField): never => { throw toolCallError('structure', [...calls.values()], finishReason, 'stream', field); };
     // Some compatible endpoints repeat metadata or send cumulative snapshots.
     // Argument deltas still append verbatim, including repeated characters inside strings.
     function appendMetadata(current: string, part: string): string {
@@ -176,19 +205,19 @@ export async function streamTurn(
       } else if (delta !== undefined && delta !== null && typeof delta !== 'string') throw new Error('Der Endpunkt hat ein nicht unterstütztes Textformat geliefert.');
       const fragments = choice?.delta?.tool_calls;
       if (fragments !== undefined) {
-        if (!tools?.length || !Array.isArray(fragments) || fragments.length > 8) throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.');
+        if (!Array.isArray(fragments) || (fragments.length && !tools?.length)) invalid('tool_calls');
         for (const fragment of fragments) {
-          if (!fragment || !Number.isInteger(fragment.index) || fragment.index < 0 || fragment.index >= 8) throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.');
+          if (!fragment || typeof fragment !== 'object' || Array.isArray(fragment) || !Number.isSafeInteger(fragment.index) || fragment.index < 0) invalid('index');
           const call = calls.get(fragment.index) ?? { id: '', type: 'function' as const, function: { name: '', arguments: '' } };
-          if (fragment.type !== undefined && fragment.type !== null && fragment.type !== 'function') throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.');
-          if (fragment.id !== undefined && fragment.id !== null) { if (typeof fragment.id !== 'string') throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.'); call.id = appendMetadata(call.id, fragment.id); }
+          if (fragment.type !== undefined && fragment.type !== null && fragment.type !== 'function') invalid('type');
+          if (fragment.id !== undefined && fragment.id !== null) { if (typeof fragment.id !== 'string') invalid('id'); call.id = appendMetadata(call.id, fragment.id); }
           if (fragment.function !== undefined && fragment.function !== null) {
-            if (!fragment.function || typeof fragment.function !== 'object' || Array.isArray(fragment.function)) throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.');
-            if (fragment.function.name !== undefined && fragment.function.name !== null) { if (typeof fragment.function.name !== 'string') throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.'); call.function.name = appendMetadata(call.function.name, fragment.function.name); }
-            if (fragment.function.arguments !== undefined && fragment.function.arguments !== null) { if (typeof fragment.function.arguments !== 'string') throw new Error('Der Endpunkt hat ungültige Werkzeugaufrufe geliefert.'); call.function.arguments = appendArguments(call.function.arguments, fragment.function.arguments); }
+            if (!fragment.function || typeof fragment.function !== 'object' || Array.isArray(fragment.function)) invalid('function');
+            if (fragment.function.name !== undefined && fragment.function.name !== null) { if (typeof fragment.function.name !== 'string') invalid('name'); call.function.name = appendMetadata(call.function.name, fragment.function.name); }
+            if (fragment.function.arguments !== undefined && fragment.function.arguments !== null) { if (typeof fragment.function.arguments !== 'string') invalid('arguments'); call.function.arguments = appendArguments(call.function.arguments, fragment.function.arguments); }
           }
-          if (call.id.length > 200 || call.function.name.length > 128 || call.function.arguments.length > 16_000) throw new Error('Der Endpunkt hat zu große Werkzeugaufrufe geliefert.');
           if (call.id || call.function.name || call.function.arguments) calls.set(fragment.index, call);
+          validateToolCallSize(call, fragment.index, [...calls.values()], finishReason);
         }
       }
     }

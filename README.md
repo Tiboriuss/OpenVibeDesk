@@ -113,7 +113,7 @@ Custom modules are discovered at startup under `<userData>/modules/`. Their exac
 - **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
 - **Extensions:** MCP OAuth, resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
 
-Sending and other protected actions use the shared confirmation flow. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can skip individual confirmations for requested assistant actions. Tool permissions and approval of third-party module code remain separate.
+With Workspace tools enabled, the Assistant can search and read configured mail and files and navigate their views for your task without individual read approvals. Sending and other protected actions use the shared confirmation flow. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can skip individual confirmations for requested assistant actions. MCP tool permissions and approval of third-party module code remain separate.
 
 The internal package name `ai-workspace` and storage identifiers are retained to preserve existing data and credentials. See [data locations](docs/getting-started.md#local-data) and the [architecture](docs/architecture.md).
 

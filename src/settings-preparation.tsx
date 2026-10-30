@@ -7,7 +7,7 @@ import './settings-preparation.css';
 export type SettingsSuggestion = SettingsPreparation & { token: number };
 type SafeValue = string | number | boolean;
 const stringLimits: Record<string, number> = { name: 120, senderName: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
-const labels: Record<string, string> = { title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell', simpleModel: 'Einfaches Modell', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', realMailAccess: 'Allgemeiner Mailzugriff', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
+const labels: Record<string, string> = { title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell', simpleModel: 'Einfaches Modell', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
 
 /** Only ordinary configuration fields reach the forms; secret fields are never copied. */
 export function preparationValues(suggestion: SettingsSuggestion): Record<string, SafeValue> {
@@ -27,7 +27,7 @@ export function preparationValues(suggestion: SettingsSuggestion): Record<string
     }
     return result;
   }
-  const allowed = suggestion.kind === 'ai' ? ['baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'realMailAccess', 'confirmationMode'] : suggestion.kind === 'smtp' ? ['host', 'port', 'security', 'username', 'useImapCredentials'] : ['name', 'email', 'host', 'port', 'security', 'username', 'senderName', 'signature', 'pollIntervalSeconds'];
+  const allowed = suggestion.kind === 'ai' ? ['baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'confirmationMode'] : suggestion.kind === 'smtp' ? ['host', 'port', 'security', 'username', 'useImapCredentials'] : ['name', 'email', 'host', 'port', 'security', 'username', 'senderName', 'signature', 'pollIntervalSeconds'];
   const result: Record<string, SafeValue> = {};
   for (const key of allowed) {
     const value = suggestion.values[key];
@@ -38,7 +38,7 @@ export function preparationValues(suggestion: SettingsSuggestion): Record<string
     else if (key === 'security' && (value === 'tls' || value === 'starttls')) result[key] = value;
     else if ((key === 'smartThinking' || key === 'simpleThinking') && typeof value === 'string' && ['off', 'low', 'medium', 'high'].includes(value)) result[key] = value;
     else if (key === 'confirmationMode' && (value === 'ask' || value === 'never')) result[key] = value;
-    else if (['workspaceTools', 'realMailAccess', 'useImapCredentials'].includes(key) && typeof value === 'boolean') result[key] = value;
+    else if (['workspaceTools', 'useImapCredentials'].includes(key) && typeof value === 'boolean') result[key] = value;
   }
   return result;
 }

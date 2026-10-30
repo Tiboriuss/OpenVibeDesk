@@ -51,6 +51,8 @@ describe('OpenAI-compatible endpoint', () => {
     expect(parseAiInput({ ...input, baseUrl: 'https://example.com/v1', confirmationMode: 'never' }).confirmationMode).toBe('never');
     expect(() => parseAiInput({ ...input, baseUrl: 'https://example.com/v1', confirmationMode: true })).toThrow();
     expect(normalizeAiConfig({ workspaceTools: false }).workspaceTools).toBe(false);
+    expect(normalizeAiConfig({ workspaceTools: true, realMailAccess: false })).not.toHaveProperty('realMailAccess');
+    expect(parseAiInput({ ...input, baseUrl: 'https://example.com/v1', workspaceTools: true, realMailAccess: false })).not.toHaveProperty('realMailAccess');
     expect(parseAiInput({ ...input, baseUrl: 'https://example.com/v1', workspaceTools: false }).workspaceTools).toBe(false);
     expect(() => parseAiInput({ ...input, baseUrl: 'https://example.com/v1', workspaceTools: 'false' })).toThrow();
     expect(chatOptionsSchema.safeParse({ tier: 'smart', thinking: 'high' }).success).toBe(false);

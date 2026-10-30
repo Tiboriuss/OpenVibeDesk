@@ -13,9 +13,9 @@ export interface AgentRunLimit { status: 'limit_reached'; reason: 'tool_rounds' 
 
 export interface ChatOptions { tier: ModelTier; sessionRefId?: string; sessionId?: string; clientRequestId?: string; references?: ModuleReferenceInput[]; }
 export interface ReformulateChatOptions { tier: ModelTier; sessionId?: string; }
-export interface AiConfig { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; historyStart: number; workspaceTools?: boolean; realMailAccess?: boolean; confirmationMode?: ConfirmationMode; }
-export interface AiSettings { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; realMailAccess: boolean; confirmationMode: ConfirmationMode; hasApiKey: boolean; configured: boolean; }
-export interface AiSettingsInput { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools?: boolean; realMailAccess?: boolean; confirmationMode?: ConfirmationMode; apiKey?: string; }
+export interface AiConfig { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; historyStart: number; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; }
+export interface AiSettings { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; confirmationMode: ConfirmationMode; hasApiKey: boolean; configured: boolean; }
+export interface AiSettingsInput { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; apiKey?: string; }
 export type Folder = 'Inbox' | 'Sent' | 'Drafts' | 'Archive';
 export interface WorkspaceWindow { id: string; kind: WindowKind; title: string; x: number; y: number; width: number; height: number; z: number; minimized: boolean; }
 export interface Mail { id: string; folder: Folder; threadId: string; from: string; to: string; subject: string; date: string; bodyText: string; bodyHtml?: string; attachments: { name: string; size: number }[]; read: boolean; accountName?: string; externalFolder?: string; bodyLoaded?: boolean; }
