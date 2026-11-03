@@ -9,11 +9,45 @@
 Add a server under **Settings → MCP** (currently **Einstellungen → MCP**):
 
 - **Stdio:** enter an executable, its individual arguments and an optional working directory. OVD launches it without an additional shell. Store credentials as secret environment values rather than putting them in command-line arguments. The process inherits the SDK's limited default environment plus the explicitly configured values, rather than OVD's entire environment.
-- **Streamable HTTP:** use HTTPS, or HTTP on `localhost`, `127.0.0.1` or `[::1]`. Enter a Bearer token separately if required. Credentials in the URL, query parameters, fragments and redirects are rejected.
+- **Streamable HTTP:** use HTTPS, or HTTP on `localhost`, `127.0.0.1` or `[::1]`. Select **No authentication**, **Bearer token**, or **OAuth · sign in in browser** (currently **Keine Anmeldung**, **Bearer-Token**, **OAuth · im Browser anmelden**). Credentials in the MCP URL, query parameters, fragments and redirects are rejected.
 
 Save, connect, select the required tools, then save their permissions separately. New tools are denied by default. Changing the executable, arguments, working directory or HTTP target clears the saved tool allowlist. Automatic connection at app startup is optional and off by default; saved opt-in connections start in the background. The assistant can prepare public configuration and permissions in the form, but only the user can save them. It cannot save a configuration or grant itself tools.
 
-Bearer tokens and configured environment values live in the OS credential store and are write-only from the settings UI. Public configuration, token-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection.
+Bearer tokens, OAuth credentials and configured environment values live in the OS credential store and are write-only from the settings UI. Public configuration, credential-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection. Existing Bearer-token configurations retain their authentication method.
+
+## OAuth for HTTP servers
+
+MCP OAuth is available from **v0.1.4**. It uses the official SDK's authorization helpers with OVD's browser, credential store and connection lifecycle. It applies to Streamable HTTP connections. Stdio servers continue to receive their configured environment credentials.
+
+1. Select **OAuth · im Browser anmelden**, enter the MCP URL and save the server.
+2. Choose **Im Browser anmelden**. Complete the provider's sign-in and consent in your normal browser. OVD connects the saved server afterwards.
+3. Review and save the desired **Werkzeugfreigaben**. Signing in does not approve any tools or expand their existing allowlist.
+
+The connection card distinguishes a saved login, an outstanding browser sign-in and a required new login. **Anmeldung abbrechen** closes the pending local sign-in; **Abmelden** removes the saved local OAuth session and disconnects the server. Disconnecting alone retains the login for a later connection. Logging out of OVD does not log out your browser or revoke the provider's independent browser session.
+
+If a failed authorization leaves a registration that cannot be reused, **Anmeldung zurücksetzen** clears the local OAuth session and registration so you can start again. Saved public client settings and an explicitly configured client secret remain available. An unavailable credential store must become accessible before credentials can be safely changed.
+
+Automatic startup connections and ordinary tool calls never open a login browser. Saved renewable credentials can refresh in the background. If authentication is no longer usable, the card shows that sign-in is required. A failed or uncertain tool call is not automatically repeated after authentication; sign in first, then decide how to continue the task.
+
+### Registration and advanced settings
+
+For servers supporting dynamic client registration, leave the optional client fields empty. OVD discovers the authorization server, registers its desktop client and uses Authorization Code with PKCE. The expanded **OAuth-Einstellungen** group also supports a client registered with your provider:
+
+| Setting | Use |
+| --- | --- |
+| **Client-ID** | The client identifier issued for this application. |
+| **Issuer-URL** | The expected authorization-server issuer for that registered client; it must match discovered metadata. |
+| **Client-Secret** | Only when the provider requires one. It is stored securely, never returned to the UI, and a blank field preserves it. |
+| **Scopes** | Optional additional provider scopes, separated by spaces (for example `offline_access` when required for refresh). Server-required and previously granted scopes are retained alongside them. |
+| **Lokaler Rückruf-Port** | Default `43189`. The redirect URI is `http://127.0.0.1:43189/oauth/callback`; substitute your saved port when registering it with the provider. |
+
+The callback listener exists only for a pending sign-in. A busy port requires closing the other sign-in or selecting another port and updating the provider registration. State and PKCE bind the callback to the pending request; credentials and registrations remain bound to their server and issuer. Changing the HTTP target or authentication identity invalidates the prior binding and requires reviewing tool permissions again.
+
+The implemented registration paths are pre-registration and Dynamic Client Registration. OVD does not currently host or supply a Client ID Metadata Document. Providers that require that registration mechanism, device authorization, client-credentials-only grants or a proprietary login flow need a compatible pre-registered Authorization Code client or a separate integration. This is a supported OAuth subset, not a claim that every MCP authorization extension is implemented. The [current MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) distinguishes these registration mechanisms; the installed [SDK v1 client guide](https://ts.sdk.modelcontextprotocol.io/client#oauth-client-authentication-helpers) describes the provider integration and issuer-bound credentials.
+
+### Assistant access
+
+The Assistant can inspect authentication status through `mcp.servers`, start an explicit sign-in with `mcp.sign_in`, cancel it with `mcp.cancel_sign_in`, and log out with `mcp.sign_out`. Login and logout follow the host's confirmation policy. The provider's browser consent remains interactive. `mcp.settings` can prepare public OAuth configuration in the form; only the user can save it. Tokens and client secrets are never tool arguments or results. The normal lazy module discovery and tool allowlist still apply.
 
 ## Lazy tool discovery
 
@@ -37,9 +71,10 @@ Disconnecting, disabling the module or quitting closes client connections and lo
 
 - [`backend/store.ts`](backend/store.ts): public configuration and OS credential-store access.
 - [`backend/service.ts`](backend/service.ts): MCP clients, transport lifecycle, validation, the shared call service and dynamic tool provider.
+- [`backend/oauth.ts`](backend/oauth.ts): OAuth discovery, browser authorization, loopback callbacks and issuer-bound token handling.
 - [`backend/capabilities.ts`](backend/capabilities.ts) and [`backend/index.ts`](backend/index.ts): validated management for the UI and assistant.
 - [`shared/mcp.ts`](../../shared/mcp.ts): settings, inventory, permissions, audit and result contracts.
 - [`frontend/`](frontend/): compact settings UI.
 - [`examples/mcp-server/`](../../examples/mcp-server/README.md): a separate framework server with three tools.
 
-This first integration supports tools. OAuth, legacy HTTP/SSE transport, MCP resources, prompts, sampling and elicitation are not integrated. The transports use the [official TypeScript SDK v1 client](https://ts.sdk.modelcontextprotocol.io/client); the installed version is pinned in [`package.json`](../../package.json).
+This integration supports tools and the HTTP OAuth flows described above. Legacy HTTP/SSE transport, MCP resources, prompts, sampling and elicitation are not integrated. The transports use the [official TypeScript SDK v1 client](https://ts.sdk.modelcontextprotocol.io/client); the installed version is pinned in [`package.json`](../../package.json).

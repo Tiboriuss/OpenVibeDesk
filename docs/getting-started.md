@@ -142,6 +142,8 @@ See the [module repository guide](module-repositories.md) for private access, so
 
 To connect a local or remote MCP server, follow the [MCP module guide](../modules/ovd-mcp/README.md). Only saved servers and currently approved tools can be used. The [sample server](../examples/mcp-server/README.md) provides a small local example.
 
+For an OAuth-protected HTTP server, select **OAuth · im Browser anmelden**, save its configuration, then use **Im Browser anmelden**. Complete the provider's consent in the browser and approve the required tools separately. The [OAuth setup guide](../modules/ovd-mcp/README.md#oauth-for-http-servers) covers pre-registered clients, callback URLs, cancellation and sign-out. Startup connections never open a login browser automatically.
+
 MCP servers supply tools through the MCP module. Configure them in **Settings → MCP**; do not enter their URLs as module repository sources. Module repositories distribute OVD packages with manifests and can add their own views and settings.
 
 ### Adjust agent execution

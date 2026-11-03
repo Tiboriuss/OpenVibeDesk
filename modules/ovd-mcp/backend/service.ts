@@ -13,11 +13,12 @@ import type { ModuleToolProvider } from '../../../shared/module-tool-provider';
 import type { ModuleSummary, ModuleToolDescriptor, ModuleToolQuery } from '../../../shared/modules';
 import type { OperationBinding } from '../../../shared/operations';
 import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, mcpServerInputSchema, mcpToolQuerySchema, type McpAuditEntry, type McpAuditPage, type McpAuditQuery, type McpCallResult, type McpServerConfig, type McpServerInput, type McpServerSummary, type McpToolInfo, type McpToolPermissions, type McpToolQuery } from '../../../shared/mcp';
-import { McpConfigStore, validateMcpUrl } from './store';
+import { McpConfigStore, mcpOAuthBinding, validateMcpUrl } from './store';
+import { McpOAuthSession } from './oauth';
 
 type CachedTool = { name: string; info: McpToolInfo; validate?: ValidateFunction; fingerprint: string };
-type Connection = { id: string; generation: string; client: Client; transport: Transport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
-type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string };
+type Connection = { id: string; generation: string; client: Client; transport: Transport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; oauth?: McpOAuthSession; abort: AbortController; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
+type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string; openExternal?(url: string): Promise<void> };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const fold = (value: string) => value.normalize('NFKC').toLocaleLowerCase('de-DE');
 
@@ -90,6 +91,9 @@ export class McpService {
   private readonly errors = new Map<string, string>();
   private readonly audits: McpAuditEntry[] = [];
   private readonly changing = new Set<string>();
+  private readonly signingIn = new Map<string, AbortController>();
+  private readonly connectControllers = new Map<string, AbortController>();
+  private readonly oauthStates = new Map<string, { status: NonNullable<McpServerSummary['oauthStatus']>; error?: string }>();
   private readonly ajvOptions = { strict: false, validateFormats: false, ownProperties: true, coerceTypes: false, useDefaults: false, removeAdditional: false, addUsedSchema: false };
   private readonly ajv2020 = new Ajv2020(this.ajvOptions);
   private readonly ajv2019 = new Ajv2019(this.ajvOptions);
@@ -142,9 +146,71 @@ export class McpService {
     // Saved opt-in may connect in the background without delaying the dock.
     void Promise.all(this.store.list().filter(server => server.autoConnect).map(server => this.connect(server.id, { origin: 'ui', signal: new AbortController().signal }, true).catch(() => {})));
   }
-  async deactivate() { this.active = false; this.lifecycle++; this.connecting.clear(); await Promise.all([...this.connections.keys()].map(id => this.close(id))); this.host.changed(); }
+  async deactivate() { this.active = false; this.lifecycle++; for (const controller of [...this.signingIn.values(), ...this.connectControllers.values()]) controller.abort(); this.connecting.clear(); await Promise.all([...this.connections.keys()].map(id => this.close(id))); this.host.changed(); }
   listServers(): McpServerSummary[] {
-    return this.store.list().map(server => { const connection = this.connections.get(server.id), error = connection?.error ?? this.errors.get(server.id); return { ...server, status: connection?.status ?? (this.connecting.has(server.id) ? 'connecting' : error ? 'error' : 'disconnected'), toolCount: connection?.tools.size ?? 0, allowedToolCount: [...(connection?.tools.values() ?? [])].filter(tool => this.allowed(server.id, tool)).length, ...(error ? { error } : {}), ...(connection?.warning ? { warning: connection.warning } : {}), ...(connection?.connectedAt ? { connectedAt: connection.connectedAt } : {}) }; });
+    return this.store.list().map(server => { const connection = this.connections.get(server.id), error = connection?.error ?? this.errors.get(server.id), oauth = this.oauthStates.get(server.id); return { ...server, status: connection?.status ?? (this.connecting.has(server.id) ? 'connecting' : error ? 'error' : 'disconnected'), toolCount: connection?.tools.size ?? 0, allowedToolCount: [...(connection?.tools.values() ?? [])].filter(tool => this.allowed(server.id, tool)).length, ...(server.authMode === 'oauth' ? { oauthStatus: this.signingIn.has(server.id) ? 'signing_in' as const : oauth?.status ?? (server.hasOAuthTokens ? 'signed_in' as const : 'signed_out' as const), ...(oauth?.error ? { oauthError: oauth.error } : {}) } : {}), ...(error ? { error } : {}), ...(connection?.warning ? { warning: connection.warning } : {}), ...(connection?.connectedAt ? { connectedAt: connection.connectedAt } : {}) }; });
+  }
+  private oauthRequired(id: string) {
+    const error = 'OAuth-Anmeldung erforderlich. Bitte in den MCP-Einstellungen erneut anmelden; der Aufruf wird nicht wiederholt.';
+    this.oauthStates.set(id, { status: 'required', error });
+    const connection = this.connections.get(id);
+    if (connection) { connection.status = 'error'; connection.error = error; connection.tools.clear(); }
+    this.host.changed();
+  }
+  async signIn(id: string, context: CapabilityContext) {
+    this.assertActive(context); const server = this.store.get(mcpServerIdSchema.parse(id));
+    if (server.transport !== 'http' || server.authMode !== 'oauth') throw new Error('Zuerst OAuth für diese HTTP-Verbindung in den Einstellungen speichern.');
+    if (this.signingIn.has(id) || this.connecting.has(id) || this.changing.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
+    if (context.origin === 'agent' && !await this.host.confirm(context, `${server.name}: im Browser anmelden?`, 'Die gespeicherte OAuth-Anmeldung wird geöffnet. Die Anmeldung erfolgt im Browser; Werkzeugfreigaben bleiben unverändert.')) return { serverId: id, authenticated: false, cancelled: true };
+    await context.validateOperation?.(); await context.beforeDispatch?.(); await context.validateOperation?.();
+    this.assertActive(context);
+    if (mcpOAuthBinding(this.store.get(id)) !== mcpOAuthBinding(server)) throw new Error('Die MCP-Anmeldeeinstellungen wurden geändert. Bitte die Anmeldung erneut starten.');
+    if (this.signingIn.has(id) || this.connecting.has(id) || this.changing.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
+    const controller = new AbortController(), lifecycle = this.lifecycle, start = Date.now();
+    const signal = AbortSignal.any([context.signal, controller.signal]);
+    this.signingIn.set(id, controller); this.oauthStates.delete(id); this.errors.delete(id); this.host.changed();
+    let session: McpOAuthSession | undefined;
+    try {
+      await this.close(id); signal.throwIfAborted();
+      session = new McpOAuthSession(this.store, server, { signal, openExternal: this.host.openExternal });
+      await session.signIn(); signal.throwIfAborted(); this.assertActive(context);
+      if (lifecycle !== this.lifecycle) throw new Error('MCP_CONNECTION_CHANGED');
+      this.oauthStates.set(id, { status: 'signed_in' });
+      this.audit(server, 'sign_in', 'completed', start);
+    } catch (error) {
+      if (signal.aborted || lifecycle !== this.lifecycle) { this.oauthStates.delete(id); this.audit(server, 'sign_in', 'cancelled', start); return { serverId: id, authenticated: false, cancelled: true }; }
+      // The OAuth implementation only emits bounded, actionable public errors.
+      const message = error instanceof Error ? error.message : 'Die OAuth-Anmeldung ist fehlgeschlagen.';
+      this.oauthStates.set(id, { status: 'error', error: message }); this.audit(server, 'sign_in', 'failed', start); throw new Error(message);
+    } finally { session?.dispose(); if (this.signingIn.get(id) === controller) this.signingIn.delete(id); this.host.changed(); }
+    // Connecting discovers tools; it never changes their saved permissions.
+    try { await this.connect(id, context, true); }
+    catch { return { serverId: id, authenticated: true, connected: false, message: 'Angemeldet. Die MCP-Verbindung konnte noch nicht hergestellt werden; Verbindungsstatus prüfen.' }; }
+    return { serverId: id, authenticated: true, connected: true };
+  }
+  async cancelSignIn(id: string, context: CapabilityContext) {
+    this.assertActive(context); this.store.get(mcpServerIdSchema.parse(id));
+    await context.validateOperation?.(); await context.beforeDispatch?.(); await context.validateOperation?.(); this.assertActive(context);
+    this.signingIn.get(id)?.abort(); return { serverId: id, cancelled: true };
+  }
+  async signOut(id: string, context: CapabilityContext) {
+    this.assertActive(context); const server = this.store.get(mcpServerIdSchema.parse(id)), start = Date.now();
+    if (server.authMode !== 'oauth') throw new Error('Diese Verbindung verwendet kein OAuth.');
+    if (this.changing.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
+    if (context.origin === 'agent' && !await this.host.confirm(context, `${server.name}: abmelden?`, 'Die Verbindung wird getrennt und die gespeicherte lokale OAuth-Anmeldung entfernt. Externe Kontodaten bleiben erhalten.')) return { serverId: id, cancelled: true };
+    await context.validateOperation?.(); await context.beforeDispatch?.(); await context.validateOperation?.();
+    this.assertActive(context);
+    if (this.changing.has(id) || mcpOAuthBinding(this.store.get(id)) !== mcpOAuthBinding(server)) throw new Error('Die MCP-Anmeldeeinstellungen wurden geändert. Bitte erneut prüfen.');
+    this.changing.add(id);
+    try {
+      this.signingIn.get(id)?.abort(); this.connectControllers.get(id)?.abort(); this.connecting.delete(id);
+      await this.close(id); await this.store.clearOAuth(id); this.oauthStates.set(id, { status: 'signed_out' }); this.errors.delete(id);
+      this.audit(server, 'sign_out', 'completed', start);
+      return { serverId: id, signedOut: true };
+    } catch {
+      const error = 'Die lokale OAuth-Anmeldung konnte nicht vollständig entfernt werden. Den sicheren Zugangsdaten-Speicher prüfen und die Anmeldung erneut zurücksetzen.';
+      this.oauthStates.set(id, { status: 'error', error }); this.audit(server, 'sign_out', 'failed', start); throw new Error(error);
+    } finally { this.changing.delete(id); this.host.changed(); }
   }
   private requireConnection(id: string): Connection {
     this.assertActive();
@@ -164,16 +230,20 @@ export class McpService {
         await Promise.race([connection.transport.terminateSession().catch(() => {}), new Promise<void>(resolve => { timer = setTimeout(resolve, 1500); })]);
       } finally { if (timer) clearTimeout(timer); }
     }
+    connection.abort.abort(); connection.oauth?.dispose();
     try { await connection.client.close(); } catch { try { await connection.transport.close(); } catch { /* Closing has no retry of a tool call. */ } }
   }
-  async disconnect(id: string, context: CapabilityContext) { this.assertActive(context); const server = this.store.get(mcpServerIdSchema.parse(id)), start = Date.now(); this.connecting.delete(id); await this.close(id); this.errors.delete(id); this.audit(server, 'disconnect', 'completed', start); return { serverId: id, disconnected: true }; }
+  async disconnect(id: string, context: CapabilityContext) { this.assertActive(context); const server = this.store.get(mcpServerIdSchema.parse(id)), start = Date.now(); this.signingIn.get(id)?.abort(); this.connectControllers.get(id)?.abort(); this.connecting.delete(id); await this.close(id); this.errors.delete(id); this.audit(server, 'disconnect', 'completed', start); return { serverId: id, disconnected: true }; }
   async connect(id: string, context: CapabilityContext, automatic = false) {
     this.assertActive(context); id = mcpServerIdSchema.parse(id);
     const server = this.store.get(id), previous = this.connections.get(id), start = Date.now(), lifecycle = this.lifecycle, attempt = randomUUID();
     if (previous?.status === 'connected') return { serverId: id, connected: true, alreadyConnected: true };
-    if (previous?.status === 'connecting' || this.changing.has(id) || this.connecting.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
+    if (previous?.status === 'connecting' || this.changing.has(id) || this.connecting.has(id) || this.signingIn.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
     this.connecting.set(id, attempt); this.errors.delete(id); this.host.changed();
     const secretValues: string[] = [];
+    const abort = new AbortController(), cancel = () => abort.abort(); context.signal.addEventListener('abort', cancel, { once: true });
+    this.connectControllers.set(id, abort);
+    let oauth: McpOAuthSession | undefined;
     let connection: Connection | undefined;
     try {
       if (!automatic && context.origin === 'agent' && !await this.host.confirm(context, `${server.name} verbinden?`, server.transport === 'stdio' ? 'Der gespeicherte lokale MCP-Prozess wird mit deinen Benutzerrechten gestartet.' : 'Eine Verbindung zum gespeicherten MCP-Endpunkt wird geöffnet.')) return { serverId: id, cancelled: true };
@@ -187,13 +257,22 @@ export class McpService {
         for (const key of server.envKeys) { const value = await this.store.secrets.get(id, `env:${key}`); if (value === null) throw new Error('MCP_ENV_MISSING'); env[key] = value; secretValues.push(value); }
         transport = new StdioClientTransport({ command: server.command!, args: server.args, ...(server.cwd ? { cwd: server.cwd } : {}), env, stderr: 'ignore', maxBufferSize: 2_000_000 });
       } else {
-        const url = new URL(validateMcpUrl(server.url!)), token = server.hasToken ? await this.store.secrets.get(id, 'token') : null;
-        if (server.hasToken && !token) throw new Error('MCP_TOKEN_MISSING');
+        const url = new URL(validateMcpUrl(server.url!)), token = server.authMode === 'bearer' && server.hasToken ? await this.store.secrets.get(id, 'token') : null;
+        if (server.authMode === 'bearer' && !token) throw new Error('MCP_TOKEN_MISSING');
+        if (server.authMode === 'oauth') oauth = new McpOAuthSession(this.store, server, { signal: abort.signal, openExternal: this.host.openExternal });
         if (token) secretValues.push(token);
         const safeFetch: typeof fetch = async (input, init) => {
           const target = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
           if (target.origin !== url.origin) throw new Error('MCP_CROSS_ORIGIN');
-          const response = await fetch(input, { ...init, redirect: 'error' });
+          const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+          if (oauth) {
+            try { headers.set('Authorization', `Bearer ${await oauth.accessToken()}`); }
+            catch (error) { if (!abort.signal.aborted) this.oauthRequired(id); throw error; }
+            for (const value of oauth.secrets()) if (!secretValues.includes(value)) secretValues.push(value);
+          }
+          const signal = AbortSignal.any([abort.signal, ...(init?.signal ? [init.signal] : [])]);
+          const response = await fetch(input, { ...init, headers, signal, redirect: 'error' });
+          if (oauth && (response.status === 401 || response.status === 403)) this.oauthRequired(id);
           if (!response.body) return response;
           let size = 0;
           const bounded = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, controller) { size += chunk.byteLength; if (size > 4_000_000) { controller.error(new Error('MCP_RESPONSE_LIMIT')); return; } controller.enqueue(chunk); } }));
@@ -203,7 +282,7 @@ export class McpService {
       }
       this.assertActive(context);
       if (this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
-      connection = { id, generation: randomUUID(), client, transport, status: 'connecting', tools: new Map(), secrets: secretValues };
+      connection = { id, generation: randomUUID(), client, transport, status: 'connecting', tools: new Map(), secrets: secretValues, abort, ...(oauth ? { oauth } : {}) };
       this.connections.set(id, connection); this.host.changed();
       const current = connection;
       client.onclose = () => { if (this.connections.get(id) === current) { current.status = current.status === 'error' ? 'error' : 'disconnected'; current.tools.clear(); this.host.changed(); } };
@@ -214,16 +293,17 @@ export class McpService {
       if (this.connections.get(id) !== connection || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
       connection.status = 'connected'; connection.connectedAt = new Date().toISOString();
       await this.refresh(id, context.signal);
+      if (oauth) this.oauthStates.set(id, { status: 'signed_in' });
       this.audit(server, 'connect', 'completed', start);
       return { serverId: id, connected: true, toolCount: connection.tools.size };
     } catch (error) {
-      const message = context.signal.aborted ? 'Verbinden wurde abgebrochen.' : /401|403|Unauthorized|TOKEN_MISSING/.test(String(error)) ? 'MCP-Anmeldung fehlgeschlagen. Bearer-Token prüfen; OAuth wird noch nicht unterstützt.' : 'MCP-Verbindung fehlgeschlagen. Programm, Argumente, Arbeitsordner beziehungsweise URL und Zugangsdaten in den Einstellungen prüfen.';
+      const message = context.signal.aborted || abort.signal.aborted ? 'Verbinden wurde abgebrochen.' : this.oauthStates.get(id)?.status === 'required' ? 'OAuth-Anmeldung erforderlich. Bitte in den MCP-Einstellungen anmelden.' : /401|403|Unauthorized|TOKEN_MISSING/.test(String(error)) ? 'MCP-Anmeldung fehlgeschlagen. In den Einstellungen OAuth wählen und anmelden oder den Bearer-Token prüfen.' : 'MCP-Verbindung fehlgeschlagen. Programm, Argumente, Arbeitsordner beziehungsweise URL und Zugangsdaten in den Einstellungen prüfen.';
       if (connection) { if (this.connections.get(id) === connection) await this.close(id); else try { await connection.client.close(); } catch { /* Only this attempt owns this transport. */ } }
       const cancelled = context.signal.aborted || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt;
       if (this.active && this.lifecycle === lifecycle && this.connecting.get(id) === attempt) this.errors.set(id, message);
       this.audit(server, 'connect', cancelled ? 'cancelled' : 'failed', start);
       throw new Error(message);
-    } finally { if (this.connecting.get(id) === attempt) this.connecting.delete(id); this.host.changed(); }
+    } finally { context.signal.removeEventListener('abort', cancel); if (!connection || this.connections.get(id) !== connection) { abort.abort(); oauth?.dispose(); } if (this.connectControllers.get(id) === abort) this.connectControllers.delete(id); if (this.connecting.get(id) === attempt) this.connecting.delete(id); this.host.changed(); }
   }
   async refresh(id: string, signal: AbortSignal) {
     const connection = this.requireConnection(id);
@@ -292,16 +372,16 @@ export class McpService {
     const old = input.id ? this.store.get(input.id) : undefined;
     const selected = input.allowedTools ?? [], known = new Set([...(this.connections.get(input.id ?? '')?.tools.values() ?? [])].filter(tool => tool.validate).map(tool => tool.name));
     if (selected.some(name => !old?.allowedTools.includes(name) && !known.has(name))) throw new Error('Neue Werkzeugfreigaben erst nach dem Verbinden aus dem tatsächlichen Katalog auswählen.');
-    if (old) { if (this.changing.has(old.id) || this.connecting.has(old.id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.'); this.changing.add(old.id); }
+    if (old) { if (this.changing.has(old.id) || this.connecting.has(old.id) || this.signingIn.has(old.id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.'); this.changing.add(old.id); }
     const targetChanged = old && JSON.stringify([old.transport, old.command, old.args, old.cwd, old.url]) !== JSON.stringify([input.transport, input.command, input.args ?? [], input.cwd, input.url]);
-    try { if (old) await this.close(old.id); const result = await this.store.save(targetChanged ? { ...input, allowedTools: [] } : input); this.errors.delete(result.id); this.host.changed(); return this.listServers().find(server => server.id === result.id)!; }
+    try { if (old) await this.close(old.id); const result = await this.store.save(targetChanged ? { ...input, allowedTools: [] } : input); this.errors.delete(result.id); this.oauthStates.delete(result.id); this.host.changed(); return this.listServers().find(server => server.id === result.id)!; }
     finally { if (old) this.changing.delete(old.id); }
   }
   async removeServer(id: string, context: CapabilityContext) {
     this.assertActive(context); const server = this.store.get(mcpServerIdSchema.parse(id));
-    if (this.connecting.has(id) || this.changing.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
+    if (this.connecting.has(id) || this.changing.has(id) || this.signingIn.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
     if (!await this.host.confirm(context, `${server.name} entfernen?`, 'Die MCP-Verbindung, ihre lokalen Einstellungen und gespeicherten Zugangsdaten werden entfernt.')) return { cancelled: true };
-    this.assertActive(context); await this.close(id); await this.store.remove(id); this.errors.delete(id); this.host.changed(); return { removed: true, serverId: id };
+    this.assertActive(context); await this.close(id); await this.store.remove(id); this.errors.delete(id); this.oauthStates.delete(id); this.host.changed(); return { removed: true, serverId: id };
   }
   async permissions(raw: McpToolPermissions, context: CapabilityContext) {
     this.assertActive(context);
@@ -337,6 +417,11 @@ export class McpService {
     if (current !== connection || !currentTool || !this.allowed(id, currentTool) || this.descriptor(id, currentTool).name !== offered) throw new Error('MCP-Verbindung, Schema oder Freigabe wurden geändert. Bitte das Werkzeug neu laden.');
     let sent = false;
     try {
+      // Refresh before dispatch, without ever replaying a failed MCP request.
+      if (connection.oauth) {
+        try { await connection.oauth.accessToken(); }
+        catch (error) { if (!context.signal.aborted) this.oauthRequired(id); throw error; }
+      }
       await context.validateOperation?.();
       await context.beforeDispatch?.();
       await context.validateOperation?.();
@@ -349,7 +434,7 @@ export class McpService {
     } catch {
       const outcome = sent ? 'uncertain' : context.signal.aborted ? 'cancelled' : 'failed';
       this.audit(server, 'call', outcome, start, name);
-      return callResult(id, name, outcome, [], undefined, sent ? 'Die Antwort des MCP-Servers ist ausgeblieben oder die Verbindung wurde unterbrochen. Der Aufruf könnte ausgeführt worden sein; er wurde nicht erneut gesendet.' : 'Der MCP-Aufruf wurde nicht ausgeführt.');
+      return callResult(id, name, outcome, [], undefined, sent ? 'Die Antwort des MCP-Servers ist ausgeblieben oder die Verbindung wurde unterbrochen. Der Aufruf könnte ausgeführt worden sein; er wurde nicht erneut gesendet.' : this.oauthStates.get(id)?.status === 'required' ? 'OAuth-Anmeldung erforderlich. Der MCP-Aufruf wurde nicht ausgeführt; zuerst erneut anmelden.' : 'Der MCP-Aufruf wurde nicht ausgeführt.');
     }
   }
 }

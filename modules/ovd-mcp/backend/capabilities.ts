@@ -1,16 +1,19 @@
 import { z } from 'zod';
-import { mcpAuditQuerySchema, mcpServerIdSchema, mcpToolQuerySchema } from '../../../shared/mcp';
+import { mcpAuditQuerySchema, mcpOAuthPublicFields, mcpServerIdSchema, mcpToolQuerySchema } from '../../../shared/mcp';
 import type { CapabilityDefinition, CapabilityMetadata } from '../../../electron/workspace-capabilities';
 
 export const mcpPreparationSchema = z.object({
   id: mcpServerIdSchema.optional(), name: z.string().trim().min(1).max(100).optional(), description: z.string().max(500).optional(),
   transport: z.enum(['stdio', 'http']).optional(), command: z.string().min(1).max(4096).optional(), args: z.array(z.string().max(4096)).max(100).optional(),
-  cwd: z.string().min(1).max(4096).optional(), url: z.string().min(1).max(2048).optional(), allowedTools: z.array(z.string().min(1).max(200)).max(500).optional()
+  cwd: z.string().min(1).max(4096).optional(), url: z.string().min(1).max(2048).optional(), allowedTools: z.array(z.string().min(1).max(200)).max(500).optional(), ...mcpOAuthPublicFields
 }).strict();
 export const mcpCapabilitySchemas = {
   'mcp.servers': z.object({ offset: z.number().int().min(0).max(500).optional(), limit: z.number().int().min(1).max(40).optional() }).strict(),
   'mcp.connect': z.object({ serverId: mcpServerIdSchema }).strict(),
   'mcp.disconnect': z.object({ serverId: mcpServerIdSchema }).strict(),
+  'mcp.sign_in': z.object({ serverId: mcpServerIdSchema }).strict(),
+  'mcp.sign_out': z.object({ serverId: mcpServerIdSchema }).strict(),
+  'mcp.cancel_sign_in': z.object({ serverId: mcpServerIdSchema }).strict(),
   'mcp.remove': z.object({ serverId: mcpServerIdSchema }).strict(),
   'mcp.settings': mcpPreparationSchema,
   'mcp.tools': mcpToolQuerySchema,
@@ -21,6 +24,9 @@ const metadata: Record<keyof McpCapabilitySchemas, CapabilityMetadata> = {
   'mcp.servers': { label: 'MCP-Verbindungen anzeigen', description: 'Liste konfigurierte MCP-Server mit ID, kurzer Fachbeschreibung, Verbindungsstatus und Anzahl freigegebener Werkzeuge. Keine Zugangsdaten, Programmargumente oder Schemas. Bei hasMore weiterblättern. Verbundene freigegebene Quellen mit find_modules finden und deren benötigte Werkzeuge mit get_module_tools gezielt laden.', needsUserInteraction: false },
   'mcp.connect': { label: 'MCP-Server verbinden', description: 'Verbinde einen bereits vom Nutzer gespeicherten MCP-Server anhand seiner serverId. Bei Stdio wird der konfigurierte lokale Prozess gestartet, bei HTTP der gespeicherte Endpunkt verbunden. Ändert weder Serverkonfiguration noch Werkzeugrechte. Erforderliche Bestätigungen verarbeitet der Host.', needsUserInteraction: true },
   'mcp.disconnect': { label: 'MCP-Server trennen', description: 'Trenne einen gespeicherten MCP-Server und entferne seine Werkzeuge aus dem Angebot. Bereits ausgelöste externe Änderungen werden dadurch nicht rückgängig gemacht und nicht wiederholt.', needsUserInteraction: false },
+  'mcp.sign_in': { label: 'Bei MCP anmelden', description: 'Starte auf Nutzerwunsch die OAuth-Anmeldung für einen bereits gespeicherten HTTP-MCP-Server im Browser. Der Nutzer meldet sich dort an. Ändert keine Serverkonfiguration und erteilt keine Werkzeugrechte; gibt niemals Tokens zurück.', needsUserInteraction: true },
+  'mcp.sign_out': { label: 'Von MCP abmelden', description: 'Trenne den MCP-Server und entferne seine lokal gespeicherte OAuth-Anmeldung. Meldet nicht global beim Anbieter ab, löscht keine externen Daten und wiederholt keine Aufrufe. Die eingestellte Bestätigung gilt.', needsUserInteraction: true },
+  'mcp.cancel_sign_in': { label: 'MCP-Anmeldung abbrechen', description: 'Brich eine noch laufende Browser-Anmeldung dieses gespeicherten MCP-Servers ab und schließe den lokalen Rückkanal. Führt keine MCP-Werkzeuge aus.', needsUserInteraction: false },
   'mcp.remove': { label: 'MCP-Server entfernen', description: 'Fordere das Trennen und Entfernen einer gespeicherten MCP-Verbindung samt gespeicherten Zugangsdaten an. Der Host berücksichtigt den Bestätigungsmodus. Entfernt keine externen Daten auf dem Server.', needsUserInteraction: true },
   'mcp.settings': { label: 'MCP-Einstellungen vorbereiten', description: 'Öffne MCP-Einstellungen und bereite öffentliche Serverangaben oder allowedTools für eine bestehende Verbindung im Formular vor. Der Nutzer prüft und speichert. Keine Verbindung einrichten oder Rechte selbst erteilen. Tokens und geheime Umgebungswerte ausschließlich in der Oberfläche eingeben; diese Argumente sind nicht erlaubt.', needsUserInteraction: true },
   'mcp.tools': { label: 'MCP-Werkzeuge prüfen', description: 'Zeige begrenzt Namen, Beschreibungen, Unterstützungs- und Freigabestatus der Werkzeuge eines verbundenen MCP-Servers. Optional refresh aktualisiert den Serverkatalog, ändert aber keine Freigaben. Keine Eingabeschemas im Ergebnis; tatsächliche Aufrufe über find_modules und get_module_tools der jeweiligen Serverquelle laden.', needsUserInteraction: false },

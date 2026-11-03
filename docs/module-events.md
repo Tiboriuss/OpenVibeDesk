@@ -4,7 +4,7 @@
 
 OVD provides a generic event interface for modules that need to react to new activity in the workspace. The host owns subscription settings, bounded envelopes, durable delivery and acknowledgements. A module owns its interpretation and any resulting data in its own store. This extension does not include a memory module, a learning model or a second agent loop.
 
-This guide describes the current checkout. Release **v0.1.3** predates event subscriptions and rejects their manifest contribution. The module catalog currently has no minimum-host-version negotiation; distribute modules only with a compatible host requirement in their documentation.
+Event subscriptions are available from **v0.1.4**. Older hosts, including **v0.1.3**, reject their manifest contribution. The module catalog currently has no minimum-host-version negotiation; distribute modules only with a compatible host requirement in their documentation.
 
 ## Subscribe to selected sources
 

@@ -166,9 +166,9 @@ export class WorkspaceCapabilityRegistry {
   }
 
   /** An optional trusted adapter contributes schema, metadata and handler as one registration. */
-  registerDefinition<N extends string, S extends z.ZodType>(definition: CapabilityDefinition<N, S>, handler: (args: z.infer<S>, context: CapabilityContext) => unknown | Promise<unknown>): this {
+  registerDefinition<N extends string, S extends z.ZodType>(definition: CapabilityDefinition<N, S>, handler: (args: z.infer<S>, context: CapabilityContext) => unknown | Promise<unknown>, options: { deferDispatch?: boolean } = {}): this {
     if (Object.hasOwn(coreDefinitions, definition.name)) throw new Error('Eine Zusatzdefinition darf keine Kernfunktion ersetzen.');
-    return this.add(definition, (args, context) => handler(args as z.infer<S>, context));
+    return this.add(definition, (args, context) => handler(args as z.infer<S>, context), options.deferDispatch);
   }
 
   private add(definition: CapabilityDefinition, handler: RegisteredCapability['handler'], deferDispatch = false): this {

@@ -4,7 +4,7 @@
 
 OVD provides an optional host contract for automatically retrieving relevant memories before a new Assistant request. The module owns storage, search, correction, deletion, settings and its interface. OVD supplies the current question, validates and bounds the returned facts, and adds a source-labelled snapshot to that request. No memory database or memory module is bundled with this extension.
 
-This guide describes the current checkout. Release **v0.1.3** predates this contract. Its manifest loader rejects the new contribution; use a host version that includes this extension. The module catalog currently has no minimum-host-version negotiation.
+This contract is available from **v0.1.4**. Older hosts, including **v0.1.3**, reject the new manifest contribution. The module catalog currently has no minimum-host-version negotiation; document the required host version when distributing a module.
 
 ## Retrieval and explicit storage
 

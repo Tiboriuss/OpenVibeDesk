@@ -63,6 +63,9 @@ export interface WorkspaceApi {
   mcpRemoveServer(id: string): Promise<boolean>;
   mcpConnectServer(id: string): Promise<import('./mcp').McpServerSummary>;
   mcpDisconnectServer(id: string): Promise<import('./mcp').McpServerSummary>;
+  mcpSignIn(id: string): Promise<import('./mcp').McpServerSummary>;
+  mcpSignOut(id: string): Promise<import('./mcp').McpServerSummary>;
+  mcpCancelSignIn(id: string): Promise<import('./mcp').McpServerSummary>;
   mcpListTools(query: import('./mcp').McpToolQuery): Promise<import('./mcp').McpToolPage>;
   mcpSetToolPermissions(input: import('./mcp').McpToolPermissions): Promise<import('./mcp').McpServerSummary>;
   mcpAudit(query: { serverId?: string; offset?: number; limit?: number }): Promise<import('./mcp').McpAuditPage>;

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import { ipcMain, shell } from 'electron';
 import { z } from 'zod';
 import type { CapabilityContext, WorkspaceCapabilityRegistry } from '../../../electron/workspace-capabilities';
 import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, type McpPrepareRequest } from '../../../shared/mcp';
@@ -20,7 +20,7 @@ export interface McpModuleHost {
 
 /** MCP owns transport, secrets and tools; the host only supplies common UI hooks. */
 export function createMcpModule(host: McpModuleHost) {
-  const service = new McpService(new McpConfigStore(host.dataRoot), host);
+  const service = new McpService(new McpConfigStore(host.dataRoot), { ...host, openExternal: url => shell.openExternal(url) });
   // Preserve cursor/count envelopes through the common model result bounds,
   // including JSON escaping of arbitrary server names and descriptions.
   function boundedRows<T>(rows: T[]): T[] {
@@ -44,7 +44,7 @@ export function createMcpModule(host: McpModuleHost) {
   function registerCapabilities(registry: WorkspaceCapabilityRegistry) {
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.servers'], ({ offset = 0, limit = 20 }) => {
       const all = service.listServers();
-      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, toolCount, allowedToolCount, error, warning }) => ({ id, name, description: description.slice(0, 240), transport, status, toolCount, allowedToolCount, ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
+      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, toolCount, allowedToolCount, error, warning, authMode, oauthStatus, oauthError }) => ({ id, name, description: description.slice(0, 240), transport, status, toolCount, allowedToolCount, authMode, ...(oauthStatus ? { oauthStatus } : {}), ...(oauthError ? { oauthError } : {}), ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
       const hasMore = offset + servers.length < all.length;
       return { servers, total: all.length, hasMore, ...(hasMore ? { nextOffset: offset + servers.length } : {}) };
     });
@@ -53,6 +53,15 @@ export function createMcpModule(host: McpModuleHost) {
       return result.cancelled ? { ...result, ok: false, outcome: 'cancelled', message: 'Die Verbindung wurde nicht freigegeben.' } : { ...result, ok: true, outcome: 'completed' };
     });
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.disconnect'], ({ serverId }, context) => service.disconnect(serverId, context));
+    registry.registerDefinition(mcpCapabilityDefinitions['mcp.sign_in'], async ({ serverId }, context) => {
+      const result = await service.signIn(serverId, context);
+      return { ...result, ok: result.authenticated, outcome: result.cancelled ? 'cancelled' : result.authenticated ? 'completed' : 'failed' };
+    }, { deferDispatch: true });
+    registry.registerDefinition(mcpCapabilityDefinitions['mcp.sign_out'], async ({ serverId }, context) => {
+      const result = await service.signOut(serverId, context);
+      return { ...result, ok: !result.cancelled, outcome: result.cancelled ? 'cancelled' : 'completed' };
+    }, { deferDispatch: true });
+    registry.registerDefinition(mcpCapabilityDefinitions['mcp.cancel_sign_in'], ({ serverId }, context) => service.cancelSignIn(serverId, context), { deferDispatch: true });
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.remove'], async ({ serverId }, context) => {
       const result = await service.removeServer(serverId, context);
       return result.cancelled ? { ...result, ok: false, outcome: 'cancelled', message: 'Die MCP-Verbindung wurde nicht entfernt.' } : { ...result, ok: true, outcome: 'completed' };
@@ -73,6 +82,9 @@ export function createMcpModule(host: McpModuleHost) {
     ipcMain.handle('mcp:servers:remove', async (event, raw: unknown) => { host.verifySettings(event); const result = await service.removeServer(mcpServerIdSchema.parse(raw), host.uiOperationContext(event)); return !!result.removed; });
     ipcMain.handle('mcp:servers:connect', async (event, raw: unknown) => { host.verifySettings(event); const id = mcpServerIdSchema.parse(raw); await service.connect(id, host.uiOperationContext(event)); return summary(id); });
     ipcMain.handle('mcp:servers:disconnect', async (event, raw: unknown) => { host.verifySettings(event); const id = mcpServerIdSchema.parse(raw); await service.disconnect(id, host.uiOperationContext(event)); return summary(id); });
+    ipcMain.handle('mcp:oauth:sign-in', async (event, raw: unknown) => { host.verifySettings(event); const id = mcpServerIdSchema.parse(raw); await service.signIn(id, host.uiOperationContext(event)); return summary(id); });
+    ipcMain.handle('mcp:oauth:sign-out', async (event, raw: unknown) => { host.verifySettings(event); const id = mcpServerIdSchema.parse(raw); await service.signOut(id, host.uiOperationContext(event)); return summary(id); });
+    ipcMain.handle('mcp:oauth:cancel', async (event, raw: unknown) => { host.verifySettings(event); const id = mcpServerIdSchema.parse(raw); await service.cancelSignIn(id, host.uiOperationContext(event)); return summary(id); });
     ipcMain.handle('mcp:tools:list', (event, query: unknown) => { host.verifySettings(event); return service.listTools(query as Parameters<McpService['listTools']>[0], host.uiOperationContext(event)); });
     ipcMain.handle('mcp:tools:permissions', (event, input: unknown) => { host.verifySettings(event); return service.permissions(mcpPermissionsSchema.parse(input), host.uiOperationContext(event)); });
     ipcMain.handle('mcp:audit', (event, query: unknown) => { host.verifySettings(event); return service.auditPage(mcpAuditQuerySchema.parse(query ?? {})); });
