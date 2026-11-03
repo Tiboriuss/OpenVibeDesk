@@ -49,7 +49,7 @@ Design guides include intended behavior that is not implemented yet. The [reposi
 | [Module events](module-events.md) | Opt-in subscriptions, bounded publications, durable delivery, acknowledgements and background processing contracts. |
 | [Downloadable module catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) | Separately published Notes and Skill Library modules, their source and package documentation. |
 | [Notes module example](../examples/notes-module/README.md) | A standalone process module with its own HTML interface and settings. |
-| [MCP module](../modules/ovd-mcp/README.md) | Server setup, browser OAuth, tool approvals, credentials, and dynamic discovery. |
+| [MCP module](../modules/ovd-mcp/README.md) | Server setup, browser OAuth and endpoint overrides, tool approvals, credentials, and dynamic discovery. |
 | [MCP server example](../examples/mcp-server/README.md) | A local server for exercising the MCP integration. |
 | [Built-in module sources](../modules/) | The required assistant and optional Mail, Files, and MCP implementations. |
 

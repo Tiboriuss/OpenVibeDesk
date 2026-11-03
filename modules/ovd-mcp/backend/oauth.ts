@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { auth, discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata, exchangeAuthorization, extractWWWAuthenticateParams, refreshAuthorization, selectResourceURL, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientInformationFullSchema, OAuthClientInformationSchema, OAuthTokensSchema, type OAuthClientInformationMixed, type OAuthClientMetadata, type OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { McpServerConfig } from '../../../shared/mcp';
+import { validateMcpOAuthEndpointUrl, type McpServerConfig } from '../../../shared/mcp';
 import { McpConfigStore } from './store';
 
 export class McpOAuthRequiredError extends Error {
@@ -100,6 +100,8 @@ export class McpOAuthSession implements OAuthClientProvider {
     if (state.resourceMetadata && !state.resourceMetadata.authorization_servers?.some(value => sameUrl(value, issuer.href))) throw invalid();
   }
   private async discover(probe: boolean): Promise<OAuthDiscoveryState> {
+    const manualEndpoints = !!this.config.oauthAuthorizationUrl && !!this.config.oauthTokenUrl;
+    if (manualEndpoints && (!this.config.oauthIssuer || !this.config.oauthClientId)) throw new McpOAuthRequiredError('Für manuelle OAuth-Endpunkte bitte auch die registrierte Client-ID und den zugehörigen Issuer angeben.');
     let resourceMetadataUrl = !probe && this.credentials.discovery?.resourceMetadataUrl ? this.safeUrl(this.credentials.discovery.resourceMetadataUrl) : undefined;
     if (probe) {
       // A credential-free GET may provide a path-specific RFC 9728 challenge; no tool executes.
@@ -113,12 +115,31 @@ export class McpOAuthSession implements OAuthClientProvider {
     }
     let resourceMetadata: OAuthDiscoveryState['resourceMetadata'];
     try { resourceMetadata = await discoverOAuthProtectedResourceMetadata(this.config.url!, { resourceMetadataUrl }, this.fetchOAuth); }
-    catch { this.check(); if (resourceMetadataUrl) throw invalid(); }
+    catch { this.check(); if (resourceMetadataUrl && !manualEndpoints) throw invalid(); }
     const issuers = resourceMetadata?.authorization_servers ?? [];
     const authorizationServerUrl = this.config.oauthIssuer ?? issuers[0] ?? new URL('/', this.config.url).href;
     this.safeUrl(authorizationServerUrl);
     if (this.config.oauthIssuer && issuers.length && !issuers.some(value => sameUrl(value, authorizationServerUrl))) throw invalid();
-    const authorizationServerMetadata = await discoverAuthorizationServerMetadata(authorizationServerUrl, { fetchFn: this.fetchOAuth });
+    let authorizationServerMetadata: OAuthDiscoveryState['authorizationServerMetadata'];
+    if (manualEndpoints) {
+      // These endpoints are explicitly saved by the user for a registered
+      // Authorization Code client. PKCE remains mandatory without discovery.
+      this.responseIssuerRequired = false;
+      authorizationServerMetadata = {
+        issuer: authorizationServerUrl,
+        authorization_endpoint: validateMcpOAuthEndpointUrl(this.config.oauthAuthorizationUrl!, this.config.url),
+        token_endpoint: validateMcpOAuthEndpointUrl(this.config.oauthTokenUrl!, this.config.url),
+        response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+        code_challenge_methods_supported: ['S256'],
+        token_endpoint_auth_methods_supported: this.suppliedSecret ? ['client_secret_basic', 'client_secret_post'] : ['none']
+      };
+    } else {
+      authorizationServerMetadata = await discoverAuthorizationServerMetadata(authorizationServerUrl, { fetchFn: this.fetchOAuth });
+      const discovered = { authorizationServerUrl, authorizationServerMetadata, ...(resourceMetadata ? { resourceMetadata } : {}) };
+      this.validateDiscovery(discovered);
+      if (this.config.oauthAuthorizationUrl) authorizationServerMetadata = { ...authorizationServerMetadata!, authorization_endpoint: validateMcpOAuthEndpointUrl(this.config.oauthAuthorizationUrl, this.config.url) };
+      if (this.config.oauthTokenUrl) authorizationServerMetadata = { ...authorizationServerMetadata!, token_endpoint: validateMcpOAuthEndpointUrl(this.config.oauthTokenUrl, this.config.url) };
+    }
     const state: OAuthDiscoveryState = { authorizationServerUrl, authorizationServerMetadata, ...(resourceMetadata ? { resourceMetadata } : {}), ...(resourceMetadataUrl ? { resourceMetadataUrl: resourceMetadataUrl.href } : {}) };
     this.validateDiscovery(state); this.discovery = state; await selectResourceURL(this.config.url!, this, resourceMetadata); return state;
   }

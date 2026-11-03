@@ -36,10 +36,16 @@ For servers supporting dynamic client registration, leave the optional client fi
 | Setting | Use |
 | --- | --- |
 | **Client-ID** | The client identifier issued for this application. |
-| **Issuer-URL** | The expected authorization-server issuer for that registered client; it must match discovered metadata. |
+| **Issuer-URL** | The expected authorization-server issuer for that registered client; it must match discovered metadata when discovery is used. |
+| **Autorisierungs-URL** | Optional authorization endpoint for browser sign-in. Leave empty to use discovery. |
+| **Token-URL** | Optional endpoint for code exchange and token renewal. Leave empty to use discovery. |
 | **Client-Secret** | Only when the provider requires one. It is stored securely, never returned to the UI, and a blank field preserves it. |
 | **Scopes** | Optional additional provider scopes, separated by spaces (for example `offline_access` when required for refresh). Server-required and previously granted scopes are retained alongside them. |
 | **Lokaler Rückruf-Port** | Default `43189`. The redirect URI is `http://127.0.0.1:43189/oauth/callback`; substitute your saved port when registering it with the provider. |
+
+Manual endpoint fields are available from **v0.1.5**. An individual override replaces that discovered endpoint; discovery must still supply the other endpoint and its metadata. When both URLs are set, also enter a pre-registered **Client-ID** and explicit **Issuer-URL**. This configures Authorization Code with PKCE without requiring authorization-server discovery. PKCE support must be enabled for the registered client at the provider. Leave both endpoint fields empty to retain automatic discovery and dynamic registration where supported. Clearing a field and saving restores discovery for that endpoint.
+
+Use HTTPS endpoint URLs. Loopback HTTP is allowed only for a local HTTP MCP server. URL credentials, fragments and OAuth protocol/secret query parameters are rejected; fixed public routing parameters are supported. Enter client secrets only in **Client-Secret**. Saving a changed endpoint invalidates the previous login and clears tool permissions, so sign in and review the required tools again.
 
 The callback listener exists only for a pending sign-in. A busy port requires closing the other sign-in or selecting another port and updating the provider registration. State and PKCE bind the callback to the pending request; credentials and registrations remain bound to their server and issuer. Changing the HTTP target or authentication identity invalidates the prior binding and requires reviewing tool permissions again.
 
@@ -47,7 +53,7 @@ The implemented registration paths are pre-registration and Dynamic Client Regis
 
 ### Assistant access
 
-The Assistant can inspect authentication status through `mcp.servers`, start an explicit sign-in with `mcp.sign_in`, cancel it with `mcp.cancel_sign_in`, and log out with `mcp.sign_out`. Login and logout follow the host's confirmation policy. The provider's browser consent remains interactive. `mcp.settings` can prepare public OAuth configuration in the form; only the user can save it. Tokens and client secrets are never tool arguments or results. The normal lazy module discovery and tool allowlist still apply.
+The Assistant can inspect authentication status through `mcp.servers`, start an explicit sign-in with `mcp.sign_in`, cancel it with `mcp.cancel_sign_in`, and log out with `mcp.sign_out`. Login and logout follow the host's confirmation policy. The provider's browser consent remains interactive. `mcp.settings` can prepare public OAuth configuration, including the optional authorization and token endpoints, in the form; only the user can save it. Tokens and client secrets are never tool arguments or results. The normal lazy module discovery and tool allowlist still apply.
 
 ## Lazy tool discovery
 
