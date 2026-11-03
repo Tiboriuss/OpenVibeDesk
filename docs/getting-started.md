@@ -74,13 +74,13 @@ The interface currently uses primarily German labels. The names below pair the E
 ### Connect an AI provider
 
 1. Open **Settings → AI & connection** (**Einstellungen → KI & Verbindung**).
-2. Expand **Connection** (**Verbindung**), enter the OpenAI-compatible endpoint and any required API key, then save.
-3. Select the intelligent and simple model tiers under **Models** (**Modelle**). Configure the thinking level supported by your provider.
+2. Expand **Connection** (**Verbindung**) and choose your provider: OpenAI, Azure AI Foundry, an OpenAI-compatible service or **ChatGPT**. For API-key connections, select the supported interface and authentication, enter the endpoint/key and save. ChatGPT uses **Continue with ChatGPT** to authorize eligible plan usage in your system browser.
+3. Select the intelligent and simple model tiers under **Models** (**Modelle**). Azure uses your deployment names; manual entry remains available if no suitable model list is returned. Configure the Thinking level supported by your provider.
 4. Enable workspace tools under **Workspace access** (**Workspace-Zugriff**) if your endpoint supports tool calling.
 
-Streaming is required for chat. Workspace control additionally requires the provider to return complete tool calls. Local loopback endpoints may use HTTP; remote endpoints require HTTPS. If a provider does not support tools, disable workspace tools to use ordinary chat.
+See [AI providers](ai-providers.md) for complete setup, Azure v1/classic endpoint examples and direct ChatGPT sign-in. ChatGPT needs no additional program or API key. Streaming is required for chat. Workspace control additionally requires complete tool calls. Local loopback HTTP is permitted; remote HTTP providers require HTTPS. If a model does not support tools, disable workspace tools to use ordinary chat.
 
-Messages, selected references, and tool results may be sent to that endpoint. Saved secrets are stored through the operating system's credential store.
+API keys and ChatGPT OAuth credentials use the OS credential store. For ChatGPT, an identity-only sign-in is distinct from permission to use the plan; OVD shows the actual grant and provides account selection and usage controls. The same Workspace permissions and operation safeguards apply to every connection.
 
 ### Reformulate an answer
 
@@ -170,6 +170,7 @@ Important entries include:
 | `module-settings.json` | Module approvals and disabled module IDs. |
 | `module-repositories.json` | Source URLs and installation receipts; access tokens are stored separately in the OS credential store. |
 | `module-data/<moduleId>/` | Module-owned local data. |
+| `chatgpt/accounts.json` | Stable installation identity, saved ChatGPT registration/account metadata and selected profile; OAuth tokens remain in the OS credential store. |
 
 Other account and configuration files may also live here. Credentials are managed separately by the OS credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
 

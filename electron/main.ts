@@ -7,6 +7,7 @@ import { initializeStore, loadState, saveState } from './store';
 import { settingsPatchSchema, normalizeSettings } from '../shared/settings';
 import { normalizeSessions, createSession, selectSession, renameSession, forkSession, updateSessionMessages, snapshotSessionReference } from '../shared/sessions';
 import { defaultAiConfig, normalizeAiConfig, parseAiInput, chatOptionsSchema, getKey, setKey, deleteKey, listModels, makeMessages } from './ai';
+import { initializeChatGptAuth, chatGptAuth } from './chatgpt-auth';
 import { runAgent } from './agent';
 import { OperationJournal } from './operation-journal';
 import { OperationRunner } from './operation-runner';
@@ -27,7 +28,7 @@ import { moduleRepositoryInputSchema, repositoryInstallInputSchema } from '../sh
 import { z } from 'zod';
 import { attentionAcknowledgementSchema } from '../shared/module-attention';
 import { streamCompletion } from './stream';
-import type { ChatMessage, EmailReference, EmailReferenceSummary, FileListing, Mail, SelectedFile, WindowKind, WorkspaceState, AgentRunLimit, ReformulateChatOptions } from '../shared/model';
+import type { AiConfig, ChatMessage, EmailReference, EmailReferenceSummary, FileListing, Mail, SelectedFile, WindowKind, WorkspaceState, AgentRunLimit, ReformulateChatOptions } from '../shared/model';
 import type { MailModule } from '../modules/ovd-mail/backend';
 import type { FilesModule } from '../modules/ovd-files/backend';
 import type { McpModule } from '../modules/ovd-mcp/backend';
@@ -70,7 +71,7 @@ const forkMailReferences = new Map<string, EmailReference>();
 const forkModuleReferences = new Map<string, ModuleReference[]>();
 const moduleReferences = new ModuleReferenceRegistry((id, type) => !!moduleHost?.isReady(id) && !!moduleHost.registry.getModule(id)?.manifest?.contributions.referenceTypes?.some(item => item.id === type),
   (input, context) => { if (!moduleHost) throw new Error('Die Modulverwaltung ist noch nicht bereit.'); return moduleHost.resolveReference(input, context); });
-let activeStream: { controller: AbortController; flush(): void; sessionId: string; assistantId: string } | undefined;
+let activeStream: { controller: AbortController; flush(): void; sessionId: string; assistantId: string; provider?: AiConfig['provider'] } | undefined;
 
 function verifySender(event: Electron.IpcMainInvokeEvent): void {
   const known = [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)].some(win => win && !win.isDestroyed() && event.sender === win.webContents);
@@ -298,14 +299,14 @@ function operationOwner(context: OperationContext): BrowserWindow | undefined {
 async function readAiSettings(context: OperationContext) {
 
     const config = currentState.ai ?? defaultAiConfig;
-    return { baseUrl: config.baseUrl, smartModel: config.smartModel, simpleModel: config.simpleModel, smartThinking: config.smartThinking, simpleThinking: config.simpleThinking, workspaceTools: config.workspaceTools !== false, confirmationMode: config.confirmationMode === 'never' ? 'never' as const : 'ask' as const, hasApiKey: !!(await getKey(config.baseUrl)), configured: !!currentState.ai };
+    return { provider: config.provider ?? 'openai-compatible', protocol: config.protocol ?? 'chat-completions', authMode: config.authMode ?? 'bearer', apiVersion: config.apiVersion ?? '', baseUrl: config.baseUrl, smartModel: config.smartModel, simpleModel: config.simpleModel, smartThinking: config.smartThinking, simpleThinking: config.simpleThinking, workspaceTools: config.workspaceTools !== false, confirmationMode: config.confirmationMode === 'never' ? 'never' as const : 'ask' as const, hasApiKey: !!(await getKey(config)), configured: !!currentState.ai, ...(config.provider === 'chatgpt' ? { chatGpt: await chatGptAuth().status() } : {}) };
 }
 async function saveAiSettings(input: unknown, context: OperationContext) {
 
     let values: ReturnType<typeof parseAiInput>;
     try { values = parseAiInput(input); } catch (error) { if (error instanceof Error && error.message.startsWith('Bitte ')) throw error; throw new Error('Bitte gültige KI-Einstellungen eingeben.'); }
-    if (values.apiKey) await setKey(values.baseUrl, values.apiKey);
-    const ai = { baseUrl: values.baseUrl, smartModel: values.smartModel, simpleModel: values.simpleModel, smartThinking: values.smartThinking, simpleThinking: values.simpleThinking, workspaceTools: values.workspaceTools ?? true, confirmationMode: values.confirmationMode ?? currentState.ai?.confirmationMode ?? 'ask', historyStart: currentState.ai?.historyStart ?? currentState.chat.length };
+    if (values.apiKey && values.authMode !== 'none') await setKey(values, values.apiKey);
+    const ai = { provider: values.provider, protocol: values.protocol, authMode: values.authMode, apiVersion: values.apiVersion, baseUrl: values.baseUrl, smartModel: values.smartModel, simpleModel: values.simpleModel, smartThinking: values.smartThinking, simpleThinking: values.simpleThinking, workspaceTools: values.workspaceTools ?? true, confirmationMode: values.confirmationMode ?? currentState.ai?.confirmationMode ?? 'ask', historyStart: currentState.ai?.historyStart ?? currentState.chat.length };
     await saveState({ ...currentState, ai, provider: values.smartModel });
     commit({ ...currentState, ai, provider: values.smartModel });
     if (ai.workspaceTools === false && activeOperationRunner) activeStream?.controller.abort();
@@ -559,8 +560,8 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('modules.acknowledge_attention', ({ moduleId, ids }) => moduleHost!.acknowledgeAttention(moduleId, ids));
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
   workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
-  workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config.baseUrl).then(key => listModels(config, key)); });
-  workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, 'Gespeicherten API-Schlüssel entfernen?', 'Der KI-Anbieter benötigt gegebenenfalls anschließend einen neuen Schlüssel.')) return { cancelled: true }; await deleteKey((currentState.ai ?? defaultAiConfig).baseUrl); return { removed: true }; });
+  workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)); });
+  workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, 'Gespeicherten API-Schlüssel entfernen?', 'Der KI-Anbieter benötigt gegebenenfalls anschließend einen neuen Schlüssel.')) return { cancelled: true }; await deleteKey(currentState.ai ?? defaultAiConfig); return { removed: true }; });
   workspaceCapabilities.register('app.quit', (_args, context) => confirmQuit(context));
 }
 
@@ -642,7 +643,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
   let buffered = '', flushTimer: NodeJS.Timeout | undefined, lastCheckpoint = Date.now();
   const updateAssistant = (patch: Partial<ChatMessage>) => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, ...patch } : m)));
   const flush = () => { if (flushTimer) clearTimeout(flushTimer); flushTimer = undefined; if (buffered) { const text = buffered; buffered = ''; commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, text: m.text + text } : m))); if (Date.now() - lastCheckpoint >= 2000) { lastCheckpoint = Date.now(); void saveState(currentState).catch(error => console.error('Workspace save failed', error)); } } };
-  activeStream = { controller, flush, sessionId, assistantId: assistant.id };
+  activeStream = { controller, flush, sessionId, assistantId: assistant.id, provider: config.provider };
   let prepared = false;
   let runLimit: AgentRunLimit | undefined;
   let operationRun: OperationRun | undefined;
@@ -676,7 +677,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     forkMailReferences.delete(sessionId);
     forkModuleReferences.delete(sessionId);
     if (options.clientRequestId) panels.get('chat')?.webContents.send('chat:request-committed', options.clientRequestId);
-    const key = await getKey(config.baseUrl);
+    const key = await getKey(config);
     if (controller.signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
     const toolsEnabled = config.workspaceTools !== false;
     const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()));
@@ -762,14 +763,14 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
     if (Date.now() - lastCheckpoint >= 2000) { lastCheckpoint = Date.now(); void saveState(currentState).catch(error => console.error('Reformulation save failed', error)); }
   };
   chatBusy = true;
-  activeStream = { controller, flush, sessionId: fork.session.id, assistantId: fork.answer.id };
+  activeStream = { controller, flush, sessionId: fork.session.id, assistantId: fork.answer.id, provider: config.provider };
   commit(fork.state);
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.timeoutSeconds * 1000);
   try {
     await saveState(currentState);
     await openPanel('chat');
     const messages = reformulationMessages(fork.source, settings.historyCharBudget, settings.historyMessageLimit);
-    const key = await getKey(config.baseUrl);
+    const key = await getKey(config);
     controller.signal.throwIfAborted();
     await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000);
     flush(); update({ status: 'completed' });
@@ -964,6 +965,20 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await operationJournal.initialize().catch(error => dialog.showErrorBox('Aktionsprotokoll nicht verfügbar', error instanceof Error ? error.message : 'Es wird keine Assistentenaktion gestartet. Die vorhandenen Daten bleiben erhalten.'));
   const loaded = loadState() ?? initialState();
   currentState = normalizeSessions({ ...loaded, settings: normalizeSettings(loaded.settings), agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });
+  let previousChatGptProfile: string | undefined;
+  initializeChatGptAuth({ dataDirectory: path.join(app.getPath('userData'), 'chatgpt'), openExternal: async destination => {
+    const url = new URL(destination);
+    if (url.origin !== 'https://auth.openai.com' || url.pathname !== '/api/accounts/authorize' || url.username || url.password) throw new Error('Die ChatGPT-Anmeldeadresse ist ungültig.');
+    await shell.openExternal(url.toString());
+  }, changed: status => {
+    if (activeStream?.provider === 'chatgpt' && (status.activeProfileId !== previousChatGptProfile || !status.authenticated || !status.planAccess)) activeStream.controller.abort();
+    previousChatGptProfile = status.activeProfileId;
+    for (const kind of ['settings', 'chat'] as const) {
+      const win = panels.get(kind);
+      if (win && !win.isDestroyed()) win.webContents.send('ai:chatgpt:changed', status);
+    }
+  } });
+  previousChatGptProfile = (await chatGptAuth().status()).activeProfileId;
   for (const item of currentState.sessions) if (item.messages.some(m => m.status === 'streaming')) currentState = updateSessionMessages(currentState, item.id, messages => messages.map(m => m.status === 'streaming' ? { ...m, status: 'cancelled' } : m));
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   ipcMain.handle('workspace:load', event => { verifySender(event); return currentState; });
@@ -989,9 +1004,15 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.on('agent:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) agentSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.on('mcp:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) mcpSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.handle('ai:settings:get', (event) => { verifySender(event); return readAiSettings(uiOperationContext(event)); });
+  ipcMain.handle('ai:chatgpt:status', event => { verifyPanel(event, ['settings', 'chat']); return chatGptAuth().status(); });
+  ipcMain.handle('ai:chatgpt:login', (event, input: unknown) => { verifyPanel(event, ['settings']); return chatGptAuth().startLogin(z.object({ profileId: z.string().uuid().optional(), newProfile: z.boolean().optional(), consent: z.boolean().optional() }).strict().optional().parse(input)); });
+  ipcMain.handle('ai:chatgpt:cancel', event => { verifyPanel(event, ['settings']); return chatGptAuth().cancelLogin(); });
+  ipcMain.handle('ai:chatgpt:logout', event => { verifyPanel(event, ['settings']); if (activeStream?.provider === 'chatgpt') activeStream.controller.abort(); return chatGptAuth().logout(); });
+  ipcMain.handle('ai:chatgpt:select', (event, input: unknown) => { verifyPanel(event, ['settings']); if (activeStream?.provider === 'chatgpt') activeStream.controller.abort(); return chatGptAuth().selectProfile(z.string().uuid().parse(input)); });
+  ipcMain.handle('ai:chatgpt:usage', async event => { verifyPanel(event, ['settings', 'chat']); await shell.openExternal('https://chatgpt.com/settings/usage'); });
   ipcMain.handle('ai:settings:save', (event, input: unknown) => { verifySender(event); return saveAiSettings(input, uiOperationContext(event)); });
-  ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config.baseUrl)); });
-  ipcMain.handle('ai:key:clear', async event => { verifySender(event); await deleteKey((currentState.ai ?? defaultAiConfig).baseUrl); });
+  ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)); });
+  ipcMain.handle('ai:key:clear', async event => { verifySender(event); await deleteKey(currentState.ai ?? defaultAiConfig); });
   ipcMain.handle('chat:session:create', event => { verifySender(event); return newWorkspaceChat(); });
   ipcMain.handle('chat:session:select', (event, id: unknown) => { verifySender(event); if (typeof id !== 'string') throw new Error('Ungültiger Chat.'); selectWorkspaceChat(id); });
   ipcMain.handle('chat:session:rename', (event, id: unknown, title: unknown) => { verifySender(event); if (typeof id !== 'string' || typeof title !== 'string') throw new Error('Ungültiger Titel.'); renameWorkspaceChat(id, title); });
@@ -1059,7 +1080,7 @@ app.on('before-quit', event => {
       dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Die letzten Änderungen konnten nicht gespeichert werden. Bitte die Speicherung erneut versuchen.');
       return;
     }
-    moduleHost?.dispose(); readyToQuit = true; app.quit();
+    chatGptAuth().dispose(); moduleHost?.dispose(); readyToQuit = true; app.quit();
   })();
 });
 app.on('window-all-closed', () => app.quit());

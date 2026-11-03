@@ -6,11 +6,15 @@ import { normalizeAgentSettings } from '../shared/agent-settings';
 import type { ModuleSummary } from '../shared/modules';
 import { getTimeContext, type TimeContext } from '../shared/time';
 import { moduleReferenceInputsSchema, moduleReferenceSchema } from '../shared/references';
+import { aiConnectionFields, aiProviderSchema, aiProtocolSchema, aiAuthModeSchema, aiApiVersionSchema, isAzureEndpoint } from '../shared/ai-providers';
+import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
+import { requestCompleteTurn } from './stream';
+import { chatGptAuth } from './chatgpt-auth';
 
 export const defaultAiConfig: AiConfig = { baseUrl: 'https://api.openai.com/v1', smartModel: '', simpleModel: '', smartThinking: 'off', simpleThinking: 'off', historyStart: 0, workspaceTools: true, confirmationMode: 'ask' };
 const thinkingSchema = z.enum(['off', 'low', 'medium', 'high']);
 export const chatOptionsSchema = z.object({ tier: z.enum(['smart', 'simple']), sessionRefId: z.string().min(1).max(100).optional(), sessionId: z.string().min(1).max(100).optional(), clientRequestId: z.uuid().optional(), references: moduleReferenceInputsSchema.optional() }).strict();
-const inputSchema = z.object({ baseUrl: z.string().trim().min(1).max(2048), smartModel: z.string().trim().max(200), simpleModel: z.string().trim().max(200), smartThinking: thinkingSchema, simpleThinking: thinkingSchema, workspaceTools: z.boolean().optional(), realMailAccess: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional(), apiKey: z.string().min(1).max(4096).optional() }).strict();
+const inputSchema = z.object({ ...aiConnectionFields, baseUrl: z.string().trim().max(2048), smartModel: z.string().trim().max(200), simpleModel: z.string().trim().max(200), smartThinking: thinkingSchema, simpleThinking: thinkingSchema, workspaceTools: z.boolean().optional(), realMailAccess: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional(), apiKey: z.string().min(1).max(4096).refine(value => !/[\r\n\u0000]/.test(value)).optional() }).strict();
 export function normalizeAiConfig(value: unknown): AiConfig {
   if (!value || typeof value !== 'object') return { ...defaultAiConfig };
   const raw = value as Record<string, unknown>;
@@ -18,8 +22,14 @@ export function normalizeAiConfig(value: unknown): AiConfig {
   const legacyThinking = thinkingSchema.safeParse(raw.thinking);
   const smartThinking = thinkingSchema.safeParse(raw.smartThinking);
   const simpleThinking = thinkingSchema.safeParse(raw.simpleThinking);
+  // Retire the earlier development-only runtime provider without reading its credentials.
+  const directChatGpt = raw.provider === 'chatgpt' || raw.provider === 'codex';
   return {
-    baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : defaultAiConfig.baseUrl,
+    provider: directChatGpt ? 'chatgpt' : aiProviderSchema.safeParse(raw.provider).success ? raw.provider as AiConfig['provider'] : isAzureEndpoint(String(raw.baseUrl ?? '')) ? 'azure' : 'openai-compatible',
+    protocol: directChatGpt ? 'responses' : aiProtocolSchema.safeParse(raw.protocol).success ? raw.protocol as AiConfig['protocol'] : 'chat-completions',
+    authMode: directChatGpt ? 'bearer' : aiAuthModeSchema.safeParse(raw.authMode).success ? raw.authMode as AiConfig['authMode'] : 'bearer',
+    ...(!directChatGpt && aiApiVersionSchema.safeParse(raw.apiVersion).success && raw.apiVersion ? { apiVersion: String(raw.apiVersion) } : {}),
+    baseUrl: directChatGpt ? defaultAiConfig.baseUrl : typeof raw.baseUrl === 'string' ? raw.baseUrl : defaultAiConfig.baseUrl,
     smartModel: typeof raw.smartModel === 'string' ? raw.smartModel : previous,
     simpleModel: typeof raw.simpleModel === 'string' ? raw.simpleModel : previous,
     smartThinking: smartThinking.success ? smartThinking.data : legacyThinking.success ? legacyThinking.data : 'off',
@@ -32,20 +42,47 @@ export function normalizeAiConfig(value: unknown): AiConfig {
 export function parseAiInput(value: unknown) {
   // Older clients may still send this retired field; it no longer controls access.
   const { realMailAccess: _legacyMailAccess, ...input } = inputSchema.parse(value);
+  const provider = input.provider ?? (isAzureEndpoint(input.baseUrl) ? 'azure' : 'openai-compatible');
+  if (provider === 'chatgpt') {
+    if (input.apiKey) throw new Error('Bitte mit ChatGPT anmelden; ein API-Schlüssel wird für diese Verbindung nicht gespeichert.');
+    return { ...input, provider, baseUrl: 'https://api.openai.com/v1', protocol: 'responses' as const, authMode: 'bearer' as const, apiVersion: undefined };
+  }
   let url: URL;
   try { url = new URL(input.baseUrl); } catch { throw new Error('Bitte eine gültige Endpunkt-URL eingeben.'); }
-  if (url.username || url.password || url.search || url.hash) throw new Error('Die URL darf keine Zugangsdaten, Abfrage oder Fragment enthalten.');
+  if (url.username || url.password || url.hash) throw new Error('Die URL darf keine Zugangsdaten oder Fragmente enthalten.');
+  const query = [...url.searchParams.keys()];
+  if (query.length && (provider !== 'azure' || query.length !== 1 || query[0] !== 'api-version')) throw new Error('Die URL darf nur bei Azure einen einzelnen api-version-Parameter enthalten.');
+  const queryVersion = url.searchParams.get('api-version') ?? '';
+  if (!aiApiVersionSchema.safeParse(queryVersion).success) throw new Error('Bitte eine gültige Azure-API-Version eingeben.');
+  if (input.apiVersion && queryVersion && input.apiVersion !== queryVersion) throw new Error('Bitte dieselbe Azure-API-Version im Feld und in der URL verwenden.');
+  url.search = '';
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) throw new Error('Bitte HTTPS verwenden; HTTP ist nur für lokale Endpunkte erlaubt.');
-  return { ...input, baseUrl: url.toString().replace(/\/+$/, '') };
+  let protocol = input.protocol ?? 'chat-completions';
+  url.pathname = url.pathname.replace(/\/+$/, '');
+  if (/\/chat\/completions$/i.test(url.pathname)) { url.pathname = url.pathname.replace(/\/chat\/completions$/i, ''); protocol = 'chat-completions'; }
+  else if (/\/responses$/i.test(url.pathname)) { url.pathname = url.pathname.replace(/\/responses$/i, ''); protocol = 'responses'; }
+  if (provider === 'azure' && (!url.pathname || url.pathname === '/')) url.pathname = '/openai/v1';
+  if (provider === 'azure' && /\/openai$/i.test(url.pathname)) url.pathname += '/v1';
+  const legacy = /\/openai\/deployments\/[^/]+$/i.test(url.pathname);
+  if (provider === 'azure' && !legacy && !/\/openai\/v1$/i.test(url.pathname)) throw new Error('Bitte die Azure-Ressourcen-URL mit /openai/v1 oder den vollständigen Deployment-Endpunkt verwenden. Eine Foundry-Projekt-URL ist kein Modell-Endpunkt.');
+  if (legacy && protocol === 'responses') throw new Error('Bitte für die Responses API die Azure-Ressourcen-URL mit /openai/v1 verwenden.');
+  if (legacy) {
+    const deployment = decodeURIComponent(url.pathname.split('/').pop()!);
+    if ([input.smartModel, input.simpleModel].some(model => model && model !== deployment)) throw new Error('Bitte den Deployment-Namen aus der URL für beide Modellstufen verwenden. Für verschiedene Deployments verwende /openai/v1.');
+  }
+  const apiVersion = provider === 'azure' ? input.apiVersion || queryVersion || (legacy ? '2024-10-21' : '') : '';
+  return { ...input, provider, protocol, authMode: input.authMode ?? (provider === 'azure' ? 'api-key' as const : 'bearer' as const), ...(apiVersion ? { apiVersion } : { apiVersion: undefined }), baseUrl: url.toString().replace(/\/+$/, '') };
 }
-function entry(baseUrl: string): AsyncEntry {
-  const account = createHash('sha256').update(baseUrl).digest('hex');
+type KeyIdentity = string | Pick<AiConfig, 'baseUrl' | 'authMode' | 'provider'>;
+function entry(connection: KeyIdentity): AsyncEntry {
+  const identity = typeof connection === 'string' ? connection : `${connection.baseUrl}${connection.authMode === 'api-key' ? '#auth=api-key' : ''}`;
+  const account = createHash('sha256').update(identity).digest('hex');
   return new AsyncEntry('Open Workspace AI', account, { linux: { store: 'secret-service' } });
 }
-export async function getKey(baseUrl: string): Promise<string | null> { try { return await entry(baseUrl).getPassword(); } catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); } }
-export async function setKey(baseUrl: string, key: string): Promise<void> { try { await entry(baseUrl).setPassword(key); } catch { throw new Error('Der API-Schlüssel konnte nicht sicher gespeichert werden.'); } }
-export async function deleteKey(baseUrl: string): Promise<void> { try { await entry(baseUrl).deletePassword(); } catch { throw new Error('Der API-Schlüssel konnte nicht gelöscht werden.'); } }
+export async function getKey(connection: KeyIdentity): Promise<string | null> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return null; try { return await entry(connection).getPassword(); } catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); } }
+export async function setKey(connection: KeyIdentity, key: string): Promise<void> { try { await entry(connection).setPassword(key); } catch { throw new Error('Der API-Schlüssel konnte nicht sicher gespeichert werden.'); } }
+export async function deleteKey(connection: KeyIdentity): Promise<void> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return; try { await entry(connection).deletePassword(); } catch { throw new Error('Der API-Schlüssel konnte nicht gelöscht werden.'); } }
 
 type ProviderMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 function moduleSummaryContext(modules: readonly ModuleSummary[]): string {
@@ -108,32 +145,35 @@ async function boundedJson(response: Response): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 export async function listModels(config: AiConfig, key: string | null): Promise<string[]> {
+  if (config.provider === 'chatgpt') return chatGptAuth().listModels();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   try {
-    const headers: Record<string, string> = {};
-    if (key) headers.Authorization = `Bearer ${key}`;
-    const response = await fetch(`${config.baseUrl}/models`, { method: 'GET', headers, redirect: 'error', signal: controller.signal });
-    if (!response.ok) throw new Error(`Der Endpunkt hat die Modellabfrage abgelehnt (HTTP ${response.status}).`);
+    const response = await fetch(providerEndpoint(config, 'models'), { method: 'GET', headers: providerHeaders(config, key), redirect: 'error', signal: controller.signal });
+    if (!response.ok) throw await providerHttpError(config, response, 'Die Modellabfrage');
     const result = z.object({ data: z.array(z.object({ id: z.string().min(1).max(200) })).max(10000) }).safeParse(await boundedJson(response));
     if (!result.success) throw new Error('Der Endpunkt hat keine gültige Modellliste geliefert.');
     return [...new Set(result.data.data.map(item => item.id))].sort((a, b) => a.localeCompare(b));
   } catch (error) {
-    if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die Antwort'))) throw error;
+    if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die Antwort') || error.message.startsWith('Dieser Azure'))) throw error;
     if (controller.signal.aborted) throw new Error('Die Modellabfrage hat zu lange gedauert.');
     throw new Error('Die Modellabfrage ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
   } finally { clearTimeout(timer); }
 }
 export async function requestCompletion(config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions): Promise<string> {
+  if (config.protocol === 'responses' || config.provider === 'chatgpt') {
+    const result = await requestCompleteTurn(config, key, messages, options, new AbortController().signal);
+    if (result.toolCalls.length || !result.text.trim()) throw new Error('Der Endpunkt hat keine reine Textantwort geliefert.');
+    return result.text;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 60_000);
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (key) headers.Authorization = `Bearer ${key}`;
+    const headers = providerHeaders(config, key);
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
     const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
-    const response = await fetch(`${config.baseUrl}/chat/completions`, { method: 'POST', headers, body: JSON.stringify({ model, messages, stream: false, ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) }), redirect: 'error', signal: controller.signal });
-    if (!response.ok) throw new Error(`Der Endpunkt hat die Anfrage abgelehnt (HTTP ${response.status}).${thinking !== 'off' ? ' Prüfe Modell und Thinking-Einstellung.' : ''}`);
+    const response = await fetch(providerEndpoint(config, 'chat-completions', model), { method: 'POST', headers, body: JSON.stringify({ model, messages, stream: false, ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) }), redirect: 'error', signal: controller.signal });
+    if (!response.ok) throw await providerHttpError(config, response);
     const body: any = await boundedJson(response);
     const answer = body?.choices?.[0]?.message?.content;
     if (typeof answer !== 'string' || !answer.trim() || answer.length > 200000) throw new Error('Der Endpunkt hat keine lesbare Textantwort geliefert.');

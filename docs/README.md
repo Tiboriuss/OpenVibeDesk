@@ -7,6 +7,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 ## Choose a starting point
 
 - **Use OVD:** [Install and set up the app](getting-started.md), then connect your AI provider and mail account.
+- **Connect AI:** Follow [AI providers](ai-providers.md) for Azure Foundry, OpenAI, compatible endpoints or direct ChatGPT sign-in.
 - **Add functionality:** [Install modules from repositories](module-repositories.md), including private company sources. The separate [OpenVibeDesk-Modules repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) publishes the downloadable catalog.
 - **Build a company integration:** Follow the [module contract](../CONTRIBUTING.md#building-modules), adapt the [Notes example](../examples/notes-module/README.md), and [publish a module package](module-repositories.md#publish-a-module).
 - **Connect an existing MCP server:** Use the [MCP guide](../modules/ovd-mcp/README.md); MCP server configuration is separate from installing an OVD module.
@@ -17,6 +18,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | Guide | What it covers |
 | --- | --- |
 | [Getting started](getting-started.md) | Installer setup and manual updates, local startup, first-run configuration, data locations, and troubleshooting. |
+| [AI providers](ai-providers.md) | OpenAI Chat Completions/Responses, Azure endpoints and deployments, compatible local services and direct ChatGPT OAuth/plan usage. |
 | [Releases and installers](releases.md) | macOS/Windows packages without trusted publisher certificates, versioning, integrity checks, manual upgrades, and remaining validation. |
 | [Contributing](../CONTRIBUTING.md) | Development, practical validation, and the contract for custom modules. |
 | [Architecture](architecture.md) | Process boundaries, persistence, assistant integration, references, and current technical limits. |

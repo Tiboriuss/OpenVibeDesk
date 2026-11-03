@@ -182,3 +182,70 @@ describe('OpenAI SSE stream', () => {
   });
 
 });
+
+describe('Responses transport', () => {
+  const tools = [{ type: 'function', function: { name: 'read_email', description: 'Read a synthetic email', parameters: { type: 'object', properties: { emailId: { type: 'string' } }, required: ['emailId'] } } }];
+  const event = (value: unknown) => `data: ${JSON.stringify(value)}\r\n\r\n`;
+  const functionItem = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'read_email', arguments: '{"emailId":"m1"}', status: 'completed' };
+  const reasoningItem = { id: 'rs_1', type: 'reasoning', encrypted_content: 'synthetic-opaque-continuation', summary: [] };
+  const answerItem = { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Grüße 😀', annotations: [] }] };
+
+  it('streams tools and replays bounded reasoning and matching results without server-side state', async () => {
+    const requests: { path: string | undefined; headers: IncomingMessage['headers']; body: any }[] = [];
+    const server = await serve((req, res) => {
+      const chunks: Buffer[] = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => {
+        requests.push({ path: req.url, headers: req.headers, body: JSON.parse(Buffer.concat(chunks).toString()) });
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (requests.length === 1) {
+          res.end(event({ type: 'response.output_item.added', output_index: 1, item: { ...functionItem, arguments: '', status: 'in_progress' } }) + event({ type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_1', delta: '{"emailId":' }) + event({ type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_1', delta: '"m1"}' }) + event({ type: 'response.output_item.done', output_index: 1, item: functionItem }) + event({ type: 'response.completed', response: { status: 'completed', output: [reasoningItem, functionItem] } }));
+        } else {
+          const wire = Buffer.from(event({ type: 'response.output_text.delta', delta: 'Grüße 😀' }) + event({ type: 'response.completed', response: { status: 'completed', output: [answerItem] } }));
+          let position = 0;
+          const write = () => { if (position >= wire.length) { res.end(); return; } res.write(wire.subarray(position, position + 3)); position += 3; setImmediate(write); }; write();
+        }
+      });
+    });
+    const config: AiConfig = { ...server.config, protocol: 'responses', authMode: 'api-key' };
+    try {
+      const first = await streamTurn(config, 'synthetic-key', [{ role: 'user', content: 'Read m1' }], { tier: 'smart' }, new AbortController().signal, () => {}, tools);
+      expect(first.toolCalls).toEqual([{ id: 'call_1', type: 'function', function: { name: 'read_email', arguments: '{"emailId":"m1"}' } }]);
+      const deltas: string[] = [];
+      const second = await streamTurn(config, 'synthetic-key', [{ role: 'user', content: 'Read m1' }, { role: 'assistant', content: null, tool_calls: first.toolCalls, responseItems: first.responseItems }, { role: 'tool', tool_call_id: 'call_1', content: '{"subject":"Synthetic"}' }], { tier: 'smart' }, new AbortController().signal, delta => deltas.push(delta), tools);
+      expect(second.text).toBe('Grüße 😀'); expect(deltas).toEqual(['Grüße 😀']);
+      expect(requests[0].path).toBe('/v1/responses'); expect(requests[0].headers['api-key']).toBe('synthetic-key'); expect(requests[0].headers.authorization).toBeUndefined();
+      expect(requests[0].body).toMatchObject({ stream: true, store: false, truncation: 'disabled', reasoning: { effort: 'medium' }, include: ['reasoning.encrypted_content'], tools: [{ type: 'function', name: 'read_email', strict: false }] });
+      expect(requests[0].body.tools[0].function).toBeUndefined();
+      expect(requests[1].body.input).toEqual([{ role: 'user', content: 'Read m1' }, reasoningItem, { type: 'function_call', call_id: 'call_1', name: 'read_email', arguments: '{"emailId":"m1"}' }, { type: 'function_call_output', call_id: 'call_1', output: '{"subject":"Synthetic"}' }]);
+      expect(requests[1].body.previous_response_id).toBeUndefined();
+    } finally { await server.close(); }
+  });
+
+  it('rejects incomplete, malformed, oversized and unoffered calls before dispatch, with a complete fallback', async () => {
+    let mode = 'valid';
+    const server = await serve((req, res) => {
+      const chunks: Buffer[] = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => {
+        const payload = JSON.parse(Buffer.concat(chunks).toString());
+        const item = mode === 'malformed' ? { ...functionItem, arguments: '{"emailId":' } : mode === 'oversized' ? { ...functionItem, arguments: 'a'.repeat(16001) } : mode === 'unoffered' ? { ...functionItem, name: 'not_offered' } : functionItem;
+        if (!payload.stream) { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ status: mode === 'incomplete' ? 'incomplete' : 'completed', output: [item] })); return; }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (mode === 'cutoff') { res.end(event({ type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress' } }) + 'data: [DONE]\n\n'); return; }
+        if (mode === 'abort') { res.write(event({ type: 'response.output_text.delta', delta: 'Teil' })); res.on('close', () => res.end()); return; }
+        res.end(event({ type: 'response.completed', response: { status: mode === 'incomplete' ? 'incomplete' : 'completed', output: [item] } }));
+      });
+    });
+    const config: AiConfig = { ...server.config, protocol: 'responses' };
+    try {
+      for (mode of ['cutoff', 'malformed', 'oversized', 'unoffered', 'incomplete']) {
+        await expect(streamTurn(config, null, [], { tier: 'simple' }, new AbortController().signal, () => {}, tools)).rejects.toMatchObject({ name: 'ToolStreamError' });
+        if (mode !== 'cutoff') await expect(requestCompleteTurn(config, null, [], { tier: 'simple' }, new AbortController().signal, tools)).rejects.toMatchObject({ name: 'ToolStreamError' });
+      }
+      mode = 'valid';
+      expect((await requestCompleteTurn(config, null, [], { tier: 'simple' }, new AbortController().signal, tools)).toolCalls).toHaveLength(1);
+      await expect(streamTurn(config, null, [], { tier: 'simple' }, new AbortController().signal, () => {})).rejects.toMatchObject({ name: 'ToolStreamError' });
+      mode = 'abort';
+      const controller = new AbortController(), deltas: string[] = [];
+      await expect(streamTurn(config, null, [], { tier: 'simple' }, controller.signal, delta => { deltas.push(delta); controller.abort(); })).rejects.toMatchObject({ name: 'AbortError' });
+      expect(deltas).toEqual(['Teil']);
+    } finally { await server.close(); }
+  });
+});

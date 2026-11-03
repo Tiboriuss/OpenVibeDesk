@@ -1,11 +1,15 @@
 import type { AiConfig, ChatOptions } from '../shared/model';
+import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
+import { requestResponsesTurn, streamResponsesTurn } from './responses';
 
 export type ToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
 export type ProviderMessage =
   | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[] }
+  | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[]; responseItems?: ResponseInputItem[] }
   | { role: 'tool'; tool_call_id: string; content: string };
-export type StreamTurn = { text: string; toolCalls: ToolCall[] };
+/** Provider-owned opaque continuation items remain only in the current run. */
+export type ResponseInputItem = Record<string, unknown>;
+export type StreamTurn = { text: string; toolCalls: ToolCall[]; responseItems?: ResponseInputItem[] };
 type ToolCallField = 'tool_calls' | 'index' | 'type' | 'id' | 'function' | 'name' | 'arguments';
 export type ToolStreamDiagnostics = { reason: 'finish' | 'metadata' | 'arguments' | 'duplicate_ids' | 'structure' | 'size'; field?: ToolCallField; callIndex?: number; observedLength?: number; limit?: number; finishReason?: string; callCount: number; missingIds: number; missingNames: number; emptyArguments: number };
 /** Protocol details intentionally contain no arguments, mail content, keys or provider payloads. */
@@ -18,11 +22,11 @@ export class ToolStreamError extends Error {
   }
 }
 
-function toolCallError(reason: ToolStreamDiagnostics['reason'], calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream', field?: ToolCallField, size?: Pick<ToolStreamDiagnostics, 'callIndex' | 'observedLength' | 'limit'>): ToolStreamError {
+export function toolCallError(reason: ToolStreamDiagnostics['reason'], calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream', field?: ToolCallField, size?: Pick<ToolStreamDiagnostics, 'callIndex' | 'observedLength' | 'limit'>): ToolStreamError {
   return new ToolStreamError({ reason, ...(field ? { field } : {}), ...size, ...(finishReason ? { finishReason } : {}), callCount: calls.length, missingIds: calls.filter(call => !call.id).length, missingNames: calls.filter(call => !call.function.name).length, emptyArguments: calls.filter(call => !call.function.arguments.trim()).length }, transport);
 }
 
-function validateToolCallSize(call: ToolCall, callIndex: number, calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream'): void {
+export function validateToolCallSize(call: ToolCall, callIndex: number, calls: readonly ToolCall[], finishReason?: string, transport: 'stream' | 'complete' = 'stream'): void {
   const fields = [{ field: 'id', value: call.id, limit: 200 }, { field: 'name', value: call.function.name, limit: 128 }, { field: 'arguments', value: call.function.arguments, limit: 16_000 }] as const;
   for (const { field, value, limit } of fields) if (value.length > limit) {
     throw toolCallError('size', calls, finishReason, transport, field, { callIndex, observedLength: value.length, limit });
@@ -45,7 +49,7 @@ function declaredToolSchemas(tools?: readonly unknown[]): Map<string, DeclaredTo
   }
   return declared;
 }
-function validateToolCalls(toolCalls: ToolCall[], finishReason: string | undefined, complete: boolean, tools?: readonly unknown[], transport: 'stream' | 'complete' = 'stream'): void {
+export function validateToolCalls(toolCalls: ToolCall[], finishReason: string | undefined, complete: boolean, tools?: readonly unknown[], transport: 'stream' | 'complete' = 'stream'): void {
   const declaredTools = declaredToolSchemas(tools);
   const fail = (reason: ToolStreamDiagnostics['reason']): never => { throw toolCallError(reason, toolCalls, finishReason, transport); };
   if (finishReason !== 'tool_calls' && finishReason !== 'stop' && !(transport === 'stream' && complete && finishReason === undefined)) fail('finish');
@@ -70,19 +74,20 @@ export async function requestCompleteTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
   signal: AbortSignal, tools?: readonly unknown[], requestTimeoutMs = 60_000
 ): Promise<StreamTurn> {
+  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, () => {}, tools, requestTimeoutMs);
+  if (config.protocol === 'responses') return requestResponsesTurn(config, key, messages, options, signal, tools, requestTimeoutMs);
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), requestTimeoutMs);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
-    if (key) headers.Authorization = `Bearer ${key}`;
+    const headers = providerHeaders(config, key, 'application/json');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
     const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const response = await fetch(providerEndpoint(config, 'chat-completions', model), {
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
       body: JSON.stringify({ model, messages, stream: false, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
     });
-    if (!response.ok) throw new Error(`Der Endpunkt hat auch ohne Streaming die Anfrage abgelehnt (HTTP ${response.status}).`);
+    if (!response.ok) throw await providerHttpError(config, response, 'auch ohne Streaming');
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > 4_000_000) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
     if (!response.body) throw new Error('Der Endpunkt hat auch ohne Streaming keine Antwort geliefert.');
@@ -151,21 +156,22 @@ export async function streamTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
   signal: AbortSignal, onDelta: (text: string) => void, tools?: readonly unknown[], requestTimeoutMs = 60_000
 ): Promise<StreamTurn> {
+  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs);
+  if (config.protocol === 'responses') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs);
   const timeout = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
   const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(), requestTimeoutMs); };
   resetTimer();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream' };
-    if (key) headers.Authorization = `Bearer ${key}`;
+    const headers = providerHeaders(config, key, 'text/event-stream');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
     const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    const response = await fetch(providerEndpoint(config, 'chat-completions', model), {
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
       body: JSON.stringify({ model, messages, stream: true, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
     });
-    if (!response.ok) throw new Error(`Der Endpunkt hat die Anfrage abgelehnt (HTTP ${response.status}).${thinking !== 'off' ? ' Prüfe Modell und Thinking-Einstellung.' : ''}`);
+    if (!response.ok) throw await providerHttpError(config, response);
     if (!response.body) throw new Error('Der Endpunkt hat keine Antwort geliefert.');
     reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');

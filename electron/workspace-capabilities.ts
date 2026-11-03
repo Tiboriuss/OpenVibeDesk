@@ -12,6 +12,7 @@ import type { McpCapabilitySchemas } from '../modules/ovd-mcp/backend/capabiliti
 import { repositoryInstallInputSchema } from '../shared/module-repositories';
 import { attentionAcknowledgementSchema } from '../shared/module-attention';
 import type { OperationIdentity } from '../shared/operations';
+import { aiConnectionFields } from '../shared/ai-providers';
 
 const id = z.string().trim().min(1).max(128);
 const windowKind = z.enum(['mail', 'chat', 'draft', 'files', 'settings', 'sessions']);
@@ -59,7 +60,7 @@ export const capabilitySchemas = {
   'settings.agent_get': z.object({}).strict(),
   'settings.agent_save': agentSettingsPatchSchema,
   'settings.ai_get': z.object({}).strict(),
-  'settings.ai_save': z.object({ baseUrl: z.string().trim().min(1).max(2048).optional(), smartModel: z.string().max(200).optional(), simpleModel: z.string().max(200).optional(), smartThinking: thinking.optional(), simpleThinking: thinking.optional(), workspaceTools: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional() }).strict(),
+  'settings.ai_save': z.object({ ...aiConnectionFields, baseUrl: z.string().trim().min(1).max(2048).optional(), smartModel: z.string().max(200).optional(), simpleModel: z.string().max(200).optional(), smartThinking: thinking.optional(), simpleThinking: thinking.optional(), workspaceTools: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional() }).strict(),
   'settings.ai_models': z.object({}).strict(),
   'settings.ai_clear_key': z.object({}).strict(),
   'app.quit': z.object({}).strict()

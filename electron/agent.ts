@@ -126,7 +126,7 @@ export async function runAgent(
       if (toolRounds >= settings.maxToolRounds) { stopAtLimit('tool_rounds', callKind(turn.toolCalls)); return; }
       if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls)); return; }
       toolRounds++;
-      conversation.push({ role: 'assistant', content: turn.text || null, tool_calls: turn.toolCalls });
+      conversation.push({ role: 'assistant', content: turn.text || null, tool_calls: turn.toolCalls, ...(turn.responseItems ? { responseItems: turn.responseItems } : {}) });
       for (let index = 0; index < turn.toolCalls.length; index++) {
         if (checkAbort()) return;
         if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls.slice(index))); return; }

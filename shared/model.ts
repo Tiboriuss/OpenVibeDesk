@@ -1,5 +1,7 @@
 import type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 import type { ChatEvidence } from './chat-evidence';
+import type { AiConnection } from './ai-providers';
+export type { AiProvider, AiProtocol, AiAuthMode } from './ai-providers';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 export type WindowKind = 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions';
 export interface Settings { textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; }
@@ -13,9 +15,9 @@ export interface AgentRunLimit { status: 'limit_reached'; reason: 'tool_rounds' 
 
 export interface ChatOptions { tier: ModelTier; sessionRefId?: string; sessionId?: string; clientRequestId?: string; references?: ModuleReferenceInput[]; }
 export interface ReformulateChatOptions { tier: ModelTier; sessionId?: string; }
-export interface AiConfig { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; historyStart: number; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; }
-export interface AiSettings { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; confirmationMode: ConfirmationMode; hasApiKey: boolean; configured: boolean; }
-export interface AiSettingsInput { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; apiKey?: string; }
+export interface AiConfig extends AiConnection { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; historyStart: number; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; }
+export interface AiSettings extends AiConnection { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools: boolean; confirmationMode: ConfirmationMode; hasApiKey: boolean; configured: boolean; chatGpt?: import('./chatgpt').ChatGptStatus; }
+export interface AiSettingsInput extends AiConnection { baseUrl: string; smartModel: string; simpleModel: string; smartThinking: Thinking; simpleThinking: Thinking; workspaceTools?: boolean; confirmationMode?: ConfirmationMode; apiKey?: string; }
 export type Folder = 'Inbox' | 'Sent' | 'Drafts' | 'Archive';
 export interface WorkspaceWindow { id: string; kind: WindowKind; title: string; x: number; y: number; width: number; height: number; z: number; minimized: boolean; }
 export interface Mail { id: string; folder: Folder; threadId: string; from: string; to: string; subject: string; date: string; bodyText: string; bodyHtml?: string; attachments: { name: string; size: number }[]; read: boolean; accountName?: string; externalFolder?: string; bodyLoaded?: boolean; }
@@ -37,6 +39,13 @@ export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachme
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  getChatGptStatus(): Promise<import('./chatgpt').ChatGptStatus>;
+  startChatGptLogin(options?: { profileId?: string; newProfile?: boolean; consent?: boolean }): Promise<void>;
+  cancelChatGptLogin(): Promise<void>;
+  logoutChatGpt(): Promise<void>;
+  selectChatGptProfile(profileId: string): Promise<void>;
+  openChatGptUsage(): Promise<void>;
+  onChatGptStatus(callback: (status: import('./chatgpt').ChatGptStatus) => void): () => void;
   referenceModuleResource(moduleId: string, reference: ModuleReferenceInput): Promise<void>;
   getChatRun(messageId: string, sessionId?: string): Promise<import('./operations').OperationRunSummary | null>;
   continueChat(messageId: string, options: ReformulateChatOptions): Promise<void>;

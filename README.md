@@ -49,7 +49,7 @@ These screenshots show the running app with **fictional sample data in isolated 
 
 | Area | Current scope |
 | --- | --- |
-| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable agent execution. |
+| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable agent execution. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
 | **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML/text reading, attachments, local drafts, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local servers over Stdio and remote servers over Streamable HTTP, individual tool approvals, and a compact activity log. |
@@ -109,7 +109,7 @@ pnpm dev
 
 `pnpm dev` builds the project and launches Electron without installing the app. It does not start a hot-reload server; restart it after source changes. If `pnpm` is missing, see [setup and troubleshooting](docs/getting-started.md#install-the-development-tools).
 
-Configure an OpenAI-compatible endpoint and models in **Settings → AI & connection** (currently **Einstellungen → KI & Verbindung**). Streaming is required; workspace actions also require tool calling. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
+Choose a provider in **Settings → AI & connection** (currently **Einstellungen → KI & Verbindung**): OpenAI, Azure AI Foundry, an OpenAI-compatible endpoint, or **ChatGPT** with direct browser sign-in. API connections can use Chat Completions or Responses; Azure uses deployment names and its matching authentication method. Eligible ChatGPT accounts can authorize plan usage directly through OAuth and the public Responses API. This connection runs inside OVD without an external agent runtime. See [AI provider setup](docs/ai-providers.md) for endpoints, authentication and preview requirements. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
 
 | Command | Purpose |
 | --- | --- |

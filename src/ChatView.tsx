@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Bot, BookOpen, Check, ChevronRight, CircleAlert, Ci
 import { ChatMarkdown } from './ChatMarkdown';
 import type { ChatMessage, EmailReferenceSummary, WorkspaceState } from '../shared/model';
 import type { OperationRunSummary } from '../shared/operations';
+import type { ChatGptStatus } from '../shared/chatgpt';
 import { SESSION_DRAG_PREFIX, SESSION_DRAG_TYPE } from './SessionsView';
 import { MAIL_DRAG_TYPE, readMailDrag } from './mail-reference';
 import { MODULE_REFERENCE_DRAG_TYPE, moduleReferenceKey, readModuleReferenceDrag, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
@@ -101,6 +102,20 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
   const [copyError, setCopyError] = useState('');
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [chatGptStatus, setChatGptStatus] = useState<ChatGptStatus | null>(null);
+  const [usageError, setUsageError] = useState('');
+  useEffect(() => {
+    if (state.ai?.provider !== 'chatgpt') { setChatGptStatus(null); return; }
+    let current = true;
+    void window.workspace.getChatGptStatus().then(status => { if (current) setChatGptStatus(status); }).catch(() => {});
+    const stop = window.workspace.onChatGptStatus(status => { if (current) setChatGptStatus(status); });
+    return () => { current = false; stop(); };
+  }, [state.ai?.provider]);
+  async function manageChatGptUsage() {
+    setUsageError('');
+    try { await window.workspace.openChatGptUsage(); }
+    catch { setUsageError('Die ChatGPT-Nutzungsübersicht konnte nicht geöffnet werden.'); }
+  }
   const dragDepth = useRef(0);
   const active = state.sessions.find(session => session.id === state.activeSessionId);
   const linked = state.sessions.find(session => session.id === sessionRef && session.id !== state.activeSessionId);
@@ -203,6 +218,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
               {message.status === 'streaming' && <small className="message-status streaming" role="status"><span aria-hidden="true"/>{message.reformulationOf ? 'Antwort wird neu formuliert …' : 'Antwort wird erstellt …'}</small>}
               {message.status === 'cancelled' && <small className="message-status">Gestoppt</small>}
               {message.status === 'failed' && <small className="message-status failed">{message.error || 'Antwort unterbrochen'}</small>}
+              {state.ai?.provider === 'chatgpt' && message.error?.includes('subscription_sharing_usage_limit_exceeded') && <button type="button" className="chatgpt-usage-action" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button>}
               {message.error && message.status !== 'failed' && message.status !== 'streaming' && <small className="message-status failed" role="status">{message.error}</small>}
               {message.status === 'limited' && <AgentLimitNotice limit={message.agentRunLimit} onOpen={onAgentSettings}/>}
             </div>
@@ -222,7 +238,8 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       {referencesLoading && <div className="chat-notice" role="status">Referenzen werden geladen … <button type="button" onClick={onCancelModuleReferences}>Abbrechen</button></div>}
       {referenceError && <div className="chat-error" role="alert">{referenceError}</div>}
       {sending && !active?.messages.some(message => message.status === 'streaming') && <div className="chat-notice">{state.sessions.some(session => session.id !== state.activeSessionId && session.messages.some(message => message.status === 'streaming')) ? 'Eine Antwort läuft in einem anderen Chat. Du kannst sie hier stoppen.' : 'Nachricht wird vorbereitet …'}</div>}
-      {(error || copyError) && <div className="chat-error" role="alert">{error || copyError}</div>}
+      {(error || copyError || usageError) && <div className="chat-error" role="alert">{error || copyError || usageError}</div>}
+      {state.ai?.provider === 'chatgpt' && chatGptStatus?.authenticated && chatGptStatus.planAccess && <div className="chatgpt-plan-status"><span>Verwendet ChatGPT-Tarif</span><button type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button></div>}
       <div className="modern-composer">
         <textarea ref={input} rows={1} aria-label="Nachricht" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
         <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title="In den KI-Einstellungen je Modell festgelegt">Thinking: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" aria-label="Nachricht senden" disabled={emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
