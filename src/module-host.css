@@ -4,3 +4,7 @@
 
 .dock-module-error{font-size:11px;font-weight:700;color:#ffb8b8;cursor:help}
 @media(max-width:600px){.module-management-row{align-items:flex-start;flex-wrap:wrap}.module-management-row>svg{margin-top:2px}.module-management-row>div{min-width:160px}.module-management-row>button{margin-left:32px}}
+
+.module-event-settings{margin-top:9px;border-top:1px solid var(--line);padding-top:7px}.module-event-settings summary{cursor:pointer;font-size:11px;color:var(--ink);list-style-position:inside}.module-event-settings summary strong,.module-event-settings summary small{display:inline}.module-event-settings summary small{margin-left:7px}.module-event-fields{padding-top:5px}.module-event-fields fieldset{border:0;padding:0;margin:6px 0;min-width:0}.module-event-source{display:flex;align-items:flex-start;gap:8px;padding:5px 0;cursor:pointer}.module-event-source input{flex:none;accent-color:var(--accent);margin:2px 0 0}.module-event-source span{min-width:0;overflow-wrap:anywhere}.module-event-source strong{font-size:11px}.module-event-source small{font-size:10px}.module-event-fields fieldset:disabled .module-event-source{opacity:.6;cursor:default}.module-event-error{color:#a32745!important;font-size:11px;line-height:1.5}.module-event-settings summary:focus-visible,.module-event-source input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+
+.module-event-fields .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

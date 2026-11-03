@@ -138,6 +138,14 @@ exports.activate = async () => ({
 
 The host's [operation journal](docs/architecture.md#durable-operations-and-explicit-continuation) stores ordinary arguments and bounded redacted results unencrypted. Never pass credentials as operation arguments or hide them in text/results; use the existing protected settings/credential flow. Public summaries omit arguments and result blobs; the Assistant retrieves bounded historical results deliberately through lazy tools. During explicit continuation, `operations.retry({actionId})` lets the host reuse the exact saved arguments without asking the model to reconstruct them. Whole catalogs and journal contents must not be injected into every prompt. A local journal cannot guarantee exactly-once remote execution across a crash, and approved process code still runs with normal user permissions rather than an OS sandbox.
 
+### Automatic memory retrieval
+
+An optional `contributions.memory: { retrieveTool: "my-module.recall" }` identifies a declared, confirmation-free read function. With Workspace tools enabled, the host calls ready memory providers before a new request and supplies the bounded current question, chat ID, time and result limits. Storage, explicit writes, search and UI remain in the module. Results carry sources, are treated as untrusted facts and are saved as a bounded snapshot for that answer. This callback must not learn from the question or change business data. Reformulation performs no retrieval, and explicit continuation reuses the original snapshot. See the [memory contract and complete examples](docs/module-memory.md).
+
+### Module event subscriptions
+
+Process modules can declare `contributions.events` with exact `subscriptions` and own-namespace `publications`. Users select incoming sources per module; subscriptions start off and are bound to approved code. An optional `onEvent(event, {signal})` receives durable background deliveries and returns `{ack: event.id}` after its own idempotent transaction. The activation context provides `events.publish(...)` for declared publications. The host binds source identity, persists delivery and acknowledgements, retries with backoff and revokes obsolete grants. This is a general extension contract, not a memory implementation or a new agent loop. See the [event guide](docs/module-events.md) for envelopes, host chat events, author responsibilities and limits.
+
 ### Module attention indicators
 
 The activation context also provides an optional attention publisher. Use it for a short hint that the user should visit the module:

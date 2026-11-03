@@ -87,6 +87,8 @@ const api: WorkspaceApi = {
   installRepositoryModule: input => ipcRenderer.invoke('modules:repositories:install', input),
   onModuleRepositoriesChanged: callback => { const listener = () => callback(); ipcRenderer.on('modules:repositories:changed', listener); return () => ipcRenderer.removeListener('modules:repositories:changed', listener); },
   setModuleRepositorySettingsStatus: status => ipcRenderer.send('modules:repositories:settings-status', status),
+  getModuleEventStatus: () => ipcRenderer.invoke('modules:events:status'),
+  setModuleEventSubscriptions: (moduleId, topics) => ipcRenderer.invoke('modules:events:subscriptions', moduleId, topics),
   listModules: () => ipcRenderer.invoke('modules:list'),
   listModuleAttention: () => ipcRenderer.invoke('modules:attention'),
   acknowledgeModuleAttention: (moduleId, ids) => ipcRenderer.invoke('modules:attention:acknowledge', { moduleId, ids }),

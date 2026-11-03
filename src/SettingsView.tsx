@@ -11,6 +11,8 @@ import { moduleIcon, moduleSettings, useWorkspaceModules } from './module-regist
 import './settings-view.css';
 import { ModuleAttentionDot, useModuleAttention } from './ModuleAttentionDot';
 import { ModuleRepositories } from './ModuleRepositories';
+import { ModuleEventSettings } from './ModuleEventSettings';
+import type { ModuleEventStatus } from '../shared/modules';
 
 type GroupId = 'display' | 'dock';
 const groupStorageKey = 'openvibedesk.settings.groups';
@@ -38,6 +40,9 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const moduleAttention = useModuleAttention();
   const [moduleBusy, setModuleBusy] = useState<string>();
   const [moduleError, setModuleError] = useState('');
+  const [eventStatus, setEventStatus] = useState<ModuleEventStatus[]>([]);
+  const [eventStatusError, setEventStatusError] = useState('');
+  const eventRequest = useRef(0);
   const [visitedModuleSettings, setVisitedModuleSettings] = useState<Set<string>>(() => new Set());
   const contributedSettings = moduleSettings(moduleState.modules);
   const categories: SettingsCategory[] = [...settingsCategories, ...contributedSettings.map(item => ({ id: item.categoryId, title: item.title, description: item.description ?? '', icon: item.icon, order: item.order }))].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
@@ -70,6 +75,27 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const visible = (id: SettingsCategoryId) => searching
     ? entries.some(entry => entry.category === id && matchesSettingsEntry(entry, search, categories))
     : active === id;
+  const moduleSettingsVisible = visible('modules');
+  async function refreshEventStatus() {
+    const request = ++eventRequest.current;
+    try {
+      const result = await window.workspace.getModuleEventStatus();
+      if (request === eventRequest.current) { setEventStatus(result); setEventStatusError(''); }
+    } catch { if (request === eventRequest.current) setEventStatusError('Die Ereigniszustellung konnte nicht geladen werden.'); }
+  }
+  useEffect(() => {
+    if (!moduleSettingsVisible) return;
+    void refreshEventStatus();
+    const unsubscribe = window.workspace.onModulesChanged(() => void refreshEventStatus());
+    const timer = setInterval(() => void refreshEventStatus(), 5000);
+    return () => { unsubscribe(); clearInterval(timer); eventRequest.current++; };
+  }, [moduleSettingsVisible]);
+  async function setSubscriptions(moduleId: string, topics: string[]) {
+    setModuleBusy(moduleId); setModuleError(''); eventRequest.current++;
+    try { await window.workspace.setModuleEventSubscriptions(moduleId, topics); await refreshEventStatus(); }
+    catch (reason) { setModuleError(reason instanceof Error ? reason.message : 'Ereignis-Abonnements konnten nicht gespeichert werden.'); }
+    finally { setModuleBusy(undefined); }
+  }
   const anyResults = entries.some(entry => matchesSettingsEntry(entry, search, categories));
   const category = categories.find(item => item.id === active) ?? categories[0];
   const availableModuleSettings = contributedSettings.map(item => item.categoryId).join('|');
@@ -151,7 +177,8 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         <NavigationOrderSettings settings={settings} modules={moduleState.modules} loading={moduleState.loading || !!moduleBusy} searchQuery={search}/>
         <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
         {moduleState.loading && <p role="status">Module werden geladen …</p>}
-        {moduleState.modules.map(module => <div className="module-management-row" key={module.id}><Package size={20} /><div><strong>{module.title}</strong><small>{module.id} · {module.version || 'Unbekannte Version'} · {module.source === 'builtin' ? 'Mitgeliefert' : 'Zusatzmodul'}{module.required ? ' · Pflichtmodul' : ''}</small><p>{module.description}</p>{module.reason && <p>{module.reason}</p>}<span className="module-status">{{ ready: 'Aktiv', disabled: 'Deaktiviert', incompatible: 'Nicht kompatibel', invalid: 'Ungültiges Modul', approval_required: 'Freigabe erforderlich', unsupported: 'Nicht unterstützt' }[module.status]}</span></div>{!module.required && ['ready', 'disabled', 'approval_required'].includes(module.status) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, module.status !== 'ready')}>{moduleBusy === module.id ? 'Wird geändert …' : module.status === 'ready' ? 'Deaktivieren' : 'Aktivieren'}</button>}</div>)}
+        {eventStatusError && <p className="module-event-error" role="alert">{eventStatusError}</p>}
+        {moduleState.modules.map(module => <div className="module-management-row" key={module.id}><Package size={20} /><div><strong>{module.title}</strong><small>{module.id} · {module.version || 'Unbekannte Version'} · {module.source === 'builtin' ? 'Mitgeliefert' : 'Zusatzmodul'}{module.required ? ' · Pflichtmodul' : ''}</small><p>{module.description}</p>{module.reason && <p>{module.reason}</p>}<span className="module-status">{{ ready: 'Aktiv', disabled: 'Deaktiviert', incompatible: 'Nicht kompatibel', invalid: 'Ungültiges Modul', approval_required: 'Freigabe erforderlich', unsupported: 'Nicht unterstützt' }[module.status]}</span>{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && ['ready', 'disabled', 'approval_required'].includes(module.status) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, module.status !== 'ready')}>{moduleBusy === module.id ? 'Wird geändert …' : module.status === 'ready' ? 'Deaktivieren' : 'Aktivieren'}</button>}</div>)}
         </div>
       </section>
       {contributedSettings.filter(item => visitedModuleSettings.has(item.categoryId)).map(item => <section key={`${item.moduleId}:${item.id}`} hidden={!visible(item.categoryId)} aria-label={item.title}>

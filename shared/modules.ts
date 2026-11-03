@@ -11,6 +11,10 @@ export interface ModuleViewContribution { id: string; title: string; renderer?: 
 export interface ModuleNavigationContribution { id: string; title: string; view: string; icon?: ModuleIcon; order?: number; }
 export interface ModuleSettingsContribution { id: string; title: string; description?: string; keywords?: string[]; renderer?: string; entry?: string; icon?: ModuleIcon; order?: number; }
 export interface ModuleReferenceContribution { id: string; title: string; snapshotTool?: string; usage?: 'context' | 'instructions'; }
+/** The declared function retrieves context only; it must never learn or mutate data. */
+export interface ModuleMemoryContribution { retrieveTool: string; }
+export interface ModuleEventContribution { subscriptions: string[]; publications: string[]; }
+export interface ModuleEventStatus { moduleId: string; title: string; availableTopics: string[]; enabledTopics: string[]; pending: number; failed: number; lastError?: string; }
 export interface ModuleManifest {
   apiVersion: 1;
   id: string;
@@ -28,6 +32,8 @@ export interface ModuleManifest {
     navigation: ModuleNavigationContribution[];
     settings: ModuleSettingsContribution[];
     referenceTypes?: ModuleReferenceContribution[];
+    memory?: ModuleMemoryContribution;
+    events?: ModuleEventContribution;
   };
 }
 export type ModuleStatus = 'ready' | 'disabled' | 'incompatible' | 'invalid' | 'approval_required' | 'unsupported';

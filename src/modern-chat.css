@@ -116,3 +116,15 @@
 .chatgpt-plan-status{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--text-muted,#667085);padding:0 3px 6px}
 .chatgpt-plan-status button,.chatgpt-usage-action{border:0;background:transparent;color:var(--accent,#5b45d6);font:inherit;text-decoration:underline;text-underline-offset:2px;cursor:pointer;padding:3px 0}
 .chatgpt-usage-action{font-size:12px}
+.memory-context summary{flex-wrap:wrap;column-gap:5px;row-gap:2px}
+.memory-context summary>small{overflow-wrap:anywhere}
+.memory-context-content{display:flex;flex-direction:column;gap:8px;margin:3px 0 8px 7px;padding:6px 0 6px 10px;border-left:1px solid #dce1eb;overflow-wrap:anywhere}
+.memory-context-note{margin:0;color:#64748c;font-size:10px}
+.memory-provider{display:flex;flex-wrap:wrap;gap:3px 8px;font-size:10px}
+.memory-provider>strong{font-weight:650}.memory-provider>span{color:#64748c}
+.memory-entry{display:flex;flex-direction:column;gap:4px;padding-top:7px;border-top:1px solid #e6eaf1}
+.memory-source{display:flex;flex-wrap:wrap;gap:3px 8px;font-size:10px}
+.memory-source a{color:var(--accent-dark);text-decoration:underline;text-underline-offset:2px}
+.memory-source a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+.memory-entry>p{margin:0;white-space:pre-wrap;font-size:11px}.memory-entry>small{font-size:10px;color:#64748c}
+.memory-context-error{margin:0;color:#a43748}

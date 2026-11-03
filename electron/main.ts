@@ -1,3 +1,6 @@
+import { chatRequestEvent, chatFinishedEvent } from './chat-events';
+import type { ModuleEvent, ModuleEventPublication } from '../shared/module-events';
+import { savedMemory } from './memory-context';
 import { app, BrowserWindow, dialog, ipcMain, protocol, screen, session, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -301,6 +304,11 @@ async function readAiSettings(context: OperationContext) {
     const config = currentState.ai ?? defaultAiConfig;
     return { provider: config.provider ?? 'openai-compatible', protocol: config.protocol ?? 'chat-completions', authMode: config.authMode ?? 'bearer', apiVersion: config.apiVersion ?? '', baseUrl: config.baseUrl, smartModel: config.smartModel, simpleModel: config.simpleModel, smartThinking: config.smartThinking, simpleThinking: config.simpleThinking, workspaceTools: config.workspaceTools !== false, confirmationMode: config.confirmationMode === 'never' ? 'never' as const : 'ask' as const, hasApiKey: !!(await getKey(config)), configured: !!currentState.ai, ...(config.provider === 'chatgpt' ? { chatGpt: await chatGptAuth().status() } : {}) };
 }
+function chatEventPublications(event: ModuleEvent): ModuleEventPublication[] {
+  const recipients = moduleHost?.captureEventRecipients(event.type) ?? [];
+  return recipients.length ? [{ event, recipients }] : [];
+}
+
 async function saveAiSettings(input: unknown, context: OperationContext) {
 
     let values: ReturnType<typeof parseAiInput>;
@@ -310,6 +318,7 @@ async function saveAiSettings(input: unknown, context: OperationContext) {
     await saveState({ ...currentState, ai, provider: values.smartModel });
     commit({ ...currentState, ai, provider: values.smartModel });
     if (ai.workspaceTools === false && activeOperationRunner) activeStream?.controller.abort();
+    moduleHost?.notifyEventsChanged();
 }
 async function chooseLocalFile(context: OperationContext) {
 
@@ -505,6 +514,16 @@ function registerWorkspaceCapabilities(): void {
   }));
   workspaceCapabilities.register('settings.open', async (args) => { await openSettingsCategory(args.category, args.search); return { opened: true, ...args }; });
   workspaceCapabilities.register('modules.list', () => moduleHost?.statuses() ?? []);
+  workspaceCapabilities.register('modules.events_status', ({ moduleId, offset = 0, limit = 20 }) => {
+    const rows = (moduleHost?.getEventStatus() ?? []).filter(item => !moduleId || item.moduleId === moduleId);
+    const hasMore = offset + limit < rows.length;
+    return { subscriptions: rows.slice(offset, offset + limit), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+  });
+  workspaceCapabilities.register('modules.events_subscribe', async ({ moduleId, topics }, context) => {
+    const applied = await moduleHost!.setEventSubscriptions(moduleId, topics, context);
+    const subscription = moduleHost!.getEventStatus().find(item => item.moduleId === moduleId);
+    return { ok: applied, outcome: applied ? 'completed' : 'cancelled', moduleId, subscription };
+  }, { deferDispatch: true });
   workspaceCapabilities.register('modules.set_enabled', ({ moduleId, enabled }, context) => moduleHost!.setEnabled(moduleId, enabled, context).then(() => ({ moduleId, status: moduleHost!.registry.getModule(moduleId)?.status })));
   workspaceCapabilities.register('modules.repositories_list', ({ offset = 0, limit = 20 }) => {
     const state = moduleRepositories!.list();
@@ -647,6 +666,19 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
   let prepared = false;
   let runLimit: AgentRunLimit | undefined;
   let operationRun: OperationRun | undefined;
+  let finishedPublications: ModuleEventPublication[] | undefined;
+  let finishedEventPersisted = false;
+  const persistFinished = async () => {
+    const answer = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
+    // Keep the identical envelope on a failed persistence retry. A new timestamp
+    // or rewritten outcome under the same event ID would conflict with a durable receipt.
+    if (!finishedPublications) finishedPublications = answer ? chatEventPublications(chatFinishedEvent(sessionId, user, answer,
+      operationRun ? operationJournal.getRun(operationRun.id) : undefined, operationRun ? operationJournal.listActions(operationRun.rootRunId) : [],
+      operationRun ? operationJournal.getRun(operationRun.rootRunId)?.userMessageId : undefined)) : [];
+    await saveState(currentState, finishedEventPersisted ? [] : finishedPublications);
+    finishedEventPersisted = true;
+    moduleHost?.notifyEventsChanged();
+  };
   try {
     if (continuation) {
       for (const saved of user.references ?? []) {
@@ -665,12 +697,13 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     }
     if (controller.signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
     commit(updateSessionMessages(currentState, sessionId, messages => [...messages, user, assistant]));
-    try { await saveState(currentState); }
+    try { await saveState(currentState, continuation ? [] : chatEventPublications(chatRequestEvent(sessionId, user))); }
     catch {
       commit(updateSessionMessages(currentState, sessionId, messages => messages.filter(item => item.id !== user.id && item.id !== assistant.id)));
       throw new Error('Die Nachricht konnte lokal nicht gespeichert werden. Bitte erneut versuchen; es wurde keine KI-Anfrage gesendet.');
     }
     prepared = true;
+    moduleHost?.notifyEventsChanged();
     operationRun = await operationJournal.createRun({ sessionId, userMessageId: user.id, assistantMessageId: assistant.id, ...(continuation ? { parentRunId: continuation.run.id } : {}) });
     updateAssistant({ operationRunId: operationRun.id });
     await saveState(currentState);
@@ -680,7 +713,21 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     const key = await getKey(config);
     if (controller.signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
     const toolsEnabled = config.workspaceTools !== false;
-    const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()));
+    // Retrieve only for a new request. Continuations retain the original evidence;
+    // reformulation has a separate entry point with no live module dependencies.
+    const memory = toolsEnabled && moduleHost
+      ? continuation ? savedMemory(continuation.answer.memory)
+        : await moduleHost.recallMemory({ query: user.text, sessionId, now: new Date().toISOString() }, { origin: 'agent', signal: controller.signal, owner: panels.get('chat'), sessionId })
+      : undefined;
+    controller.signal.throwIfAborted();
+    if (memory?.providers.length) {
+      updateAssistant({ memory });
+      // Do not use an unsaved context snapshot: recovery must see the same facts.
+      await saveState(currentState);
+    }
+    controller.signal.throwIfAborted();
+    if (toolsEnabled && currentState.ai?.workspaceTools === false) throw new Error('Die Workspace-Werkzeuge wurden während der Vorbereitung deaktiviert. Die Anfrage wurde nicht an den KI-Anbieter gesendet.');
+    const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()), memory);
     if (continuation) {
       const actions = operationJournal.summary(operationRun.id).actions;
       providerMessages.unshift({ role: 'system', content: `Gespeicherter Quellauftrag für operations.get_run: messageId=${continuation.answer.id}, sessionId=${continuation.session.id}. Diese IDs stammen vom Host; weitere Schritte sind über offset/nextOffset erreichbar. Originale Argumente bleiben im Host und werden bei operations.retry(actionId) exakt gebunden verwendet.` });
@@ -712,14 +759,14 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     const status = runLimit ? 'limited' : actions.some(action => action.effect === 'unknown' || action.status === 'running') || events.some(event => event.status === 'uncertain') ? 'uncertain' : actions.some(action => ['prepared', 'failed', 'cancelled'].includes(action.status)) || events.some(event => event.status === 'failed' || event.status === 'cancelled') ? 'failed' : 'completed';
     await operationJournal.finishRun(operationRun.id, status);
     if (status === 'uncertain' || status === 'failed') updateAssistant({ status: 'failed', error: status === 'uncertain' ? 'Ein Aktionsausgang ist unklar. Bitte den Auftragsstatus prüfen; es wird kein Aufruf automatisch wiederholt.' : 'Der Auftrag enthält fehlgeschlagene oder offene Schritte. Du kannst ihn gezielt fortsetzen; erledigte Aktionen bleiben erhalten.' });
-    await saveState(currentState);
+    await persistFinished();
   } catch (error) {
     if (!prepared) throw error;
     flush();
     const cancelled = controller.signal.aborted;
     const saved = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
     updateAssistant({ status: cancelled ? 'cancelled' : 'failed', ...(saved?.evidence?.status === 'running' ? { evidence: textEvidence.finish(cancelled ? 'cancelled' : 'failed') } : {}), ...(!cancelled ? { error: error instanceof Error ? error.message : 'Die Antwort wurde unterbrochen.' } : {}) });
-    await saveState(currentState).catch(() => updateAssistant({ error: 'Die Antwort und Ergebnisbelege konnten nicht auf dem Datenträger gespeichert werden. Bitte vor dem Beenden den Speicherfehler beheben.' }));
+    await persistFinished().catch(() => updateAssistant({ error: 'Die Antwort und Ergebnisbelege konnten nicht auf dem Datenträger gespeichert werden. Bitte vor dem Beenden den Speicherfehler beheben.' }));
   } finally {
     try { if (operationRun && operationJournal.getRun(operationRun.id)?.status === 'running') {
       const last = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
@@ -918,10 +965,10 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'chats.list', 'chats.read', 'settings.get', 'navigation.get', 'modules.list', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'chats.list', 'chats.read', 'settings.get', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
-    const revision = action === 'settings.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
+    const revision = action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'settings.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
     return { args, effect: 'write', resource: { id: `workspace:${action}:${typeof args.sessionId === 'string' ? args.sessionId : ''}`, version: createHash('sha256').update(JSON.stringify(revision ?? null)).digest('hex') } };
   } });
   if (moduleHost.isReady('ovd-mcp')) moduleHost.registerOperationAdapter('ovd-mcp', { prepare(action, args) { return { args, effect: ['mcp.servers', 'mcp.tools', 'mcp.audit'].includes(action) ? 'read' : 'unknown' }; } });
@@ -940,6 +987,8 @@ async function initializeModules(): Promise<void> {
   ipcMain.handle('modules:repositories:install', (event, input: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.install(repositoryInstallInputSchema.parse(input)); });
   ipcMain.on('modules:repositories:settings-status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) repositorySettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.handle('modules:list', event => { verifySender(event); return moduleHost!.list(); });
+  ipcMain.handle('modules:events:status', event => { verifyPanel(event, ['settings']); return moduleHost!.getEventStatus(); });
+  ipcMain.handle('modules:events:subscriptions', (event, id: unknown, topics: unknown) => { verifyPanel(event, ['settings']); return moduleHost!.setEventSubscriptions(z.string().min(1).max(80).parse(id), z.array(z.string().min(1).max(160)).max(20).parse(topics), uiOperationContext(event)); });
   ipcMain.handle('modules:attention', event => { verifySender(event); return moduleHost!.listAttention(); });
   ipcMain.handle('modules:attention:acknowledge', (event, input: unknown) => { verifySender(event); const { moduleId, ids } = attentionAcknowledgementSchema.parse(input); return moduleHost!.acknowledgeAttention(moduleId, ids); });
   ipcMain.handle('modules:set-enabled', (event, id: unknown, enabled: unknown) => { verifyPanel(event, ['settings']); if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('Ungültige Modulaktion.'); return moduleHost!.setEnabled(id, enabled, uiOperationContext(event)); });
@@ -952,6 +1001,7 @@ async function initializeModules(): Promise<void> {
     const summary = await moduleReferences.summary(reference, uiOperationContext(event));
     await selectModuleReference(summary);
   });
+  moduleHost.notifyEventsChanged();
 }
 
 if (hasInstanceLock) app.on('second-instance', () => {

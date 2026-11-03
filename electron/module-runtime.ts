@@ -5,20 +5,22 @@ import { randomUUID } from 'node:crypto';
 import type { ModuleRuntimeRecord } from './modules';
 import { attentionKeySchema, moduleAttentionInputSchema, type ModuleAttentionInput } from '../shared/module-attention';
 import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
+import { moduleEventSchema, type ModuleEvent } from '../shared/module-events';
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const INVOCATION_TIMEOUT_MS = 60_000;
 const ARGUMENT_BYTES = 16 * 1024;
 const RESULT_BYTES = 32 * 1024;
 const MAX_PENDING = 16;
-type PendingCall = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout; removeAbort(): void; cancelled: boolean };
-type Runtime = { fingerprint: string; record: ModuleRuntimeRecord; child?: UtilityProcess; ready: Promise<void>; resolveReady(): void; rejectReady(error: Error): void; startupTimer: NodeJS.Timeout; pending: Map<string, PendingCall>; started: boolean; stopped: boolean };
+type PendingCall = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout; removeAbort(): void; cancelled: boolean; event?: boolean };
+type Runtime = { fingerprint: string; record: ModuleRuntimeRecord; child?: UtilityProcess; ready: Promise<void>; resolveReady(): void; rejectReady(error: Error): void; startupTimer: NodeJS.Timeout; pending: Map<string, PendingCall>; started: boolean; stopped: boolean; publications: number };
 
 export interface ModuleRuntimeOptions {
   dataRoot: string;
   onFailure?(moduleId: string, reason: string): void;
   onAttention?(moduleId: string, notice: ModuleAttentionInput): void;
   onAttentionClear?(moduleId: string, key: string): void;
+  onPublishEvent?(moduleId: string, fingerprint: string, event: ModuleEvent): Promise<void>;
 }
 
 function abortError(): Error { return new DOMException('Abgebrochen', 'AbortError'); }
@@ -51,7 +53,7 @@ export class ModuleRuntimeManager {
     if (existing) this.stop(module.id);
     let resolveReady!: () => void, rejectReady!: (error: Error) => void;
     const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-    const runtime: Runtime = { fingerprint: record.fingerprint, record, ready, resolveReady, rejectReady, pending: new Map(), started: false, stopped: false,
+    const runtime: Runtime = { fingerprint: record.fingerprint, record, ready, resolveReady, rejectReady, pending: new Map(), started: false, stopped: false, publications: 0,
       startupTimer: setTimeout(() => this.fail(runtime, 'Das Modul hat nicht innerhalb von 10 Sekunden gestartet.'), STARTUP_TIMEOUT_MS) };
     this.runtimes.set(module.id, runtime);
     void this.launch(runtime);
@@ -73,7 +75,7 @@ export class ModuleRuntimeManager {
       child.on('exit', () => { if (!runtime.stopped) this.fail(runtime, 'Der Modulprozess wurde unerwartet beendet.'); });
       child.once('spawn', () => {
         if (runtime.stopped) { child.kill(); return; }
-        try { child.postMessage({ type: 'initialize', moduleId: runtime.record.module.id, entryPath: runtime.record.entryPath, dataDirectory, tools: runtime.record.module.manifest!.tools!.map(tool => tool.name) }); }
+        try { child.postMessage({ type: 'initialize', moduleId: runtime.record.module.id, entryPath: runtime.record.entryPath, dataDirectory, tools: runtime.record.module.manifest!.tools!.map(tool => tool.name), subscriptions: runtime.record.module.manifest!.contributions.events?.subscriptions ?? [], publications: runtime.record.module.manifest!.contributions.events?.publications ?? [] }); }
         catch { this.fail(runtime, 'Das Modul konnte nicht initialisiert werden.'); }
       });
     } catch { this.fail(runtime, 'Der Modulprozess konnte nicht gestartet werden.'); }
@@ -83,6 +85,16 @@ export class ModuleRuntimeManager {
     if (runtime.stopped) return;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { this.fail(runtime, 'Das Modul hat eine ungültige Antwort geliefert.'); return; }
     const message = raw as Record<string, unknown>;
+    if (message.type === 'event-publish') {
+      const requestId = message.requestId;
+      if (typeof requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(requestId)) { this.fail(runtime, 'Ungültige Ereignisveröffentlichung.'); return; }
+      const reply = (ok: boolean) => { if (!runtime.stopped) try { runtime.child?.postMessage({ type: 'event-published', requestId, ok }); } catch { /* Runtime is gone. */ } };
+      const event = moduleEventSchema.safeParse(message.event);
+      if (!event.success || Object.keys(message).some(key => !['type', 'requestId', 'event'].includes(key)) || event.data.source.moduleId !== runtime.record.module.id || !runtime.record.module.manifest!.contributions.events?.publications.includes(event.data.type) || [...runtime.pending.values()].some(call => call.event) || runtime.publications >= 4 || this.runtimes.get(runtime.record.module.id) !== runtime || !this.options.onPublishEvent) { reply(false); return; }
+      runtime.publications++;
+      void this.options.onPublishEvent(runtime.record.module.id, runtime.fingerprint, event.data).then(() => reply(true), () => reply(false)).finally(() => { runtime.publications--; });
+      return;
+    }
     if (message.type === 'attention' || message.type === 'attention-clear') {
       // The child cannot choose another module's ID; old/retired runtimes cannot publish.
       if (this.runtimes.get(runtime.record.module.id) !== runtime || runtime.record.module.status !== 'ready') return;
@@ -100,6 +112,7 @@ export class ModuleRuntimeManager {
     if (message.type === 'ready') {
       const expected = runtime.record.module.manifest!.tools!.map(tool => tool.name).sort();
       if (runtime.started || !Array.isArray(message.tools) || message.tools.length !== expected.length || !message.tools.every((name, index) => name === expected[index])) { this.fail(runtime, 'Die Modulfunktionen stimmen nicht mit dem Manifest überein.'); return; }
+      if (runtime.record.module.manifest!.contributions.events?.subscriptions.length && message.events !== true) { this.fail(runtime, 'Das Modul hat keinen Ereignisempfänger registriert.'); return; }
       clearTimeout(runtime.startupTimer); runtime.started = true; runtime.resolveReady(); return;
     }
     if (message.type === 'fatal') { this.fail(runtime, 'Das Modul konnte seinen Laufzeitvertrag nicht erfüllen.'); return; }
@@ -115,6 +128,10 @@ export class ModuleRuntimeManager {
 
   async invoke(record: ModuleRuntimeRecord, toolName: string, args: unknown, signal?: AbortSignal, operation?: OperationIdentity): Promise<unknown> {
     return this.request(record, 'invoke', toolName, args, signal, operation);
+  }
+  async deliverEvent(record: ModuleRuntimeRecord, event: ModuleEvent, signal: AbortSignal): Promise<void> {
+    const result = await this.request(record, 'event', '', moduleEventSchema.parse(event), signal);
+    if (!result || typeof result !== 'object' || !('ack' in result) || result.ack !== event.id) throw new Error('Das Ereignis wurde nicht bestätigt.');
   }
   async prepareOperation(record: ModuleRuntimeRecord, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ args?: Record<string, unknown>; resource?: OperationBinding['resource'] }> {
     const result = await this.request(record, 'prepare', toolName, args, signal);
@@ -135,11 +152,11 @@ export class ModuleRuntimeManager {
     if (!['completed', 'not_applied', 'unknown'].includes(String(raw.state)) || (raw.detail !== undefined && (typeof raw.detail !== 'string' || raw.detail.length > 1000))) throw new Error('Das Modul hat keinen gültigen Statusabgleich geliefert.');
     return { state: raw.state as OperationReconciliation['state'], ...(Object.hasOwn(raw, 'result') ? { result: raw.result } : {}), ...(typeof raw.detail === 'string' ? { detail: raw.detail } : {}) };
   }
-  private async request(record: ModuleRuntimeRecord, kind: 'invoke' | 'reconcile' | 'prepare', toolName: string, args: unknown, signal?: AbortSignal, operation?: OperationIdentity): Promise<unknown> {
+  private async request(record: ModuleRuntimeRecord, kind: 'invoke' | 'reconcile' | 'prepare' | 'event', toolName: string, args: unknown, signal?: AbortSignal, operation?: OperationIdentity): Promise<unknown> {
     signal?.throwIfAborted();
     const runtime = this.runtimes.get(record.module.id);
     if (!runtime || runtime.fingerprint !== record.fingerprint || record.module.status !== 'ready') throw new Error('Das Modul ist nicht gestartet oder seine Freigabe ist nicht mehr gültig.');
-    if (!record.module.manifest?.tools?.some(tool => tool.name === toolName)) throw new Error('Diese Funktion wurde vom Modul nicht deklariert.');
+    if (kind !== 'event' && !record.module.manifest?.tools?.some(tool => tool.name === toolName)) throw new Error('Diese Funktion wurde vom Modul nicht deklariert.');
     const json = encodeArguments(args);
     await runtime.ready;
     signal?.throwIfAborted();
@@ -153,7 +170,7 @@ export class ModuleRuntimeManager {
         call.cancelled = true; call.removeAbort(); reject(abortError());
         try { runtime.child?.postMessage({ type: 'cancel', id }); } catch { this.fail(runtime, 'Der Modulprozess ist nicht mehr erreichbar.'); }
       };
-      const pending: PendingCall = { resolve, reject, cancelled: false, removeAbort: () => signal?.removeEventListener('abort', onAbort),
+      const pending: PendingCall = { resolve, reject, cancelled: false, ...(kind === 'event' ? { event: true } : {}), removeAbort: () => signal?.removeEventListener('abort', onAbort),
         timer: setTimeout(() => this.fail(runtime, 'Eine Modulfunktion hat die Frist von 60 Sekunden überschritten. Ihr Ergebnis ist unklar; es wird kein weiterer Versuch gestartet.'), INVOCATION_TIMEOUT_MS) };
       runtime.pending.set(id, pending);
       signal?.addEventListener('abort', onAbort, { once: true });

@@ -45,6 +45,8 @@ Design guides include intended behavior that is not implemented yet. The [reposi
 | --- | --- |
 | [Module authoring contract](../CONTRIBUTING.md#building-modules) | Manifests, tools, UI contributions, approval, lifecycle, and resource references. |
 | [Module repositories](module-repositories.md) | Public/private sources, catalog browsing, installation, updates, source conflicts, package publishing and Assistant control. |
+| [Memory modules](module-memory.md) | Automatic bounded recall, sources, explicit storage, callback examples and saved request snapshots. |
+| [Module events](module-events.md) | Opt-in subscriptions, bounded publications, durable delivery, acknowledgements and background processing contracts. |
 | [Downloadable module catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) | Separately published Notes and Skill Library modules, their source and package documentation. |
 | [Notes module example](../examples/notes-module/README.md) | A standalone process module with its own HTML interface and settings. |
 | [MCP module](../modules/ovd-mcp/README.md) | Server setup, tool approvals, credentials, and dynamic discovery. |

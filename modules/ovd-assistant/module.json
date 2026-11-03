@@ -42,7 +42,10 @@
     "repository",
     "katalog",
     "installieren",
-    "updates"
+    "updates",
+    "ereignisse",
+    "abonnements",
+    "events"
   ],
   "required": true,
   "capabilities": [
@@ -77,6 +80,8 @@
     "settings.ai_clear_key",
     "app.quit",
     "modules.list",
+    "modules.events_status",
+    "modules.events_subscribe",
     "modules.set_enabled",
     "modules.attention",
     "modules.acknowledge_attention",

@@ -6,11 +6,16 @@ import { z } from 'zod';
 import { ModuleRegistry } from './modules';
 import { ModuleRuntimeManager } from './module-runtime';
 import { type CapabilityContext, type WorkspaceCapabilityRegistry } from './workspace-capabilities';
-import type { ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
+import type { ModuleEventStatus, ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { ModuleToolProvider } from '../shared/module-tool-provider';
 import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
 import { ATTENTION_PULSE_MS, MAX_ATTENTION, MAX_MODULE_ATTENTION, attentionAcknowledgementSchema, attentionKeySchema, moduleAttentionInputSchema, type ModuleAttention, type ModuleAttentionInput } from '../shared/module-attention';
 import { moduleReferenceInputSchema, moduleReferenceSchema, type ModuleReference } from '../shared/references';
+import { MEMORY_CONTEXT_CHARS, MEMORY_MAX_ITEMS, MEMORY_QUERY_CHARS, MEMORY_TIMEOUT_MS, memoryRecallRequestSchema, memoryRecallSnapshotSchema, moduleMemoryResultSchema, type MemoryRecallRequest, type MemoryRecallSnapshot } from '../shared/module-memory';
+
+import { moduleEventSchema, type ModuleEvent, type ModuleEventRecipient, type ModuleEventDelivery } from '../shared/module-events';
+import { enqueueModuleEvent, dropModuleEvents, reconcileModuleEventGrants, moduleEventQueueStatus } from './store';
+import { ModuleEventDispatcher } from './module-events';
 
 type HostOptions = {
   builtInRoot: string; userRoot: string; dataRoot: string; configFile: string;
@@ -43,7 +48,7 @@ export interface ModulePackageInstall {
   /** Persist the source receipt atomically; reject without changing it if persistence fails. */
   commit(): Promise<void>;
 }
-const configSchema = z.object({ version: z.literal(1), disabled: z.array(z.string().max(128)).max(500), approvals: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)) }).strict();
+const configSchema = z.object({ version: z.literal(1), disabled: z.array(z.string().max(128)).max(500), approvals: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)), eventSubscriptions: z.record(z.string(), z.object({ fingerprint: z.string().regex(/^[a-f0-9]{64}$/), topics: z.record(z.string().max(160), z.string().uuid()).refine(value => Object.keys(value).length <= 20) }).strict()).default({}) }).strict();
 const packageJournalSchema = z.object({ version: z.literal(1), moduleId: z.string().regex(/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/).max(80), backup: z.string().regex(/^\.ovd-package-backup-[a-f0-9-]{36}$/).optional(), previousFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), fingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const toolQuerySchema = z.object({ moduleId: z.string().min(1).max(128), query: z.string().trim().max(200).optional(), offset: z.number().int().min(0).max(1000).optional(), limit: z.number().int().min(1).max(24).optional() }).strict();
 const moduleQuerySchema = z.object({ query: z.string().trim().max(200).optional(), offset: z.number().int().min(0).max(10000).optional(), limit: z.number().int().min(1).max(20).optional() }).strict();
@@ -58,10 +63,12 @@ function canonicalOperationArgs(value: unknown): string {
 /** Host owns activation and dispatch; the model only sees bounded metadata and selected schemas. */
 export class ModuleHost {
   readonly registry = new ModuleRegistry();
-  private config: z.infer<typeof configSchema> = { version: 1, disabled: [], approvals: {} };
+  private config: z.infer<typeof configSchema> = { version: 1, disabled: [], approvals: {}, eventSubscriptions: {} };
   private configError = false;
   private readonly bindings = new Map<string, Map<string, Binding>>();
   private readonly runtimes: ModuleRuntimeManager;
+  private readonly eventDispatcher: ModuleEventDispatcher;
+  private eventQueueError?: string;
   private readonly ajv = new Ajv({ strict: true, validateFormats: false, ownProperties: true, coerceTypes: false, useDefaults: false, removeAdditional: false });
   private readonly activation = new Map<string, Promise<void>>();
   private changing = false;
@@ -75,7 +82,20 @@ export class ModuleHost {
     this.runtimes = new ModuleRuntimeManager({ dataRoot: options.dataRoot,
       onAttention: (id, notice) => this.publishAttention(id, notice),
       onAttentionClear: (id, key) => this.clearAttention(id, key),
+      onPublishEvent: (id, fingerprint, event) => this.publishModuleEvent(id, event, fingerprint),
       onFailure: (id, reason) => { this.registry.fail(id, reason); this.bindings.delete(id); this.clearModuleAttention(id); options.changed(); } });
+    this.eventDispatcher = new ModuleEventDispatcher({
+      currentGrant: delivery => this.eventGrantCurrent(delivery),
+      allowed: delivery => this.eventDeliveryAllowed(delivery),
+      canDeliver: delivery => this.isReady(delivery.recipient.moduleId) && !this.runtimes.isBusy(delivery.recipient.moduleId),
+      deliver: (delivery, signal) => this.deliverEvent(delivery, signal),
+      changed: (id, error) => {
+        if (!id) this.eventQueueError = error;
+        else if (error) this.publishAttention(id, { key: 'events-delivery', message: 'Ereignisverarbeitung wartet auf Bestätigung.' });
+        else if (!moduleEventQueueStatus(id).failed) this.clearAttention(id, 'events-delivery');
+        options.changed();
+      }
+    });
   }
   async initialize(): Promise<void> {
     await fs.mkdir(this.options.userRoot, { recursive: true });
@@ -91,7 +111,101 @@ export class ModuleHost {
         if (this.isReady(module.id)) { await this.activateBuiltin(module.id); this.buildBindings(module.id); }
       } catch (error) { this.registry.fail(module.id, error instanceof Error ? error.message : 'Das Modul konnte nicht initialisiert werden.'); }
     }
+    if (!this.configError) {
+      try { await this.reconcileEventGrants(); }
+      catch { this.eventQueueError = 'Die Ereigniswarteschlange konnte nicht mit den aktuellen Abonnements abgeglichen werden.'; }
+    }
   }
+  /** No subscriber receives history from before its current explicit grant. */
+  captureEventRecipients(type: string): ModuleEventRecipient[] {
+    if (this.configError || this.options.agentExecutionAllowed?.() === false) return [];
+    return this.list().filter(module => module.status === 'ready' && module.manifest?.contributions.events?.subscriptions.includes(type)).flatMap(module => {
+      const record = this.registry.getRuntimeRecord(module.id), grant = this.config.eventSubscriptions[module.id];
+      return record && grant && grant.fingerprint === record.fingerprint && !!grant.topics[type]
+        ? [{ moduleId: module.id, fingerprint: record.fingerprint, grantId: grant.topics[type] }] : [];
+    });
+  }
+  getEventStatus(): ModuleEventStatus[] {
+    return this.list().filter(module => module.manifest?.contributions.events?.subscriptions.length).map(module => {
+      const record = this.registry.getRuntimeRecord(module.id), grant = this.config.eventSubscriptions[module.id];
+      const status = moduleEventQueueStatus(module.id);
+      return { moduleId: module.id, title: module.title, availableTopics: [...module.manifest!.contributions.events!.subscriptions],
+        enabledTopics: grant && record?.fingerprint === grant.fingerprint ? Object.keys(grant.topics) : [], ...status,
+        ...(this.configError ? { lastError: 'Die Modulkonfiguration ist nicht zuverlässig verfügbar. Ereigniszustellung ist angehalten; bitte OVD neu starten und die Einstellungen prüfen.' } : this.eventQueueError ? { lastError: this.eventQueueError } : {}) };
+    });
+  }
+  async setEventSubscriptions(id: string, rawTopics: unknown, context: CapabilityContext): Promise<boolean> {
+    this.assertAgentAccess(context); context.signal.throwIfAborted();
+    if (this.changing || this.configError) throw new Error('Die Modulkonfiguration kann gerade nicht geändert werden.');
+    const topics = z.array(z.string().max(160)).max(20).parse(rawTopics);
+    const record = topics.length ? this.requireReady(id) : this.registry.getRuntimeRecord(id);
+    if (!record) throw new Error('Dieses Modul wurde nicht gefunden.');
+    const available = record.module.manifest?.contributions.events?.subscriptions ?? [];
+    if (new Set(topics).size !== topics.length || topics.some(topic => !available.includes(topic))) throw new Error('Das Modul hat diese Ereignisse nicht deklariert.');
+    const previous = this.config.eventSubscriptions[id];
+    if (previous?.fingerprint === record.fingerprint && JSON.stringify(Object.keys(previous.topics).sort()) === JSON.stringify([...topics].sort())) return true;
+    if (topics.length) await this.registry.verifyUnchanged(id);
+    // Confirmation revalidates the journal binding. Do not hold the mutation
+    // lock while that validation calls prepareOperation back through the host.
+    if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title}: Ereignisse ändern?`, topics.length ? `Künftige Ereignisse werden im Hintergrund an dieses Modul zugestellt:\n${topics.join('\n')}` : 'Dieses Modul erhält keine weiteren Ereignisse.')) return false;
+    context.signal.throwIfAborted(); this.assertAgentAccess(context);
+    await context.validateOperation?.();
+    await context.beforeDispatch?.();
+    await context.validateOperation?.();
+    context.signal.throwIfAborted(); this.assertAgentAccess(context);
+    if (this.changing || this.configError || this.registry.getRuntimeRecord(id)?.fingerprint !== record.fingerprint || JSON.stringify(this.config.eventSubscriptions[id]) !== JSON.stringify(previous)) throw new Error('Das Modul oder seine Ereignisabonnements wurden inzwischen geändert. Bitte erneut prüfen.');
+    this.changing = true; this.notifyEventsChanged();
+    try {
+      if (topics.length) { this.requireReady(id); await this.registry.verifyUnchanged(id); }
+      context.signal.throwIfAborted(); this.assertAgentAccess(context);
+      const subscriptions = { ...this.config.eventSubscriptions };
+      if (topics.length) subscriptions[id] = { fingerprint: record.fingerprint, topics: Object.fromEntries([...topics].sort().map(topic => [topic, previous?.fingerprint === record.fingerprint && previous.topics[topic] || randomUUID()])) };
+      else delete subscriptions[id];
+      await this.persist({ ...this.config, eventSubscriptions: subscriptions });
+      await this.reconcileEventGrants();
+      this.eventQueueError = undefined;
+      return true;
+    } finally { this.changing = false; this.notifyEventsChanged(); this.options.changed(); }
+  }
+  private eventGrantCurrent(delivery: ModuleEventDelivery): boolean {
+    // Unreadable configuration is not proof of revocation. Keep pending data
+    // until it can be reconciled, while eventDeliveryAllowed stays fail-closed.
+    if (this.configError) return true;
+    const record = this.registry.getRuntimeRecord(delivery.recipient.moduleId), grant = this.config.eventSubscriptions[delivery.recipient.moduleId];
+    return !!record && !!grant && record.fingerprint === delivery.recipient.fingerprint && grant.fingerprint === record.fingerprint && grant.topics[delivery.event.type] === delivery.recipient.grantId && !!record.module.manifest?.contributions.events?.subscriptions.includes(delivery.event.type);
+  }
+  private eventDeliveryAllowed(delivery: ModuleEventDelivery): boolean {
+    return !this.configError && !this.changing && this.options.agentExecutionAllowed?.() !== false && this.isReady(delivery.recipient.moduleId) && this.eventGrantCurrent(delivery);
+  }
+  private async deliverEvent(delivery: ModuleEventDelivery, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (!this.eventDeliveryAllowed(delivery)) throw new Error('Dieses Ereignisabonnement ist nicht mehr aktiv.');
+    const record = await this.startProcess(delivery.recipient.moduleId);
+    signal.throwIfAborted();
+    await this.registry.verifyUnchanged(record.module.id);
+    if (!this.eventDeliveryAllowed(delivery)) throw new Error('Dieses Ereignisabonnement ist nicht mehr aktiv.');
+    await this.runtimes.deliverEvent(record, delivery.event, signal);
+  }
+  /** Source identity and publication namespace always come from the approved host record. */
+  async publishModuleEvent(id: string, raw: unknown, expectedFingerprint?: string): Promise<void> {
+    if (this.changing) throw new Error('Die Modulverwaltung wird geändert.');
+    const record = this.requireReady(id), event = moduleEventSchema.parse(raw);
+    if (event.source.moduleId !== id || expectedFingerprint && record.fingerprint !== expectedFingerprint || (!event.type.startsWith(id + '.') || event.type.slice(id.length + 1).includes('.')) || !record.module.manifest?.contributions.events?.publications.includes(event.type)) throw new Error('Dieses Modul darf das Ereignis nicht veröffentlichen.');
+    await this.registry.verifyUnchanged(id);
+    if (this.requireReady(id).fingerprint !== record.fingerprint) throw new Error('Die Ereignisquelle wurde geändert.');
+    await enqueueModuleEvent({ event, recipients: this.captureEventRecipients(event.type) });
+    this.notifyEventsChanged();
+  }
+  private async reconcileEventGrants(): Promise<void> {
+    const grants = this.list().flatMap(module => {
+      const record = this.registry.getRuntimeRecord(module.id), grant = this.config.eventSubscriptions[module.id];
+      if (!record || !grant || record.fingerprint !== grant.fingerprint || module.status === 'disabled' || module.status === 'approval_required') return [];
+      const declared = module.manifest?.contributions.events?.subscriptions ?? [];
+      return Object.entries(grant.topics).filter(([topic]) => declared.includes(topic)).map(([topic, grantId]) => ({ moduleId: module.id, fingerprint: grant.fingerprint, grantId, topics: [topic] }));
+    });
+    await reconcileModuleEventGrants(grants);
+  }
+  notifyEventsChanged(): void { this.eventDispatcher.wake(); }
   isReady(id: string): boolean { return this.registry.getModule(id)?.status === 'ready'; }
   /** Built-ins are trusted callers; process IDs are bound by ModuleRuntimeManager. */
   publishAttention(moduleId: string, raw: ModuleAttentionInput): void {
@@ -233,6 +347,8 @@ export class ModuleHost {
       context.signal.throwIfAborted();
       const prepared = await this.runtimes.prepareOperation(processRecord, binding.action, normalized, context.signal);
       normalized = this.validateBindingArgs(binding, this.operationArgs(prepared.args ?? normalized)); resource = prepared.resource;
+      // The same explicit read-only retrieval contract also applies to manual tool use.
+      if (record.module.manifest?.contributions.memory?.retrieveTool === binding.action && !binding.confirmation) effect = 'read';
     }
     context.signal.throwIfAborted(); this.assertAgentAccess(context); this.requireReady(id);
     const fingerprint = createHash('sha256').update(JSON.stringify([this.options.operationHostFingerprint ?? '', record.fingerprint, binding.kind, binding.action, binding.descriptor.parameters])).digest('hex');
@@ -377,6 +493,99 @@ export class ModuleHost {
     const offset = query.offset ?? 0, limit = query.limit ?? 6, hasMore = offset + limit < all.length;
     return { moduleId: query.moduleId, tools: all.slice(offset, offset + limit).map(({ item }) => item.descriptor), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   }
+  /** Automatic retrieval is an approved, read-only module contract, never a learning event. */
+  async recallMemory(raw: MemoryRecallRequest, context: CapabilityContext): Promise<MemoryRecallSnapshot> {
+    let query = raw.query.slice(0, MEMORY_QUERY_CHARS);
+    // Include JSON escaping and UTF-8 expansion in the process transport budget.
+    while (Buffer.byteLength(JSON.stringify(query), 'utf8') > MEMORY_QUERY_CHARS) query = query.slice(0, Math.max(0, query.length - 256));
+    const request = memoryRecallRequestSchema.parse({ ...raw, query });
+    const snapshot: MemoryRecallSnapshot = { version: 1, retrievedAt: request.now, memories: [], providers: [], truncated: false };
+    const eligible = this.list().filter(item => item.status === 'ready' && item.manifest?.contributions.memory).sort((a, b) => a.id.localeCompare(b.id));
+    // Bound diagnostics independently of the much smaller model-context budget.
+    const providers = eligible.slice(0, 500);
+    snapshot.truncated = eligible.length > providers.length;
+    const deadline = new AbortController(), timer = setTimeout(() => deadline.abort(), MEMORY_TIMEOUT_MS);
+    const signal = AbortSignal.any([context.signal, deadline.signal]);
+    // Do not inherit operation/journal hooks, references or arbitrary request state.
+    const readContext: CapabilityContext = { origin: 'agent', signal, sessionId: request.sessionId, owner: context.owner };
+    const withinDeadline = <T>(work: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+      const aborted = () => { signal.removeEventListener('abort', aborted); reject(new DOMException('Gedächtnisabruf abgebrochen', 'AbortError')); };
+      signal.addEventListener('abort', aborted, { once: true });
+      work.then(value => { signal.removeEventListener('abort', aborted); resolve(value); }, error => { signal.removeEventListener('abort', aborted); reject(error); });
+      if (signal.aborted) aborted();
+    });
+    try {
+      context.signal.throwIfAborted();
+      this.assertAgentAccess(readContext);
+      const retrieve = async (module: (typeof providers)[number]) => {
+        try {
+          const result = await withinDeadline((async () => {
+            signal.throwIfAborted(); this.assertAgentAccess(readContext);
+            const record = this.requireReady(module.id), retrieval = record.module.manifest!.contributions.memory!.retrieveTool;
+            await this.registry.verifyUnchanged(module.id);
+            signal.throwIfAborted(); this.assertAgentAccess(readContext);
+            const binding = [...(this.bindings.get(module.id) ?? this.buildBindings(module.id)).values()].find(item => item.action === retrieval && ['process', 'capability'].includes(item.kind));
+            if (!binding || binding.confirmation) throw new Error('Ungeeigneter Gedächtnisabruf.');
+            const args = { ...request, limit: MEMORY_MAX_ITEMS, maxChars: MEMORY_CONTEXT_CHARS };
+            // A trusted host adapter must additionally prove the operation's read policy.
+            if (binding.kind === 'capability') {
+              const metadata = this.options.capabilities.getRegisteredCatalog().find(item => item.name === retrieval);
+              const prepared = await this.prepareOperation(module.id, binding.descriptor.name, args, readContext);
+              if (!metadata || metadata.needsUserInteraction || prepared.binding.effect !== 'read' || canonicalOperationArgs(prepared.args) !== canonicalOperationArgs(args)) throw new Error('Der Gedächtnisabruf ist keine reine Lesefunktion.');
+            }
+            signal.throwIfAborted(); this.assertAgentAccess(readContext);
+            const rawResult = await this.invoke(module.id, binding.descriptor.name, args, readContext);
+            signal.throwIfAborted(); this.assertAgentAccess(readContext);
+            this.requireReady(module.id);
+            await this.registry.verifyUnchanged(module.id);
+            signal.throwIfAborted(); this.assertAgentAccess(readContext);
+            if (this.requireReady(module.id).fingerprint !== record.fingerprint) throw new Error('Das Modul wurde während des Abrufs geändert.');
+            const parsed = moduleMemoryResultSchema.parse(rawResult);
+            const knownTypes = new Set(record.module.manifest!.contributions.referenceTypes?.map(item => item.id));
+            if (parsed.memories.some(item => item.source.reference && !knownTypes.has(item.source.reference.type))) throw new Error('Eine Quelle verweist auf einen unbekannten Referenztyp.');
+            const seen = new Set<string>();
+            const memories = parsed.memories.filter(item => {
+              if (seen.has(item.id) || item.expiresAt && Date.parse(item.expiresAt) <= Date.parse(request.now)) return false;
+              seen.add(item.id); return true;
+            }).map(item => ({ ...item, moduleId: module.id, moduleTitle: module.title }));
+            return { memories, fingerprint: record.fingerprint, hasMore: parsed.hasMore === true };
+          })());
+          return { module, ...result };
+        } catch {
+          context.signal.throwIfAborted();
+          return { module, memories: undefined, fingerprint: undefined, hasMore: false };
+        }
+      };
+      const results: Awaited<ReturnType<typeof retrieve>>[] = [];
+      let next = 0;
+      // A small worker pool avoids starting hundreds of native module processes at once.
+      await Promise.all(Array.from({ length: Math.min(4, providers.length) }, async () => {
+        while (next < providers.length) { const index = next++; results[index] = await retrieve(providers[index]); }
+      }));
+      context.signal.throwIfAborted();
+      this.assertAgentAccess(readContext);
+      for (const result of results) {
+        // Other providers may have been slow: discard an earlier result if its
+        // source was disabled/replaced while this request was still collecting.
+        const current = this.registry.getRuntimeRecord(result.module.id);
+        if (!current || current.module.status !== 'ready' || current.fingerprint !== result.fingerprint) result.memories = undefined;
+        if (result.memories && result.hasMore) snapshot.truncated = true;
+        snapshot.providers.push({ moduleId: result.module.id, title: result.module.title, status: result.memories ? result.hasMore ? 'truncated' : 'completed' : 'failed', count: 0,
+          ...(!result.memories ? { detail: 'Der Gedächtnisabruf ist fehlgeschlagen oder hat sein Zeitlimit überschritten.' } : {}) });
+      }
+      // Round-robin keeps one large provider from consuming every context slot.
+      for (let index = 0; index < MEMORY_MAX_ITEMS; index++) for (let provider = 0; provider < results.length; provider++) {
+        const item = results[provider].memories?.[index];
+        if (!item) continue;
+        const status = snapshot.providers[provider];
+        if (snapshot.memories.length >= MEMORY_MAX_ITEMS || JSON.stringify([...snapshot.memories, item]).length > MEMORY_CONTEXT_CHARS) {
+          status.status = 'truncated'; snapshot.truncated = true; continue;
+        }
+        snapshot.memories.push(item); status.count++;
+      }
+      return memoryRecallSnapshotSchema.parse(snapshot);
+    } finally { clearTimeout(timer); }
+  }
   /** Resolve only an approved module's declared resource. Roles come from its approved manifest. */
   async resolveReference(raw: unknown, context: CapabilityContext): Promise<ModuleReference> {
     const input = moduleReferenceInputSchema.parse(raw), record = this.requireReady(input.moduleId);
@@ -470,11 +679,14 @@ export class ModuleHost {
         if ((this.pending.get(id) ?? 0) > 0) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
         await this.options.beforeDisable(id);
         if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} deaktivieren?`, 'Seine Ansichten werden geschlossen; gespeicherte Daten bleiben erhalten.')) return;
-        const next = { ...this.config, disabled: [...new Set([...this.config.disabled, id])] };
+        const eventSubscriptions = { ...this.config.eventSubscriptions }; delete eventSubscriptions[id];
+        const next = { ...this.config, disabled: [...new Set([...this.config.disabled, id])], eventSubscriptions };
         await this.persist(next);
         this.registry.disable(id); this.runtimes.stop(id); this.activation.delete(id); this.bindings.delete(id); this.clearModuleAttention(id);
         this.clearProviderOffers(id);
         await this.options.afterDisable(id);
+        this.notifyEventsChanged();
+        await dropModuleEvents(id);
       } else {
         const processModule = record.module.manifest?.runtime.type === 'process';
         const needsApproval = processModule && this.config.approvals[id] !== record.fingerprint;
@@ -495,7 +707,7 @@ export class ModuleHost {
         }
       }
       this.options.changed();
-    } finally { this.changing = false; }
+    } finally { this.changing = false; this.notifyEventsChanged(); }
   }
   /** Install metadata only. New or changed code still needs the ordinary explicit fingerprint approval. */
   async installPackage(input: ModulePackageInstall, signal?: AbortSignal): Promise<ModuleInfo> {
@@ -541,13 +753,15 @@ export class ModuleHost {
       if (previous?.module.status === 'disabled') { installed.module.status = 'disabled'; installed.module.reason = 'Das aktualisierte Modul bleibt deaktiviert. Beim Aktivieren ist eine neue Freigabe erforderlich.'; }
       signal?.throwIfAborted();
       const approvals = { ...this.config.approvals }; delete approvals[id];
-      const next = { ...this.config, approvals };
+      const eventSubscriptions = { ...this.config.eventSubscriptions }; delete eventSubscriptions[id];
+      const next = { ...this.config, approvals, eventSubscriptions };
       await this.persist(next); configurationChanged = true;
       await input.commit();
       // No cancellable or fallible installation work follows the receipt commit.
       this.registry.replaceUserRecord(installed);
       try { this.clearModuleAttention(id); } catch { /* Notifications must not undo a committed package. */ }
       this.clearProviderOffers(id);
+      try { await this.reconcileEventGrants(); } catch { this.eventQueueError = 'Alte Ereignisabonnements konnten nicht bereinigt werden.'; }
       await fs.rm(journal, { force: true }).catch(() => {});
       if (backedUp) await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
       try { this.options.changed(); } catch { /* The next settings read observes the committed state. */ }
@@ -565,7 +779,7 @@ export class ModuleHost {
       if (retired) this.options.changed();
       if (rollbackFailed) throw new Error('Die Installation wurde abgebrochen; die Wiederherstellung muss beim nächsten OVD-Start abgeschlossen werden. Bitte OVD neu starten.');
       throw error;
-    } finally { this.changing = false; }
+    } finally { this.changing = false; this.notifyEventsChanged(); }
   }
   private async recoverPackageSwap(): Promise<void> {
     const file = path.join(this.options.userRoot, '.ovd-package-transaction.json');
@@ -603,9 +817,20 @@ export class ModuleHost {
   private async persist(config: z.infer<typeof configSchema>) {
     const temp = this.options.configFile + '.tmp';
     await fs.mkdir(path.dirname(temp), { recursive: true });
-    await fs.writeFile(temp, JSON.stringify(config), { mode: 0o600 });
-    await fs.rename(temp, this.options.configFile);
-    this.config = config;
+    try {
+      const file = await fs.open(temp, 'w', 0o600);
+      try { await file.writeFile(JSON.stringify(config)); await file.sync(); }
+      finally { await file.close(); }
+      await fs.rename(temp, this.options.configFile);
+      if (process.platform !== 'win32') {
+        const directory = await fs.open(path.dirname(temp), 'r');
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
+      this.config = config;
+    } catch {
+      this.configError = true; this.notifyEventsChanged();
+      throw new Error('Die Modulkonfiguration konnte nicht dauerhaft gespeichert werden. Ereigniszustellung ist angehalten; bitte OVD neu starten.');
+    }
   }
   private clearProviderOffers(parentModuleId: string): void {
     for (const key of this.providerOffers.keys()) if (key.startsWith(parentModuleId + '.')) this.providerOffers.delete(key);
@@ -626,5 +851,5 @@ export class ModuleHost {
     return fs.readFile(file, 'utf8');
   }
   settingsCategories(): string[] { return this.list().filter(module => module.status === 'ready').flatMap(module => (module.manifest?.contributions.settings ?? []).map(item => module.source === 'builtin' ? item.id : `${module.id}:${item.id}`)); }
-  dispose(): void { this.runtimes.dispose(); this.attention.clear(); this.toolProviders.clear(); this.providerOffers.clear(); }
+  dispose(): void { this.eventDispatcher.dispose(); this.runtimes.dispose(); this.attention.clear(); this.toolProviders.clear(); this.providerOffers.clear(); }
 }

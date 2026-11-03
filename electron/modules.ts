@@ -1,3 +1,4 @@
+import { moduleEventTopicSchema } from '../shared/module-events';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -35,7 +36,7 @@ export const moduleManifestSchema = z.object({
   keywords: z.array(text(40)).max(50).optional(), required: z.boolean().optional(), capabilities: z.array(capabilityName).max(100).default([]), permissions: z.array(text(100)).max(30).default([]),
   runtime: z.discriminatedUnion('type', [z.object({ type: z.literal('host-adapter'), adapter: localId }).strict(), z.object({ type: z.literal('process'), entry: relativeEntry }).strict()]),
   tools: z.array(tool).max(64).optional(),
-  contributions: z.object({ views: z.array(view).max(20).default([]), navigation: z.array(z.object({ id: localId, title: text(120), view: localId, icon: icon.optional(), order: z.number().int().min(-1000).max(1000).optional() }).strict()).max(20).default([]), settings: z.array(settings).max(20).default([]), referenceTypes: z.array(z.object({ id: localId, title: text(120), snapshotTool: capabilityName.optional(), usage: z.enum(['context', 'instructions']).optional() }).strict()).max(20).optional() }).strict().default({ views: [], navigation: [], settings: [] })
+  contributions: z.object({ views: z.array(view).max(20).default([]), navigation: z.array(z.object({ id: localId, title: text(120), view: localId, icon: icon.optional(), order: z.number().int().min(-1000).max(1000).optional() }).strict()).max(20).default([]), settings: z.array(settings).max(20).default([]), referenceTypes: z.array(z.object({ id: localId, title: text(120), snapshotTool: capabilityName.optional(), usage: z.enum(['context', 'instructions']).optional() }).strict()).max(20).optional(), memory: z.object({ retrieveTool: capabilityName }).strict().optional(), events: z.object({ subscriptions: z.array(moduleEventTopicSchema).max(20).default([]), publications: z.array(moduleEventTopicSchema).max(20).default([]) }).strict().optional() }).strict().default({ views: [], navigation: [], settings: [] })
 }).strict();
 
 export interface ModuleDiscoveryOptions {
@@ -93,7 +94,20 @@ function validateContributions(manifest: ModuleManifest): void {
   if (sets.some(values => new Set(values).size !== values.length)) throw new Error('Das Modul enthält doppelte IDs oder Funktionen.');
   const views = new Set(manifest.contributions.views.map(item => item.id));
   if (manifest.contributions.navigation.some(item => !views.has(item.view))) throw new Error('Ein Moduleintrag verweist auf eine unbekannte Ansicht.');
+  const events = manifest.contributions.events;
+  if (events) {
+    if (manifest.runtime.type !== 'process') throw new Error('Ereignisbeiträge benötigen ein Prozessmodul.');
+    if (new Set(events.subscriptions).size !== events.subscriptions.length || new Set(events.publications).size !== events.publications.length) throw new Error('Ereignisthemen müssen eindeutig sein.');
+    if (events.publications.some(topic => !topic.startsWith(manifest.id + '.') || topic.slice(manifest.id.length + 1).includes('.'))) throw new Error('Module dürfen nur Ereignisse im eigenen Namensraum veröffentlichen.');
+    if (events.subscriptions.some(topic => topic.startsWith('chat.') && !['chat.request.committed', 'chat.turn.finished'].includes(topic))) throw new Error('Dieses Host-Ereignis wird nicht unterstützt.');
+  }
+  const memory = manifest.contributions.memory;
+  if (memory && !manifest.capabilities.includes(memory.retrieveTool)) throw new Error('Der Gedächtnisabruf muss eine eigene deklarierte Modulfunktion verwenden.');
   if (manifest.runtime.type === 'process') {
+    if (memory) {
+      const retrieval = manifest.tools?.find(item => item.name === memory.retrieveTool);
+      if (!retrieval || retrieval.confirmation) throw new Error('Der Gedächtnisabruf benötigt eine deklarierte Lesefunktion ohne Aktionsbestätigung.');
+    }
     const htmlIds = [...manifest.contributions.views, ...manifest.contributions.settings].map(item => item.id);
     if (new Set(htmlIds).size !== htmlIds.length) throw new Error('Ansichten und Einstellungen benötigen unterschiedliche lokale IDs.');
     if (!(manifest.tools?.length)) throw new Error('Ein Prozessmodul muss mindestens eine Funktion beschreiben.');

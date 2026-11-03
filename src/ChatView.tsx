@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Bot, BookOpen, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bot, BookOpen, Brain, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import type { ChatMessage, EmailReferenceSummary, WorkspaceState } from '../shared/model';
 import type { OperationRunSummary } from '../shared/operations';
 import type { ChatGptStatus } from '../shared/chatgpt';
+import { normalizeMemoryRecallSnapshot, type MemoryRecallSnapshot } from '../shared/module-memory';
 import { SESSION_DRAG_PREFIX, SESSION_DRAG_TYPE } from './SessionsView';
 import { MAIL_DRAG_TYPE, readMailDrag } from './mail-reference';
 import { MODULE_REFERENCE_DRAG_TYPE, moduleReferenceKey, readModuleReferenceDrag, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
@@ -30,6 +31,35 @@ function ToolActivity({ events }: { events: NonNullable<ChatMessage['toolEvents'
       const detail = event.status !== 'completed' ? toolDetail(event.detail) : '';
       return <div key={index} className={event.status}>{event.status === 'failed' ? <CircleAlert size={12} aria-hidden="true"/> : event.status === 'uncertain' ? <CircleHelp size={12} aria-hidden="true"/> : event.status === 'cancelled' ? <Square size={11} aria-hidden="true"/> : <Check size={12} aria-hidden="true"/>}<span className="tool-event-description"><span>{event.label ?? legacyToolLabels[event.name] ?? 'Workspace-Aktion'}</span>{detail && <span className="tool-event-detail">{detail}</span>}</span><small>{statusLabel[event.status]}</small></div>;
     })}</div>
+  </details>;
+}
+
+function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapshot }) {
+  const [linkError, setLinkError] = useState('');
+  const snapshot = normalizeMemoryRecallSnapshot(rawSnapshot);
+  if (!snapshot?.providers.length) return null;
+  const failures = snapshot.providers.filter(provider => provider.status === 'failed').length;
+  const summary = [snapshot.memories.length ? `${snapshot.memories.length} ${snapshot.memories.length === 1 ? 'Erinnerung' : 'Erinnerungen'}` : 'Keine übernommen', failures ? `${failures} ${failures === 1 ? 'Abruf fehlgeschlagen' : 'Abrufe fehlgeschlagen'}` : '', snapshot.truncated ? 'begrenzt' : ''].filter(Boolean).join(' · ');
+  async function openSource(uri: string) {
+    setLinkError('');
+    try { await window.workspace.openExternalLink(uri); }
+    catch { setLinkError('Die Quelle konnte nicht geöffnet werden.'); }
+  }
+  return <details className={`tool-events memory-context${failures ? ' has-failures' : ''}`}>
+    <summary><ChevronRight size={13} aria-hidden="true"/><Brain size={13} aria-hidden="true"/><span>Gedächtnis</span><small>{summary}</small></summary>
+    <div className="memory-context-content">
+      <p className="memory-context-note">Momentaufnahme für diese Antwort · {new Date(snapshot.retrievedAt).toLocaleString()}</p>
+      {snapshot.providers.map(provider => <div className="memory-provider" key={provider.moduleId}><strong>{provider.title}</strong><span>{provider.status === 'failed' ? provider.detail || 'Abruf fehlgeschlagen.' : `${provider.count} übernommen${provider.status === 'truncated' ? ' · Auswahl begrenzt' : ''}`}</span></div>)}
+      {snapshot.memories.map(memory => <div className="memory-entry" key={`${memory.moduleId}:${memory.id}`}>
+        <div className="memory-source"><strong>{memory.moduleTitle}</strong>{memory.source.uri ? <a href={memory.source.uri} title={memory.source.uri} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); void openSource(memory.source.uri!); }} onAuxClick={event => { if (event.button === 1) { event.preventDefault(); void openSource(memory.source.uri!); } }}>{memory.source.title}</a> : <span>{memory.source.title}</span>}</div>
+        <p>{memory.text}</p>
+        {memory.source.reference && <small>Referenz: {memory.moduleId} · {memory.source.reference.type} · {memory.source.reference.id}</small>}
+        {memory.updatedAt && <small>Stand: {new Date(memory.updatedAt).toLocaleString()}</small>}
+        {memory.expiresAt && <small>Gültig bis: {new Date(memory.expiresAt).toLocaleString()}</small>}
+      </div>)}
+      {snapshot.truncated && <p className="memory-context-note">Die Auswahl ist begrenzt. Weitere Inhalte sind über die Werkzeuge des zuständigen Moduls erreichbar.</p>}
+      {linkError && <p className="memory-context-error" role="alert">{linkError}</p>}
+    </div>
   </details>;
 }
 
@@ -210,6 +240,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
               {message.emailRef && <span className="message-ref" title={message.emailReference?.subject}><Mail size={12} aria-hidden="true"/><span>{message.emailReference?.subject || state.mails.find(mail => mail.id === message.emailRef)?.subject || 'Referenzierte E-Mail'}</span></span>}
               {message.sessionRef && <span className="message-ref" title={message.sessionRef.title}><Link2 size={12} aria-hidden="true"/><span>{message.sessionRef.title}</span></span>}
               {message.references?.map(reference => <span key={moduleReferenceKey(reference)} className="message-ref" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={12} aria-hidden="true"/> : <Link2 size={12} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Anweisung: ' : ''}{reference.title}</span></span>)}
+              {message.role === 'assistant' && message.memory && <MemoryContext snapshot={message.memory}/>}
               {!!message.toolEvents?.length && <ToolActivity events={message.toolEvents}/>}
               {message.operationRunId && !message.reformulationOf && <OperationStatus message={message} sessionId={state.activeSessionId} sending={sending}/>}
               {message.reformulationOf && <small className="message-status" title="Verwendet ausschließlich gespeicherte Ergebnisse und Momentaufnahmen. Es werden keine Werkzeuge ausgeführt.">{message.status === 'completed' ? 'Neu formuliert' : 'Neuformulierung'} · keine Aktionen</small>}

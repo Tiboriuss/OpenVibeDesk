@@ -1,5 +1,6 @@
 import type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 import type { ChatEvidence } from './chat-evidence';
+import type { MemoryRecallSnapshot } from './module-memory';
 import type { AiConnection } from './ai-providers';
 export type { AiProvider, AiProtocol, AiAuthMode } from './ai-providers';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
@@ -26,7 +27,7 @@ export interface SessionReference { id: string; title: string; excerpt: string; 
 export interface EmailReferenceSummary { id: string; subject: string; from: string; accountName?: string; }
 export interface EmailReference extends EmailReferenceSummary { to: string; date: string; bodyText: string; attachments: { name: string; size: number }[]; truncated?: boolean; accountId?: string; fromAddresses?: string[]; replyToAddresses?: string[]; messageId?: string; references?: string[]; }
 export interface ForkChatResult { sessionId: string; text: string; emailRef?: string; emailReference?: EmailReference; sessionRefId?: string; references?: ModuleReference[]; }
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; clientRequestId?: string; emailRef?: string; emailReference?: EmailReference; sessionRef?: SessionReference; references?: ModuleReference[]; timestamp: string; status?: 'streaming' | 'completed' | 'cancelled' | 'failed' | 'limited'; error?: string; toolEvents?: ToolEvent[]; agentRunLimit?: AgentRunLimit; evidence?: ChatEvidence; reformulationOf?: { sessionId: string; messageId: string }; operationRunId?: string; continuationOf?: { sessionId: string; messageId: string; rootRunId: string }; }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; clientRequestId?: string; emailRef?: string; emailReference?: EmailReference; sessionRef?: SessionReference; references?: ModuleReference[]; timestamp: string; status?: 'streaming' | 'completed' | 'cancelled' | 'failed' | 'limited'; error?: string; toolEvents?: ToolEvent[]; agentRunLimit?: AgentRunLimit; evidence?: ChatEvidence; memory?: MemoryRecallSnapshot; reformulationOf?: { sessionId: string; messageId: string }; operationRunId?: string; continuationOf?: { sessionId: string; messageId: string; rootRunId: string }; }
 export interface ChatSession { id: string; title: string; createdAt: string; updatedAt: string; historyStart: number; messages: ChatMessage[]; }
 export interface WorkspaceState { version: 1; mailLayoutRevision?: number; windows: WorkspaceWindow[]; selectedMailId?: string; folder: Folder; mails: Mail[]; drafts: Draft[]; activeDraftId?: string; chat: ChatMessage[]; sessions: ChatSession[]; activeSessionId: string; provider: string; settings: Settings; ai?: AiConfig; agentSettings?: AgentSettings; }
 export interface FileEntry { name: string; path: string; isDirectory: boolean; size: number; }
@@ -68,6 +69,8 @@ export interface WorkspaceApi {
   mcpCallTool(input: { serverId: string; name: string; args: Record<string, unknown> }): Promise<import('./mcp').McpCallResult>;
   onMcpChanged(callback: () => void): () => void;
   onPrepareMcpServer(callback: (request: import('./mcp').McpPrepareRequest) => void): () => void;
+  getModuleEventStatus(): Promise<import('./modules').ModuleEventStatus[]>;
+  setModuleEventSubscriptions(moduleId: string, topics: string[]): Promise<void>;
   getModuleRepositories(): Promise<import('./module-repositories').RepositoryState>;
   saveModuleRepository(input: import('./module-repositories').ModuleRepositoryInput): Promise<import('./module-repositories').RepositoryState>;
   removeModuleRepository(id: string): Promise<import('./module-repositories').RepositoryState>;

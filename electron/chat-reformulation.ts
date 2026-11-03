@@ -1,3 +1,4 @@
+import { savedMemory, memoryContext } from './memory-context';
 import { z } from 'zod';
 import type { ChatMessage, ChatSession, WorkspaceState } from '../shared/model';
 import { normalizeChatEvidence } from '../shared/chat-evidence';
@@ -31,7 +32,8 @@ export function createReformulation(state: WorkspaceState, messageId: string, se
   const messages: ChatMessage[] = source.session.messages.slice(0, source.userIndex).map(message => ({ ...structuredClone(message), id: crypto.randomUUID() }));
   const user: ChatMessage = { ...structuredClone(source.user), id: crypto.randomUUID() };
   delete user.clientRequestId;
-  const answer: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', text: '', timestamp: now, status: 'streaming', evidence: source.evidence, reformulationOf: { sessionId: source.session.id, messageId: source.answer.id } };
+  const memory = savedMemory(source.answer.memory);
+  const answer: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', text: '', timestamp: now, status: 'streaming', evidence: source.evidence, ...(memory ? { memory } : {}), reformulationOf: { sessionId: source.session.id, messageId: source.answer.id } };
   messages.push(user, answer);
   const session: ChatSession = { id: crypto.randomUUID(), title: `${source.session.title.slice(0, 100)} (neu formuliert)`, createdAt: now, updatedAt: now, historyStart: Math.min(source.session.historyStart, messages.length - 2), messages };
   return { source, session, answer, state: { ...state, sessions: [session, ...state.sessions], activeSessionId: session.id, chat: messages } };
@@ -51,6 +53,7 @@ export function reformulationMessages(source: ReturnType<typeof reformulationSou
   const snapshots = {
     ...(mail ? { email: { ...mail, bodyText: mail.bodyText.slice(0, 12000) } } : source.user.emailRef ? { emailId: source.user.emailRef, note: 'Kein gespeicherter Mailtext; Quelle nicht neu geladen.' } : {}),
     ...(reference ? { chat: { ...reference, excerpt: reference.excerpt.slice(0, 20000) } } : {}),
+    memory: memoryContext(source.answer.memory) ?? (source.answer.memory ? { unavailable: true, note: 'Die gespeicherte Gedächtnis-Momentaufnahme ist ungültig; Quellen wurden nicht neu geladen.' } : undefined),
     resources: (source.user.references ?? []).slice(0, 5).flatMap(item => { const parsed = moduleReferenceSchema.safeParse(item); return parsed.success ? [parsed.data] : []; })
   };
   return [
