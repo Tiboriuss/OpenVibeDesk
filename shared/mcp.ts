@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const mcpServerIdSchema = z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/);
 const envKey = z.string().min(1).max(100).regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 export const mcpAuthModeSchema = z.enum(['none', 'bearer', 'oauth']);
+export const mcpOAuthClientAuthMethodSchema = z.enum(['auto', 'client_secret_basic', 'client_secret_post']);
 const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 /** Configured endpoints are public addresses; OAuth request parameters are added by the host. */
 export function validateMcpOAuthEndpointUrl(raw: string, mcpUrl?: string): string {
@@ -23,6 +24,7 @@ export const mcpOAuthPublicFields = {
   oauthIssuer: z.string().trim().max(2048).optional(), oauthScopes: z.string().trim().max(2000).optional(),
   oauthAuthorizationUrl: z.string().max(2048).optional().describe('Optionaler Autorisierungs-Endpunkt. Leer nutzt die automatische Erkennung.'),
   oauthTokenUrl: z.string().max(2048).optional().describe('Optionaler Token-Endpunkt. Leer nutzt die automatische Erkennung.'),
+  oauthClientAuthMethod: mcpOAuthClientAuthMethodSchema.optional().describe('Client-Anmeldung am Token-Endpunkt. auto verwendet die automatische Auswahl, client_secret_basic den Authorization-Header und client_secret_post den Anfragekörper.'),
   oauthRedirectPort: z.number().int().min(1024).max(65535).optional()
 };
 export const mcpServerInputSchema = z.object({
@@ -40,6 +42,10 @@ export const mcpServerInputSchema = z.object({
   if (value.transport === 'stdio' && value.authMode && value.authMode !== 'none') ctx.addIssue({ code: 'custom', path: ['authMode'], message: 'OAuth und Bearer-Anmeldung sind für HTTP-Verbindungen vorgesehen.' });
   if (value.oauthClientSecret && !value.oauthClientId) ctx.addIssue({ code: 'custom', path: ['oauthClientId'], message: 'Für ein Client-Secret ist eine Client-ID erforderlich.' });
   if (value.oauthClientId && !value.oauthIssuer) ctx.addIssue({ code: 'custom', path: ['oauthIssuer'], message: 'Für eine registrierte Client-ID bitte den zugehörigen OAuth-Issuer angeben.' });
+  if (value.oauthClientAuthMethod && value.oauthClientAuthMethod !== 'auto') {
+    if (!value.oauthClientId && (!value.id || value.oauthClientId !== undefined)) ctx.addIssue({ code: 'custom', path: ['oauthClientId'], message: 'Für dieses Client-Anmeldeverfahren bitte eine registrierte Client-ID angeben.' });
+    if ((!value.id || value.clearOAuthClientSecret) && !value.oauthClientSecret) ctx.addIssue({ code: 'custom', path: ['oauthClientSecret'], message: 'Für dieses Client-Anmeldeverfahren ist ein Client-Secret erforderlich.' });
+  }
   for (const key of ['oauthAuthorizationUrl', 'oauthTokenUrl'] as const) if (value[key]?.trim()) {
     try { validateMcpOAuthEndpointUrl(value[key]!, value.url); }
     catch (error) { ctx.addIssue({ code: 'custom', path: [key], message: error instanceof Error ? error.message : 'Ungültiger OAuth-Endpunkt.' }); }
@@ -55,7 +61,7 @@ export type McpServerInput = z.input<typeof mcpServerInputSchema>;
 export type McpServerConfig = {
   id: string; name: string; description: string; transport: 'stdio' | 'http'; command?: string; args: string[]; cwd?: string; url?: string;
   autoConnect: boolean; allowedTools: string[]; hasToken: boolean; envKeys: string[];
-  authMode: z.infer<typeof mcpAuthModeSchema>; oauthClientId?: string; oauthIssuer?: string; oauthScopes?: string; oauthAuthorizationUrl?: string; oauthTokenUrl?: string; oauthRedirectPort: number;
+  authMode: z.infer<typeof mcpAuthModeSchema>; oauthClientId?: string; oauthIssuer?: string; oauthScopes?: string; oauthAuthorizationUrl?: string; oauthTokenUrl?: string; oauthClientAuthMethod?: z.infer<typeof mcpOAuthClientAuthMethodSchema>; oauthRedirectPort: number;
   hasOAuthClientSecret: boolean; hasOAuthTokens: boolean; oauthRevision: string;
 };
 export type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -70,5 +76,5 @@ export interface McpAuditEntry { id: string; timestamp: string; serverId: string
 export interface McpAuditPage { entries: McpAuditEntry[]; total: number; hasMore: boolean; nextOffset?: number; }
 export const mcpAuditQuerySchema = z.object({ serverId: mcpServerIdSchema.optional(), offset: z.number().int().min(0).max(100).optional(), limit: z.number().int().min(1).max(100).optional() }).strict();
 export type McpAuditQuery = z.infer<typeof mcpAuditQuerySchema>;
-export interface McpPrepareRequest { values: Partial<Pick<McpServerConfig, 'id' | 'name' | 'description' | 'transport' | 'command' | 'args' | 'cwd' | 'url' | 'allowedTools' | 'authMode' | 'oauthClientId' | 'oauthIssuer' | 'oauthScopes' | 'oauthAuthorizationUrl' | 'oauthTokenUrl' | 'oauthRedirectPort'>>; }
+export interface McpPrepareRequest { values: Partial<Pick<McpServerConfig, 'id' | 'name' | 'description' | 'transport' | 'command' | 'args' | 'cwd' | 'url' | 'allowedTools' | 'authMode' | 'oauthClientId' | 'oauthIssuer' | 'oauthScopes' | 'oauthAuthorizationUrl' | 'oauthTokenUrl' | 'oauthClientAuthMethod' | 'oauthRedirectPort'>>; }
 export interface McpCallResult { ok: boolean; outcome: 'completed' | 'failed' | 'cancelled' | 'uncertain'; serverId: string; tool: string; content: { type: 'text'; text: string }[]; structuredContent?: unknown; truncated?: boolean; message?: string; untrusted: true; }

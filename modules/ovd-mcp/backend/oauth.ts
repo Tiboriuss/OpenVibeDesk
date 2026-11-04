@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { auth, discoverAuthorizationServerMetadata, discoverOAuthProtectedResourceMetadata, exchangeAuthorization, extractWWWAuthenticateParams, refreshAuthorization, selectResourceURL, type OAuthClientProvider, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientInformationFullSchema, OAuthClientInformationSchema, OAuthTokensSchema, type OAuthClientInformationMixed, type OAuthClientMetadata, type OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { validateMcpOAuthEndpointUrl, type McpServerConfig } from '../../../shared/mcp';
 import { McpConfigStore } from './store';
@@ -14,6 +15,19 @@ type Options = { signal: AbortSignal; openExternal?(url: string): Promise<void>;
 const isLoopback = (url: URL) => ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
 const sameUrl = (left: string, right: string) => new URL(left).href === new URL(right).href;
 const invalid = () => new McpOAuthRequiredError('Die OAuth-Konfiguration des MCP-Servers ist ungültig oder wird nicht unterstützt. Serverangaben und OAuth-Einstellungen prüfen.');
+const oauthErrorMessages: Record<string, string> = {
+  invalid_client: 'Der OAuth-Anbieter hat die Client-Anmeldung abgelehnt (invalid_client). Client-ID, Client-Secret und Client-Anmeldung (Basic/POST) prüfen.',
+  invalid_grant: 'Der OAuth-Anbieter hat den Autorisierungscode abgelehnt (invalid_grant). Der Code kann abgelaufen oder bereits verwendet sein. Rückrufadresse und PKCE-Einrichtung prüfen und die Anmeldung neu starten.',
+  invalid_scope: 'Der OAuth-Anbieter akzeptiert die angeforderten Berechtigungen nicht (invalid_scope). Die OAuth-Scopes prüfen.',
+  invalid_request: 'Der OAuth-Anbieter hat die Anfrage abgelehnt (invalid_request). Client-Angaben und registrierte Rückrufadresse prüfen.',
+  unauthorized_client: 'Die registrierte Anwendung darf diesen OAuth-Ablauf nicht verwenden (unauthorized_client). Die Freigabe für Authorization Code beim Anbieter prüfen.',
+  unsupported_grant_type: 'Der OAuth-Anbieter unterstützt den benötigten Authorization-Code-Ablauf nicht (unsupported_grant_type). Die Anbieter-Konfiguration prüfen.',
+  unsupported_response_type: 'Der OAuth-Anbieter unterstützt die benötigte Code-Antwort nicht (unsupported_response_type). Die Anbieter-Konfiguration prüfen.',
+  invalid_target: 'Der OAuth-Anbieter akzeptiert die angeforderte MCP-Ressource nicht (invalid_target). MCP-URL und Anbieter-Konfiguration prüfen.',
+  access_denied: 'Die OAuth-Anmeldung wurde beim Anbieter abgelehnt (access_denied).',
+  temporarily_unavailable: 'Der OAuth-Anbieter ist vorübergehend nicht verfügbar (temporarily_unavailable). Die Anmeldung später erneut starten.',
+  server_error: 'Der OAuth-Anbieter hat einen Fehler gemeldet (server_error). Die Anbieter-Konfiguration prüfen oder die Anmeldung später erneut starten.'
+};
 
 /** A session never opens a browser from a transport request and never retries MCP calls. */
 export class McpOAuthSession implements OAuthClientProvider {
@@ -151,7 +165,14 @@ export class McpOAuthSession implements OAuthClientProvider {
     if (this.config.oauthClientId) {
       const issuer = this.config.oauthIssuer ?? this.discovery?.authorizationServerUrl;
       if (!issuer) throw invalid();
-      return { client_id: this.config.oauthClientId, issuer, ...(this.suppliedSecret ? { client_secret: this.suppliedSecret } : {}) };
+      const method = this.config.oauthClientAuthMethod;
+      if (method && method !== 'auto') {
+        if (!this.suppliedSecret) throw new McpOAuthRequiredError('Für die gewählte Client-Anmeldung muss ein Client-Secret gespeichert sein.');
+        const supported = this.discovery?.authorizationServerMetadata?.token_endpoint_auth_methods_supported;
+        if (supported?.length && !supported.includes(method)) throw new McpOAuthRequiredError('Der OAuth-Anbieter bietet das gewählte Client-Anmeldeverfahren nicht an. Die Client-Anmeldung in den OAuth-Einstellungen prüfen.');
+      }
+      const information = { client_id: this.config.oauthClientId, issuer, ...(this.suppliedSecret ? { client_secret: this.suppliedSecret } : {}), ...(method && method !== 'auto' ? { token_endpoint_auth_method: method } : {}) };
+      return information;
     }
     const client = this.credentials.client;
     if (client && this.discovery && !sameUrl(client.issuer!, this.discovery.authorizationServerUrl)) throw new McpOAuthRequiredError('Der OAuth-Anbieter dieses MCP-Servers hat sich geändert. Anmeldung zuerst entfernen und anschließend neu einrichten.');
@@ -199,9 +220,20 @@ export class McpOAuthSession implements OAuthClientProvider {
         const state = url.searchParams.getAll('state');
         if (state.length !== 1 || Buffer.byteLength(state[0]) !== Buffer.byteLength(this.stateValue!) || !timingSafeEqual(Buffer.from(state[0]), Buffer.from(this.stateValue!))) { response.writeHead(400); response.end('Ungültige Anmeldung.'); return; }
         const expectedIssuer = this.discovery!.authorizationServerMetadata!.issuer, issuer = url.searchParams.getAll('iss');
-        if (issuer.length > 1 || issuer.length === 1 && issuer[0] !== expectedIssuer || this.responseIssuerRequired && issuer.length !== 1) { consumed = true; response.writeHead(400); response.end('Ungültiger Anmeldeanbieter.'); settle?.(invalid()); return; }
+        if (issuer.length > 1 || issuer.length === 1 && issuer[0] !== expectedIssuer || this.responseIssuerRequired && issuer.length !== 1) {
+          consumed = true; response.writeHead(400); response.end('Ungültiger Anmeldeanbieter. Bitte die Meldung in OpenVibeDesk beachten.');
+          settle?.(new McpOAuthRequiredError(issuer.length === 0
+            ? 'Der OAuth-Anbieter hat den erforderlichen Issuer im Rückruf nicht mitgeschickt. Bitte die Anbieter-Konfiguration prüfen.'
+            : 'Der OAuth-Issuer im Rückruf stimmt nicht exakt mit dem erwarteten Issuer überein. Die Issuer-URL einschließlich abschließendem Schrägstrich prüfen oder die manuellen Endpunkte leeren und automatisch ermitteln lassen.'));
+          return;
+        }
         consumed = true;
-        if (url.searchParams.has('error')) { response.writeHead(200); response.end('Die Anmeldung wurde nicht abgeschlossen. Zurück zu OpenVibeDesk.'); settle?.(new McpOAuthRequiredError('Die MCP-Anmeldung wurde beim Anbieter abgebrochen oder abgelehnt.')); return; }
+        if (url.searchParams.has('error')) {
+          response.writeHead(200); response.end('Die Anmeldung wurde nicht abgeschlossen. Zurück zu OpenVibeDesk.');
+          const codes = url.searchParams.getAll('error');
+          settle?.(new McpOAuthRequiredError(codes.length === 1 && Object.hasOwn(oauthErrorMessages, codes[0]) ? oauthErrorMessages[codes[0]] : 'Die MCP-Anmeldung wurde beim Anbieter abgebrochen oder abgelehnt.'));
+          return;
+        }
         const codes = url.searchParams.getAll('code'); if (codes.length !== 1 || !codes[0] || codes[0].length > 4096) { response.writeHead(400); response.end('Ungültige Anmeldung.'); settle?.(invalid()); return; }
         response.writeHead(200); response.end('Anmeldung empfangen. Du kannst zu OpenVibeDesk zurückkehren.'); settle?.(codes[0]);
       });
@@ -225,7 +257,11 @@ export class McpOAuthSession implements OAuthClientProvider {
       await this.saveTokens({ ...tokens, issuer: discovery.authorizationServerUrl });
     } catch (error) {
       if (error instanceof McpOAuthRequiredError || error instanceof DOMException && error.name === 'AbortError') throw error;
-      this.check(); throw new McpOAuthRequiredError('Die MCP-Anmeldung ist fehlgeschlagen. OAuth-Client, Rückrufadresse und Freigabe beim Anbieter prüfen.');
+      this.check();
+      // SDK OAuth errors can contain raw response bodies and provider-supplied
+      // descriptions. Expose only a known code's fixed, credential-free message.
+      if (error instanceof OAuthError && Object.hasOwn(oauthErrorMessages, error.errorCode)) throw new McpOAuthRequiredError(oauthErrorMessages[error.errorCode]);
+      throw new McpOAuthRequiredError('Die MCP-Anmeldung ist fehlgeschlagen. OAuth-Client, Rückrufadresse und Freigabe beim Anbieter prüfen.');
     } finally {
       clearTimeout(timeout); this.signal.removeEventListener('abort', abort); this.interactive = false; this.verifier = undefined; this.stateValue = undefined; this.authorizationUrl = undefined; this.listener?.closeAllConnections(); this.listener?.close(); this.listener = undefined;
     }

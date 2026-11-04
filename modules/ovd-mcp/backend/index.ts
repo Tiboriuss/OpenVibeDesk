@@ -44,7 +44,7 @@ export function createMcpModule(host: McpModuleHost) {
   function registerCapabilities(registry: WorkspaceCapabilityRegistry) {
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.servers'], ({ offset = 0, limit = 20 }) => {
       const all = service.listServers();
-      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, toolCount, allowedToolCount, error, warning, authMode, oauthStatus, oauthError }) => ({ id, name, description: description.slice(0, 240), transport, status, toolCount, allowedToolCount, authMode, ...(oauthStatus ? { oauthStatus } : {}), ...(oauthError ? { oauthError } : {}), ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
+      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, toolCount, allowedToolCount, error, warning, authMode, oauthStatus, oauthError, oauthClientAuthMethod }) => ({ id, name, description: description.slice(0, 240), transport, status, toolCount, allowedToolCount, authMode, ...(authMode === 'oauth' ? { oauthClientAuthMethod: oauthClientAuthMethod ?? 'auto' } : {}), ...(oauthStatus ? { oauthStatus } : {}), ...(oauthError ? { oauthError } : {}), ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
       const hasMore = offset + servers.length < all.length;
       return { servers, total: all.length, hasMore, ...(hasMore ? { nextOffset: offset + servers.length } : {}) };
     });

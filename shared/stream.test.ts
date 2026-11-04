@@ -248,4 +248,65 @@ describe('Responses transport', () => {
       expect(deltas).toEqual(['Teil']);
     } finally { await server.close(); }
   });
+
+  it('assembles completed text, reasoning and function snapshots when the terminal output array is empty', async () => {
+    let mode: 'text' | 'function' = 'text';
+    const message = { ...answerItem, id: 'msg_1', phase: 'final_answer' };
+    const server = await serve((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      const events = mode === 'text' ? [
+        { type: 'response.output_item.added', output_index: 0, item: { ...message, status: 'in_progress', content: [] } },
+        { type: 'response.output_text.delta', output_index: 0, item_id: message.id, delta: 'Grüße ' },
+        { type: 'response.output_item.done', output_index: 0, item: message }
+      ] : [
+        { type: 'response.output_item.added', output_index: 0, item: { ...reasoningItem, encrypted_content: null } },
+        { type: 'response.output_item.done', output_index: 0, item: reasoningItem },
+        { type: 'response.output_item.added', output_index: 1, item: { ...functionItem, arguments: '', status: 'in_progress' } },
+        { type: 'response.function_call_arguments.delta', output_index: 1, item_id: functionItem.id, delta: '{"emailId":' },
+        { type: 'response.function_call_arguments.done', output_index: 1, item_id: functionItem.id, arguments: functionItem.arguments },
+        { type: 'response.output_item.done', output_index: 1, item: functionItem }
+      ];
+      res.end([...events, { type: 'response.completed', response: { status: 'completed', output: [], error: null, incomplete_details: null } }].map(event).join(''));
+    });
+    try {
+      const config: AiConfig = { ...server.config, protocol: 'responses' }, deltas: string[] = [];
+      const answer = await streamTurn(config, null, [], { tier: 'simple' }, new AbortController().signal, delta => deltas.push(delta), tools);
+      expect(answer.text).toBe('Grüße 😀'); expect(deltas).toEqual(['Grüße ', '😀']);
+      expect(answer.responseItems).toMatchObject([{ type: 'message', role: 'assistant', phase: 'final_answer' }]);
+      mode = 'function';
+      const call = await streamTurn(config, null, [], { tier: 'smart' }, new AbortController().signal, () => {}, tools);
+      expect(call.toolCalls).toEqual([{ id: 'call_1', type: 'function', function: { name: 'read_email', arguments: functionItem.arguments } }]);
+      expect(call.responseItems).toEqual([reasoningItem, { type: 'function_call', call_id: 'call_1', name: 'read_email', arguments: functionItem.arguments }]);
+    } finally { await server.close(); }
+  });
+
+  it('never accepts partial, contradictory or unvalidated item snapshots as completed output', async () => {
+    const added = { type: 'response.output_item.added', output_index: 0, item: { ...functionItem, arguments: '', status: 'in_progress' } };
+    const done = { type: 'response.output_item.done', output_index: 0, item: functionItem };
+    const completed = { type: 'response.completed', response: { status: 'completed', output: [] } };
+    const message = { ...answerItem, id: 'msg_1' };
+    const scenarios = [
+      [added, completed],
+      [added, { type: 'response.function_call_arguments.done', output_index: 0, item_id: functionItem.id, arguments: functionItem.arguments }, completed],
+      [added, { type: 'response.function_call_arguments.done', output_index: 0, item_id: functionItem.id, arguments: '' }, done, completed],
+      [done],
+      [done, done, completed],
+      [done, { ...done, output_index: 1 }, completed],
+      [{ ...done, output_index: 1 }, completed],
+      [added, { ...done, item: { ...functionItem, id: 'other_item' } }, completed],
+      [done, { type: 'response.incomplete', response: { status: 'incomplete', output: [functionItem] } }],
+      [done, { type: 'response.failed', response: { status: 'failed' } }],
+      [{ ...done, item: { ...functionItem, arguments: '{"emailId":' } }, completed],
+      [{ ...done, item: { ...functionItem, name: 'unoffered_tool' } }, completed],
+      [added, { type: 'response.function_call_arguments.delta', output_index: 0, item_id: functionItem.id, delta: '{"emailId":"different' }, done, completed],
+      [done, { ...completed, response: { status: 'completed', output: [{ ...functionItem, arguments: '{"emailId":"changed"}' }] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: message }, { ...completed, response: { status: 'completed', output: [{ ...message, content: [{ type: 'output_text', text: 'Changed after completion' }] }] } }]
+    ];
+    let events: unknown[] = [];
+    const server = await serve((_req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(events.map(event).join('') + 'data: [DONE]\n\n'); });
+    try {
+      const config: AiConfig = { ...server.config, protocol: 'responses' };
+      for (events of scenarios) await expect(streamTurn(config, null, [], { tier: 'smart' }, new AbortController().signal, () => {}, tools)).rejects.toThrow();
+    } finally { await server.close(); }
+  });
 });

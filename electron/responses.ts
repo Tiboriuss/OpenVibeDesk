@@ -149,8 +149,46 @@ export async function streamResponsesTurn(
     const decoder = new TextDecoder('utf-8');
     let line = '', pendingCR = false, data: string[] = [], eventSize = 0, wireSize = 0, answer = '';
     let result: StreamTurn | undefined;
-    const calls = new Map<number, { itemId: string; call: ToolCall }>();
+    const calls = new Map<number, { itemId: string; call: ToolCall; argumentsDone?: boolean }>();
+    const items = new Map<number, { id: string; type: string; added: boolean; done?: Record<string, unknown> }>();
+    const itemIndexes = new Map<string, number>();
     const invalid = (field: 'tool_calls' | 'index' | 'id' | 'name' | 'arguments' | 'type'): never => { throw toolCallError('structure', [...calls.values()].map(item => item.call), undefined, 'stream', field); };
+    const inconsistentOutput = (): never => { throw new Error('Der Endpunkt hat widersprüchliche Responses-Ausgabedaten geliefert.'); };
+    const unfinishedOutput = (): never => {
+      if (calls.size) throw toolCallError('finish', [...calls.values()].map(item => item.call));
+      throw new Error('Der Endpunkt hat keine vollständig abgeschlossene Responses-Ausgabe geliefert.');
+    };
+    function observeItem(index: unknown, id: unknown, type: unknown) {
+      if (!Number.isSafeInteger(index) || (index as number) < 0 || typeof id !== 'string' || !id || typeof type !== 'string' || !type) return inconsistentOutput();
+      const previous = items.get(index as number), previousIndex = itemIndexes.get(id);
+      if (previous && (previous.id !== id || previous.type !== type) || previousIndex !== undefined && previousIndex !== index) return inconsistentOutput();
+      if (previous) return previous;
+      const observed = { id, type, added: false } as { id: string; type: string; added: boolean; done?: Record<string, unknown> };
+      items.set(index as number, observed); itemIndexes.set(id, index as number); return observed;
+    }
+    const messageContent = (item: Record<string, unknown>) => JSON.stringify(Array.isArray(item.content) ? item.content.map(part => record(part) ? { type: part.type, text: part.text, refusal: part.refusal } : part) : item.content);
+    function completedResponse(raw: unknown): unknown {
+      if (!record(raw) || !Array.isArray(raw.output)) return raw;
+      if (!raw.output.length && items.size && raw.status === 'completed' && !raw.error && !raw.incomplete_details) {
+        // Some streaming gateways omit the terminal output array. Reconstruct
+        // only from complete item snapshots after the response itself completes.
+        const ordered = [...items.entries()].sort(([left], [right]) => left - right);
+        if (ordered.some(([index, item], position) => index !== position || !item.done || item.done.status !== undefined && item.done.status !== null && item.done.status !== 'completed')) return unfinishedOutput();
+        return { ...raw, output: ordered.map(([, item]) => item.done!) };
+      }
+      for (const [index, observed] of items) {
+        const final = raw.output[index];
+        if (!record(final) || final.type !== observed.type || final.id !== undefined && final.id !== observed.id) return inconsistentOutput();
+        if (observed.done) {
+          if (observed.type === 'message' && (final.role !== observed.done.role || messageContent(final) !== messageContent(observed.done))) return inconsistentOutput();
+          if (observed.type === 'reasoning' && (final.encrypted_content !== observed.done.encrypted_content || JSON.stringify(final.summary ?? []) !== JSON.stringify(observed.done.summary ?? []))) return inconsistentOutput();
+          if (observed.type === 'function_call' && (final.call_id !== observed.done.call_id || final.name !== observed.done.name || final.arguments !== observed.done.arguments)) return invalid('arguments');
+        }
+        const call = calls.get(index);
+        if (call?.argumentsDone && (final.call_id !== call.call.id || final.name !== call.call.function.name || final.arguments !== call.call.function.arguments)) return invalid('arguments');
+      }
+      return raw;
+    }
     const emit = (text: string) => {
       answer += text;
       if (answer.length > MAX_TEXT_CHARS) throw new Error('Die Antwort des Endpunkts ist zu groß.');
@@ -170,10 +208,22 @@ export async function streamResponsesTurn(
       if (value.type === 'response.incomplete') throw toolCallError('finish', [...calls.values()].map(item => item.call), 'incomplete');
       if (value.type === 'response.output_text.delta' || value.type === 'response.refusal.delta') {
         if (typeof value.delta !== 'string') throw new Error('Der Endpunkt hat ein nicht unterstütztes Textformat geliefert.');
+        if (value.output_index !== undefined || value.item_id !== undefined) {
+          const item = observeItem(value.output_index, value.item_id, 'message');
+          if (item.done) return inconsistentOutput();
+        }
         emit(value.delta);
       } else if (value.type === 'response.output_item.added' || value.type === 'response.output_item.done') {
         const item = value.item;
         if (!record(item)) return invalid('type');
+        const observed = observeItem(value.output_index, item.id, item.type);
+        if (value.type === 'response.output_item.added') {
+          if (observed.added || observed.done) return inconsistentOutput();
+          observed.added = true;
+        } else {
+          if (observed.done) return inconsistentOutput();
+          observed.done = item;
+        }
         if (item.type !== 'function_call') return;
         if (item.namespace !== undefined && item.namespace !== null && (config.provider !== 'chatgpt' || item.namespace !== 'ovd')) invalid('name');
         if (!Number.isSafeInteger(value.output_index) || (value.output_index as number) < 0) invalid('index');
@@ -183,19 +233,23 @@ export async function streamResponsesTurn(
         if (!tools?.length) invalid('tool_calls');
         const index = value.output_index as number, existing = calls.get(index);
         if (existing && (existing.itemId !== item.id || existing.call.id !== item.call_id || existing.call.function.name !== item.name)) invalid('id');
+        if (existing && (existing.argumentsDone ? item.arguments !== existing.call.function.arguments : !item.arguments.startsWith(existing.call.function.arguments))) invalid('arguments');
         const call: ToolCall = { id: item.call_id, type: 'function', function: { name: item.name, arguments: item.arguments } };
-        calls.set(index, { itemId: item.id, call });
+        calls.set(index, { itemId: item.id, call, ...(existing?.argumentsDone ? { argumentsDone: true } : {}) });
         validateToolCallSize(call, index, [...calls.values()].map(entry => entry.call));
       } else if (value.type === 'response.function_call_arguments.delta' || value.type === 'response.function_call_arguments.done') {
         if (!Number.isSafeInteger(value.output_index) || (value.output_index as number) < 0) invalid('index');
         const index = value.output_index as number, existing = calls.get(index);
         if (!existing || existing.itemId !== value.item_id) return invalid('id');
+        if (items.get(index)?.done || existing.argumentsDone) return invalid('arguments');
         const text = value.type.endsWith('.delta') ? value.delta : value.arguments;
         if (typeof text !== 'string') return invalid('arguments');
+        if (value.type.endsWith('.done') && !text.startsWith(existing.call.function.arguments)) return invalid('arguments');
         existing.call.function.arguments = value.type.endsWith('.delta') ? existing.call.function.arguments + text : text;
+        if (value.type.endsWith('.done')) existing.argumentsDone = true;
         validateToolCallSize(existing.call, index, [...calls.values()].map(entry => entry.call));
       } else if (value.type === 'response.completed') {
-        const parsed = parseOutput(value.response, tools, 'stream', config.provider === 'chatgpt');
+        const parsed = parseOutput(completedResponse(value.response), tools, 'stream', config.provider === 'chatgpt');
         if (!parsed.text.startsWith(answer)) throw new Error('Der Endpunkt hat widersprüchliche Streaming-Texte geliefert.');
         // Final output is complete and authoritative; unfinished calls are never
         // returned to the agent merely because an item.done event was received.

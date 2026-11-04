@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { mcpAuthModeSchema, mcpServerInputSchema, mcpServerIdSchema, validateMcpOAuthEndpointUrl, type McpServerConfig, type McpServerInput } from '../../../shared/mcp';
+import { mcpAuthModeSchema, mcpOAuthClientAuthMethodSchema, mcpServerInputSchema, mcpServerIdSchema, validateMcpOAuthEndpointUrl, type McpServerConfig, type McpServerInput } from '../../../shared/mcp';
 
 const storedServerSchema = z.object({
   id: mcpServerIdSchema, name: z.string().min(1).max(100), description: z.string().max(500), transport: z.enum(['stdio', 'http']),
@@ -11,6 +11,7 @@ const storedServerSchema = z.object({
   autoConnect: z.boolean(), allowedTools: z.array(z.string().min(1).max(200)).max(500), hasToken: z.boolean(), envKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100)).max(100),
   authMode: mcpAuthModeSchema.optional(), oauthClientId: z.string().max(2048).optional(), oauthIssuer: z.string().max(2048).optional(), oauthScopes: z.string().max(2000).optional(),
   oauthAuthorizationUrl: z.string().max(2048).optional(), oauthTokenUrl: z.string().max(2048).optional(),
+  oauthClientAuthMethod: mcpOAuthClientAuthMethodSchema.optional(),
   oauthRedirectPort: z.number().int().min(1024).max(65535).default(43189), hasOAuthClientSecret: z.boolean().default(false), hasOAuthTokens: z.boolean().default(false), oauthRevision: z.string().uuid().default(() => randomUUID())
 }).strict().transform(value => ({ ...value, authMode: value.authMode ?? (value.transport === 'http' && value.hasToken ? 'bearer' as const : 'none' as const) }));
 const storeSchema = z.object({ version: z.literal(1), servers: z.array(storedServerSchema).max(100) }).strict();
@@ -85,6 +86,7 @@ export function mcpOAuthBinding(config: McpServerConfig): string {
   const identity: unknown[] = [config.id, config.transport, config.url, config.authMode, config.oauthClientId, config.oauthIssuer, config.oauthScopes, config.oauthRedirectPort, config.oauthRevision];
   // Keep the v0.1.4 binding stable when automatic discovery remains selected.
   if (config.oauthAuthorizationUrl || config.oauthTokenUrl) identity.push({ authorizationUrl: config.oauthAuthorizationUrl, tokenUrl: config.oauthTokenUrl });
+  if (config.oauthClientAuthMethod && config.oauthClientAuthMethod !== 'auto') identity.push({ clientAuthMethod: config.oauthClientAuthMethod });
   return createHash('sha256').update(JSON.stringify(identity)).digest('hex');
 }
 type SecretChange = { key: string; value: string | null; previous?: string | null };
@@ -146,23 +148,28 @@ export class McpConfigStore {
       const envKeys = [...new Set([...(old?.envKeys ?? []).filter(key => !(input.removeEnvKeys ?? []).includes(key)), ...Object.keys(input.env ?? {})])];
       const authMode = input.transport === 'stdio' ? 'none' : input.authMode ?? old?.authMode ?? (input.token ? 'bearer' : 'none');
       const optional = (value: string | undefined, previous?: string) => (value === undefined ? previous : value.trim()) || undefined;
+      const selectedClientAuthMethod = input.oauthClientAuthMethod ?? old?.oauthClientAuthMethod;
+      const oauthClientAuthMethod = selectedClientAuthMethod === 'auto' ? undefined : selectedClientAuthMethod;
       const next: McpServerConfig = {
         id, name: input.name, description: input.description, transport: input.transport, args: input.transport === 'stdio' ? input.args : [],
         ...(input.transport === 'stdio' ? { command: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) } : { url: validateMcpUrl(input.url!) }),
         autoConnect: input.autoConnect, allowedTools: [...new Set(input.allowedTools)], hasToken: false, envKeys, authMode,
-        ...(authMode === 'oauth' ? { oauthClientId: optional(input.oauthClientId, old?.oauthClientId), oauthIssuer: optional(input.oauthIssuer, old?.oauthIssuer), oauthScopes: optional(input.oauthScopes, old?.oauthScopes), oauthAuthorizationUrl: optional(input.oauthAuthorizationUrl, old?.oauthAuthorizationUrl), oauthTokenUrl: optional(input.oauthTokenUrl, old?.oauthTokenUrl) } : {}),
+        ...(authMode === 'oauth' ? { oauthClientId: optional(input.oauthClientId, old?.oauthClientId), oauthIssuer: optional(input.oauthIssuer, old?.oauthIssuer), oauthScopes: optional(input.oauthScopes, old?.oauthScopes), oauthAuthorizationUrl: optional(input.oauthAuthorizationUrl, old?.oauthAuthorizationUrl), oauthTokenUrl: optional(input.oauthTokenUrl, old?.oauthTokenUrl), ...(oauthClientAuthMethod ? { oauthClientAuthMethod } : {}) } : {}),
         oauthRedirectPort: input.oauthRedirectPort ?? old?.oauthRedirectPort ?? 43189,
         hasOAuthClientSecret: false, hasOAuthTokens: false, oauthRevision: old?.oauthRevision ?? randomUUID()
       };
-      if (next.oauthIssuer) next.oauthIssuer = validateMcpUrl(next.oauthIssuer);
+      // An issuer is an exact identifier. Validate its URL without changing
+      // its spelling, including a provider's intentionally absent final slash.
+      if (next.oauthIssuer) validateMcpUrl(next.oauthIssuer);
       if (next.oauthAuthorizationUrl) next.oauthAuthorizationUrl = validateMcpOAuthEndpointUrl(next.oauthAuthorizationUrl, next.url);
       if (next.oauthTokenUrl) next.oauthTokenUrl = validateMcpOAuthEndpointUrl(next.oauthTokenUrl, next.url);
       if (next.oauthAuthorizationUrl && next.oauthTokenUrl && (!next.oauthClientId || !next.oauthIssuer)) throw new Error('Für manuelle OAuth-Endpunkte bitte eine registrierte Client-ID und den zugehörigen OAuth-Issuer angeben.');
       const sameTarget = !!old && JSON.stringify([old.transport, old.command, old.args, old.cwd, old.url]) === JSON.stringify([next.transport, next.command, next.args, next.cwd, next.url]);
       const sameClient = sameTarget && old!.authMode === authMode && old!.oauthClientId === next.oauthClientId && old!.oauthIssuer === next.oauthIssuer;
-      const sameAuth = sameClient && old!.oauthScopes === next.oauthScopes && old!.oauthRedirectPort === next.oauthRedirectPort && old!.oauthAuthorizationUrl === next.oauthAuthorizationUrl && old!.oauthTokenUrl === next.oauthTokenUrl && !input.oauthClientSecret && !input.clearOAuthClientSecret && !input.token && !input.clearToken;
+      const sameAuth = sameClient && old!.oauthScopes === next.oauthScopes && old!.oauthRedirectPort === next.oauthRedirectPort && old!.oauthAuthorizationUrl === next.oauthAuthorizationUrl && old!.oauthTokenUrl === next.oauthTokenUrl && (old!.oauthClientAuthMethod ?? 'auto') === (next.oauthClientAuthMethod ?? 'auto') && !input.oauthClientSecret && !input.clearOAuthClientSecret && !input.token && !input.clearToken;
       next.hasToken = authMode === 'bearer' && !input.clearToken && (!!input.token || sameClient && old!.hasToken);
       next.hasOAuthClientSecret = authMode === 'oauth' && !input.clearOAuthClientSecret && (!!input.oauthClientSecret || sameClient && old!.hasOAuthClientSecret);
+      if (next.oauthClientAuthMethod && (!next.oauthClientId || !next.hasOAuthClientSecret)) throw new Error('Für dieses Client-Anmeldeverfahren sind eine registrierte Client-ID und ein gespeichertes Client-Secret erforderlich.');
       next.hasOAuthTokens = sameAuth && old!.hasOAuthTokens;
       if (old && !sameAuth) { next.oauthRevision = randomUUID(); next.allowedTools = []; }
       const changes: SecretChange[] = [];
