@@ -53,7 +53,7 @@ The module-management category includes an expandable control for arranging the 
 - Save credentials and related connection settings explicitly as a coherent operation.
 - Preserve unsaved input across category navigation, search and group collapse. Do not silently lose it when closing the window. Make dirty, busy, saved and failed states understandable.
 - Where useful, let users reset an individual changed value or group to its default.
-- Keep secrets in the OS credential store. Do not include them in summaries, search data or model context, and do not read stored values back into ordinary forms.
+- Keep secrets in the local encrypted credential store. Do not include them in summaries, search data or model context, and do not read stored values back into ordinary forms.
 
 **Current implementation:** display preferences, Dock behavior and navigation order save immediately. AI, Agent, Mail connections and MCP server/tool settings use their respective explicit save controls. [Main-process persistence and close handling](../electron/main.ts) combine the reported dirty/busy states of those forms. In-progress operations block closing; unsaved edits use a visible discard decision. Existing password/token fields indicate stored state without returning their secret value. A save operation that fails must not be presented as completed.
 

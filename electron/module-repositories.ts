@@ -1,4 +1,4 @@
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from './credential-store';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -20,10 +20,10 @@ type CatalogSnapshot = { catalog?: RepositoryCatalog; rootTree?: string; status:
 type GitTree = { path: string; mode: string; type: string; sha: string; size?: number }[];
 
 export interface RepositorySecrets { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void>; }
-const secretEntry = (key: string) => new AsyncEntry('OpenVibeDesk Module Repositories', key, { linux: { store: 'secret-service' } });
-const keychain: RepositorySecrets = {
-  async get(key) { try { return await secretEntry(key).getPassword(); } catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); } },
-  async set(key, value) { try { await secretEntry(key).setPassword(value); } catch { throw new Error('Das Repository-Token konnte nicht sicher gespeichert werden.'); } },
+const secretEntry = (key: string) => localCredentialEntry('OpenVibeDesk Module Repositories', key);
+const localSecrets: RepositorySecrets = {
+  async get(key) { try { return await secretEntry(key).getPassword(); } catch { throw new Error('Der lokale Zugangsdaten-Speicher ist nicht verfügbar.'); } },
+  async set(key, value) { try { await secretEntry(key).setPassword(value); } catch { throw new Error('Das Repository-Token konnte nicht lokal gespeichert werden.'); } },
   async delete(key) { try { await secretEntry(key).deletePassword(); } catch { throw new Error('Das Repository-Token konnte nicht entfernt werden.'); } }
 };
 export interface RepositoryPackageInstallation {
@@ -34,7 +34,7 @@ export interface ModuleRepositoryOptions {
   getInstalled(id: string): ModuleRuntimeRecord | undefined;
   installPackage(input: RepositoryPackageInstallation, signal?: AbortSignal): Promise<ModuleInfo>;
   changed(): void;
-  /** Injected only for local practical checks. Production uses native HTTPS fetch and OS credentials. */
+  /** Injected only for local practical checks. Production uses native HTTPS fetch and local credential storage. */
   fetch?: typeof fetch; secrets?: RepositorySecrets;
 }
 
@@ -80,9 +80,10 @@ export class ModuleRepositoryService {
   private busy = false;
   private readonly snapshots = new Map<string, CatalogSnapshot>();
   private readonly trees = new Map<string, GitTree>();
+  private readonly tokenPresence = new Map<string, boolean>();
   private readonly fetcher: typeof fetch;
   private readonly secrets: RepositorySecrets;
-  constructor(private readonly options: ModuleRepositoryOptions) { this.fetcher = options.fetch ?? fetch; this.secrets = options.secrets ?? keychain; }
+  constructor(private readonly options: ModuleRepositoryOptions) { this.fetcher = options.fetch ?? fetch; this.secrets = options.secrets ?? localSecrets; }
 
   async initialize(): Promise<void> {
     await fs.mkdir(path.dirname(this.options.configFile), { recursive: true });
@@ -95,12 +96,13 @@ export class ModuleRepositoryService {
       for (const source of parsed.sources) { const normalized = normalizeRepositoryUrl(source.url); if (normalized.kind !== source.kind) throw new Error('Ungültiger Quellentyp.'); source.url = normalized.url; }
       for (const receipt of Object.values(parsed.installations)) normalizeRepositoryUrl(receipt.sourceUrl);
       this.config = parsed;
+      for (const source of parsed.sources) if (source.tokenKey) this.tokenPresence.set(source.tokenKey, !!await this.secrets.get(source.tokenKey));
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.available = false; }
   }
   list(): RepositoryState {
     const sources = this.config.sources.map(source => {
       const snapshot = this.snapshots.get(source.id);
-      return { id: source.id, title: source.title, url: source.url, kind: source.kind, tokenConfigured: !!source.tokenKey, status: snapshot?.status ?? 'unloaded' as const, moduleCount: snapshot?.catalog?.modules.length ?? 0, ...(snapshot?.error ? { error: snapshot.error } : {}), ...(snapshot?.checkedAt ? { checkedAt: snapshot.checkedAt } : {}) };
+      return { id: source.id, title: source.title, url: source.url, kind: source.kind, tokenConfigured: !!source.tokenKey && this.tokenPresence.get(source.tokenKey) === true, status: snapshot?.status ?? 'unloaded' as const, moduleCount: snapshot?.catalog?.modules.length ?? 0, ...(snapshot?.error ? { error: snapshot.error } : {}), ...(snapshot?.checkedAt ? { checkedAt: snapshot.checkedAt } : {}) };
     });
     const modules = this.config.sources.flatMap(source => (this.snapshots.get(source.id)?.catalog?.modules ?? []).map(entry => this.moduleSummary(source, entry)));
     return { sources, modules, busy: this.busy, ...(!this.available ? { error: 'Die gespeicherte Quellenkonfiguration ist nicht lesbar. Sie wurde nicht überschrieben; bitte die Konfigurationsdatei prüfen oder aus einer Sicherung wiederherstellen.' } : {}) };
@@ -151,12 +153,14 @@ export class ModuleRepositoryService {
       if (newKey && newToken) { replacementAttempted = true; await this.secrets.set(newKey, newToken); }
       if (oldKey && oldToken !== null) { deletionAttempted = true; await this.secrets.delete(oldKey); }
       await this.persist(next);
+      if (oldKey) this.tokenPresence.delete(oldKey);
+      if (newKey) this.tokenPresence.set(newKey, !!newToken);
     } catch (error) {
       let restoreFailed = false, cleanupFailed = false;
       // A credential provider may delete and then fail; restore even when deletion rejected.
       if (deletionAttempted && oldKey && oldToken !== null) try { await this.secrets.set(oldKey, oldToken); } catch { restoreFailed = true; }
       if (replacementAttempted && newKey) try { await this.secrets.delete(newKey); } catch { cleanupFailed = true; }
-      if (restoreFailed || cleanupFailed) throw new Error('Die Modulquelle wurde nicht geändert. Der Zugangsdaten-Speicher konnte die vorherigen Tokens nicht vollständig wiederherstellen. Bitte den sicheren Speicher prüfen und das Token erneut eingeben.');
+      if (restoreFailed || cleanupFailed) throw new Error('Die Modulquelle wurde nicht geändert. Der Zugangsdaten-Speicher konnte die vorherigen Tokens nicht vollständig wiederherstellen. Bitte den lokalen Speicher prüfen und das Token erneut eingeben.');
       throw error;
     }
   }
@@ -186,6 +190,7 @@ export class ModuleRepositoryService {
   private async token(source: StoredSource): Promise<string | undefined> {
     if (!source.tokenKey) return undefined;
     const token = await this.secrets.get(source.tokenKey);
+    this.tokenPresence.set(source.tokenKey, !!token);
     if (!token) throw new Error('Das gespeicherte Repository-Token fehlt. Bitte in den Einstellungen erneut eingeben.');
     return token;
   }

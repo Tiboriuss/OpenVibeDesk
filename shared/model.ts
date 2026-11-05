@@ -5,7 +5,7 @@ import type { AiConnection } from './ai-providers';
 export type { AiProvider, AiProtocol, AiAuthMode } from './ai-providers';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 export type WindowKind = 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions';
-export interface Settings { textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; }
+export interface Settings { textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; diagnosticsEnabled?: boolean; }
 export type Thinking = 'off' | 'low' | 'medium' | 'high';
 export type ModelTier = 'smart' | 'simple';
 export type ConfirmationMode = 'ask' | 'never';
@@ -40,6 +40,10 @@ export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachme
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  getDiagnosticsStatus(): Promise<import('./diagnostics').DiagnosticsStatus>;
+  updateDiagnostics(input: { enabled: boolean }): Promise<import('./diagnostics').DiagnosticsStatus>;
+  exportDiagnostics(): Promise<import('./diagnostics').DiagnosticsExportResult>;
+  clearDiagnostics(): Promise<import('./diagnostics').DiagnosticsStatus>;
   getChatGptStatus(): Promise<import('./chatgpt').ChatGptStatus>;
   startChatGptLogin(options?: { profileId?: string; newProfile?: boolean; consent?: boolean }): Promise<void>;
   cancelChatGptLogin(): Promise<void>;

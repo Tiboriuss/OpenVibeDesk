@@ -122,6 +122,9 @@ const initSqlJs = require('sql.js');
   database.run('INSERT INTO app_state (key, value) VALUES (?, ?)', ['workspace', JSON.stringify(state)]);
   fs.writeFileSync(path.join(process.argv[1], 'workspace.sqlite'), Buffer.from(database.export()));
   database.close();
+  const { LocalCredentialStore } = require(path.resolve('dist-electron/electron/credential-store.js'));
+  const credentials = new LocalCredentialStore(process.argv[1]);
+  await credentials.set('OpenVibeDesk Upgrade Fixture', 'synthetic-account', 'synthetic-upgrade-credential-only');
 })().catch(error => {console.error(error.message); process.exitCode = 1;});
 '@
 & node -e $makeWorkspace $profile
@@ -146,8 +149,18 @@ foreach ($file in $profileHashes.Keys) {
     throw 'An upgrade removed or changed synthetic workspace, account or module data.'
   }
 }
+$readCredential = @'
+const path = require('node:path');
+const { LocalCredentialStore } = require(path.resolve('dist-electron/electron/credential-store.js'));
+(async()=>{
+  const credentials = new LocalCredentialStore(process.argv[1]);
+  if(await credentials.get('OpenVibeDesk Upgrade Fixture','synthetic-account')!=='synthetic-upgrade-credential-only') throw Error('The upgrade lost the synthetic local credential.');
+})().catch(error=>{console.error(error.message);process.exitCode=1;});
+'@
+& node -e $readCredential $profile
+if ($LASTEXITCODE -ne 0) { throw 'The retained local credential could not be read.' }
 if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne $originalInstallerHash) {
   throw 'The verification changed the release artifact.'
 }
-Write-Host "Upgrade verified: same installer identity and directory, newer app version, $($profileHashes.Count) unchanged profile files."
+Write-Host "Upgrade verified: same installer identity and directory, newer app version, $($profileHashes.Count) unchanged profile files and a readable local credential."
 Write-Host 'The temporary fixture installer remains outside release artifacts and is never uploaded.'

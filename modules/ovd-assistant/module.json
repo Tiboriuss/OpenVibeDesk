@@ -3,7 +3,7 @@
   "id": "ovd-assistant",
   "title": "OVD-Assistent",
   "version": "0.1.0",
-  "description": "Pflichtmodul für Chat und Auftragsstatus: Antworten neu formulieren, unterbrochene Aufträge fortsetzen und Aktionen prüfen; Referenzen, Zeit, Berechnungen, Fenster, Einstellungen sowie Module und Modulquellen steuern.",
+  "description": "Pflichtmodul für Chat und Auftragsstatus: Antworten neu formulieren, unterbrochene Aufträge fortsetzen und Aktionen prüfen; Referenzen, Zeit, Berechnungen, Fenster, Einstellungen, Diagnoseprotokolle sowie Module und Modulquellen steuern.",
   "keywords": [
     "assistent",
     "assistant",
@@ -45,7 +45,12 @@
     "updates",
     "ereignisse",
     "abonnements",
-    "events"
+    "events",
+    "diagnose",
+    "debug",
+    "logging",
+    "protokoll",
+    "support"
   ],
   "required": true,
   "capabilities": [
@@ -94,7 +99,11 @@
     "modules.repository_remove",
     "modules.repositories_refresh",
     "modules.repository_catalog",
-    "modules.repository_install"
+    "modules.repository_install",
+    "diagnostics.status",
+    "diagnostics.update",
+    "diagnostics.export",
+    "diagnostics.clear"
   ],
   "permissions": [
     "storage.workspace",

@@ -105,6 +105,8 @@ Process activation is lazy: approval makes contributions discoverable, and the f
 
 The activation context contains `moduleId`, `dataDirectory` and `attention`; tool handlers receive `signal` and, for journalled calls, `operation`. It is not the main-process workspace API or a credential-store bridge. OVD does not forward saved provider, mail or repository credentials to modules. Design a module's own configuration and credential handling explicitly, keeping secrets out of ordinary tool arguments/results, reference snapshots and logs.
 
+Built-in services use the shared [local credential vault](electron/credential-store.ts), initialized for the application's user profile before those services start. It deliberately avoids normal-use OS password prompts, stores its encryption key beside its encrypted file, and is weaker than OS-keychain protection. Preserve its fail-closed behavior and service/account namespaces. Do not add implicit legacy OS reads, credentials in diagnostics, or a generic secret-reading Assistant capability. [Credential storage](docs/getting-started.md#credential-storage) describes update and backup behavior.
+
 Use structured domain results for expected failures, for example `{ outcome: 'failed', message: 'The order no longer exists.' }`, and `cancelled` or `uncertain` where appropriate. The host deliberately hides arbitrary backend exception details; throwing an exception is not a way to show a useful domain error. Successful JSON output must describe what actually happened, including whether a remote system accepted a change or its result is still unknown.
 
 ### Durable action hooks

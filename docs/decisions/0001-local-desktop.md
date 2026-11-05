@@ -10,7 +10,7 @@ The workspace should behave like an installed, single-user app. Mail, files and 
 
 ## Decision
 
-Electron supplies the main process, preload bridge and sandboxed React renderers. TypeScript defines the process boundaries and UI actions. Shared state and chat sessions live in a local SQLite file; unsent chat drafts use renderer-local storage. The user enters API keys in the settings renderer, which passes them through a typed preload method to the main process for storage in the operating system's credential store. Saved keys are not returned to the renderer.
+Electron supplies the main process, preload bridge and sandboxed React renderers. TypeScript defines the process boundaries and UI actions. Shared state and chat sessions live in a local SQLite file; unsent chat drafts use renderer-local storage. The user enters API keys in the settings renderer, which passes them through a typed preload method to the main process for storage in the local encrypted credential store. Saved keys are not returned to the renderer.
 
 The initial implementation uses `sql.js` so development does not depend on a native SQLite ABI. The preload exposes named methods only, and the main process validates IPC senders and inputs. See the implementation in [`electron/main.ts`](../../electron/main.ts), [`electron/preload.ts`](../../electron/preload.ts) and [`electron/store.ts`](../../electron/store.ts).
 

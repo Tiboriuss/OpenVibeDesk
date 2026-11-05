@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import nodemailer from 'nodemailer';
 import MailComposer from 'nodemailer/lib/mail-composer';
 import addressParser from 'nodemailer/lib/addressparser';
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from '../../../electron/credential-store';
 import { z } from 'zod';
 import { readMailPassword } from './mail-service';
 
@@ -57,18 +57,18 @@ export function validateSmtpSettings(input: unknown): SmtpSettings {
   return result.data;
 }
 
-function passwordEntry(accountId: string): AsyncEntry {
+function passwordEntry(accountId: string) {
   if (!z.uuid().safeParse(accountId).success) throw new Error('Ungültige Konto-ID.');
-  return new AsyncEntry(SMTP_PASSWORD_SERVICE, accountId, { linux: { store: 'secret-service' } });
+  return localCredentialEntry(SMTP_PASSWORD_SERVICE, accountId);
 }
 export async function saveSmtpPassword(accountId: string, password: string): Promise<void> {
   if (typeof password !== 'string' || !password || password.length > 4096) throw new Error('Bitte ein gültiges SMTP-Passwort eingeben.');
   try { await passwordEntry(accountId).setPassword(password); }
-  catch { throw new Error('Das SMTP-Passwort konnte nicht sicher gespeichert werden.'); }
+  catch { throw new Error('Das SMTP-Passwort konnte nicht lokal gespeichert werden.'); }
 }
 export async function readSmtpPassword(accountId: string): Promise<string | null> {
   try { return await passwordEntry(accountId).getPassword(); }
-  catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); }
+  catch { throw new Error('Der lokale Zugangsdaten-Speicher ist nicht verfügbar.'); }
 }
 export async function deleteSmtpPassword(accountId: string): Promise<void> {
   try { await passwordEntry(accountId).deletePassword(); }

@@ -141,11 +141,12 @@ async function launch(app, appData) {
     const redirected = await inspector.call('Debugger.evaluateOnCallFrame', { callFrameId: mainFrame.callFrameId, returnByValue: true, expression: `(()=>{const electron=require('electron');if(electron.app.isReady())throw Error('Profile redirect happened too late');electron.app.setPath('appData',${JSON.stringify(appData)});electron.app.setPath('userData',${JSON.stringify(userData)});globalThis.__ovdUpgradeQA={electron,require};return {packaged:electron.app.isPackaged,appData:electron.app.getPath('appData'),userData:electron.app.getPath('userData')}})()` });
     assert(!redirected.exceptionDetails && redirected.result.value?.packaged && redirected.result.value?.appData === appData && redirected.result.value?.userData === userData, 'Could not redirect the packaged app to its disposable profile.');
     await inspector.call('Debugger.resume');
-    const status = await until('working packaged window', () => inspector.value(`(()=>{const {electron,require}=globalThis.__ovdUpgradeQA;const dock=electron.BrowserWindow.getAllWindows().find(w=>{try{return new URL(w.webContents.getURL()).searchParams.get('view')==='dock'}catch{return false}});if(!electron.app.isReady()||!dock)return null;return dock.webContents.executeJavaScript('!!window.workspace && !!document.body && document.body.textContent.length>0').then(ready=>ready?{packaged:electron.app.isPackaged,version:electron.app.getVersion(),userData:electron.app.getPath('userData'),nativeKeyring:typeof require('@napi-rs/keyring').AsyncEntry==='function'}:null)})()`));
-    assert(status.packaged && status.version === app.version && status.userData === userData && status.nativeKeyring, 'Packaged identity, native keyring, version or profile was incorrect.');
+    const status = await until('working packaged window', () => inspector.value(`(async()=>{const {electron,require}=globalThis.__ovdUpgradeQA;const dock=electron.BrowserWindow.getAllWindows().find(w=>{try{return new URL(w.webContents.getURL()).searchParams.get('view')==='dock'}catch{return false}});if(!electron.app.isReady()||!dock)return null;const ready=await dock.webContents.executeJavaScript('!!window.workspace && !!document.body && document.body.textContent.length>0');return ready?{packaged:electron.app.isPackaged,version:electron.app.getVersion(),userData:electron.app.getPath('userData'),credentials:await require('./credential-store').credentialStorageStatus()}:null})()`));
+    assert(status.packaged && status.version === app.version && status.userData === userData && status.credentials?.available && status.credentials.storage === 'local-encrypted-file', 'Packaged identity, local credential storage, version or profile was incorrect.');
     return {
       status,
       ui: (expression, view = 'dock') => inspector.value(`(()=>{const {electron}=globalThis.__ovdUpgradeQA;const window=electron.BrowserWindow.getAllWindows().find(w=>{try{return new URL(w.webContents.getURL()).searchParams.get('view')===${JSON.stringify(view)}}catch{return false}});if(!window)throw Error('Fixture window missing');return window.webContents.executeJavaScript(${JSON.stringify(expression)},true)})()`),
+      credentialFixture: save => inspector.value(`(async()=>{const entry=globalThis.__ovdUpgradeQA.require('./credential-store').localCredentialEntry('OpenVibeDesk Upgrade Fixture','synthetic-account');${save ? "await entry.setPassword('synthetic-upgrade-credential-only');" : ''}return await entry.getPassword()==='synthetic-upgrade-credential-only'})()`),
       async close() {
         // A connected Node inspector can hold process exit; allow the app's normal
         // asynchronous quit/save path to finish, then detach to release that hold.
@@ -174,7 +175,8 @@ async function main() {
   try {
     execFileSync('/usr/bin/ditto', [first.app, installed]);
     active = await launch(await appInfo(installed), appData);
-    pass('First real packaged app opens from the disposable Applications folder with native keyring and renderer assets.');
+    pass('First real packaged app opens from the disposable Applications folder with local credential storage and renderer assets.');
+    assert(await active.credentialFixture(true), 'The packaged app could not save and read its synthetic local credential.');
     const sentinel = await active.ui(`(async()=>{const api=window.workspace;await api.updateSettings({textSize:'large'});const sessionId=await api.createChatSession();await api.renameChatSession(sessionId,'Synthetic installer upgrade QA');await api.dispatchAction({type:'create_draft'});const state=await api.loadState();const draftId=state.activeDraftId;await api.dispatchAction({type:'update_draft',draftId,patch:{to:'upgrade@example.org',subject:'Retain this synthetic draft',body:'Synthetic package upgrade fixture. Never send.'}});return{sessionId,draftId}})()`);
     assert(sentinel?.sessionId && sentinel.draftId, 'Could not create synthetic data through the actual packaged window API.');
     await active.ui(`window.workspace.saveDraft(${JSON.stringify(sentinel.draftId)})`, 'draft');
@@ -194,13 +196,14 @@ async function main() {
     // Remove only our copied app; the source bundles and profile remain untouched.
     await fs.rm(installed, { recursive: true }); execFileSync('/usr/bin/ditto', [next.app, installed]);
     active = await launch(await appInfo(installed), appData);
+    assert(await active.credentialFixture(false), 'Replacing the app lost the synthetic local credential.');
     const restored = await active.ui('window.workspace.loadState()');
     assert(restored.settings.textSize === 'large', 'The upgrade lost settings.');
     assert(restored.sessions.some(session => session.id === sentinel.sessionId && session.title === 'Synthetic installer upgrade QA'), 'The upgrade lost the saved chat.');
     const draft = restored.drafts.find(draft => draft.id === sentinel.draftId);
     assert(draft && draft.to === 'upgrade@example.org' && draft.subject === 'Retain this synthetic draft' && draft.body === 'Synthetic package upgrade fixture. Never send.', 'The upgrade lost the saved draft.');
     assert(await fs.readFile(notes, 'utf8') === noteData, 'The upgrade changed module-owned data.');
-    pass('Replacing the app with a newer real package retains settings, chat identity, draft content and module data in the same profile.');
+    pass('Replacing the app with a newer real package retains settings, chat identity, draft content, module data and readable local credentials in the same profile.');
     await active.close(); active = undefined;
     assert((await fs.stat(path.join(appData, 'ai-workspace', 'workspace.sqlite'))).size > 0, 'The packaged workspace was not persisted.');
     pass('Newer app exits normally and leaves its SQLite workspace outside the application bundle.');

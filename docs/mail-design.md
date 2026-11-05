@@ -12,7 +12,7 @@ The initial protocol foundation is **IMAP for reading and synchronization** and 
 
 | Area | Present today | Still part of the target design |
 | --- | --- | --- |
-| Accounts | Multiple editable account groups, separate IMAP/SMTP checks, TLS and OS credential storage. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
+| Accounts | Multiple editable account groups, separate IMAP/SMTP checks, TLS and local encrypted credential storage. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
 | Reading | Account/folder navigation, paged metadata, HTML/text reading, bounded inline images, per-message remote-image controls, message details, attachment downloads and explicit read/unread changes. | Broader sender-format compatibility and richer previews. |
 | Organizing | Server folder browsing and local view filters. | Stars/flags, move/archive/trash/restore/delete actions, folder editing and a unified inbox. |
 | Composing | Separate plain-text draft window, account selection, To/CC/BCC, attachments, per-account signatures and a reply to the sender or `Reply-To`. | Recipient chips, reply-all, forwarding and rich-text composition. |
@@ -403,7 +403,7 @@ Persistent offline mail caching, queued offline mutations, IDLE-driven synchroni
 
 Keep boundaries understandable:
 
-- Store credentials in the **OS credential store**, not as plaintext database values.
+- Store credentials in the **local encrypted credential store**, not as plaintext database values.
 - Validate TLS and certificates for IMAP and SMTP.
 - Treat mail content and attachments as untrusted data.
 - Keep external HTML in the sanitized, sandboxed reader and preserve its restrictive document policy.
@@ -413,7 +413,7 @@ Keep boundaries understandable:
 
 **Transport encryption** protects the connection to the mail server; it does not automatically provide end-to-end message encryption. S/MIME or OpenPGP can be added later.
 
-**Current implementation:** credentials use the OS store and TLS checks are active. HTML is sanitized and rendered in a constrained iframe; remote images are blocked until enabled for the selected message. Raw HTML and embedded image bytes stay outside model context and chat snapshots. The local workspace database is not encrypted; drafts, explicit reference snapshots and chat answers can contain mail content. This needs to remain visible in product documentation and in the design of a future persistent mail cache.
+**Current implementation:** credentials use the local encrypted credential store and TLS checks are active. HTML is sanitized and rendered in a constrained iframe; remote images are blocked until enabled for the selected message. Raw HTML and embedded image bytes stay outside model context and chat snapshots. The local workspace database is not encrypted; drafts, explicit reference snapshots and chat answers can contain mail content. This needs to remain visible in product documentation and in the design of a future persistent mail cache.
 
 ## 12. Integration with the OpenVibeDesk assistant
 

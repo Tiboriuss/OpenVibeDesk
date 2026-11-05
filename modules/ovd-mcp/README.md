@@ -13,7 +13,9 @@ Add a server under **Settings → MCP** (currently **Einstellungen → MCP**):
 
 Save, connect, select the required tools, then save their permissions separately. New tools are denied by default. Changing the executable, arguments, working directory or HTTP target clears the saved tool allowlist. Automatic connection at app startup is optional and off by default; saved opt-in connections start in the background. The assistant can prepare public configuration and permissions in the form, but only the user can save them. It cannot save a configuration or grant itself tools.
 
-Bearer tokens, OAuth credentials and configured environment values live in the OS credential store and are write-only from the settings UI. Public configuration, credential-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection. Existing Bearer-token configurations retain their authentication method.
+Bearer tokens, OAuth credentials and configured environment values live in the local encrypted credential store and are write-only from the settings UI. Public configuration, credential-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection. Existing Bearer-token configurations retain their authentication method.
+
+The vault's key is stored beside the encrypted file under the user profile. This removes normal-use OS password prompts while providing weaker protection than an OS keychain. Upgrading from builds through v0.1.7 needs one-time token/secret reentry and OAuth sign-in; old OS entries are not imported or deleted automatically. Public server configuration is retained, and missing local credentials are not advertised as stored. See [credential storage](../../docs/getting-started.md#credential-storage).
 
 ## OAuth for HTTP servers
 
@@ -40,7 +42,7 @@ For servers supporting dynamic client registration, leave the optional client fi
 | **Autorisierungs-URL** | Optional authorization endpoint for browser sign-in. Leave empty to use discovery. |
 | **Token-URL** | Optional endpoint for code exchange and token renewal. Leave empty to use discovery. |
 | **Client-Anmeldung** | **Automatisch** keeps SDK selection from the server metadata. For a registered client, explicitly select `client_secret_post` or `client_secret_basic` when the provider requires that method. |
-| **Client-Secret** | Only when the provider requires one. It is stored securely, never returned to the UI, and a blank field preserves it. |
+| **Client-Secret** | Only when the provider requires one. It is stored in the local encrypted vault, never returned to the UI, and a blank field preserves it. |
 | **Scopes** | Optional additional provider scopes, separated by spaces (for example `offline_access` when required for refresh). Server-required and previously granted scopes are retained alongside them. |
 | **Lokaler Rückruf-Port** | Default `43189`. The redirect URI is `http://127.0.0.1:43189/oauth/callback`; substitute your saved port when registering it with the provider. |
 
@@ -82,7 +84,7 @@ Disconnecting, disabling the module or quitting closes client connections and lo
 
 ## Implementation map
 
-- [`backend/store.ts`](backend/store.ts): public configuration and OS credential-store access.
+- [`backend/store.ts`](backend/store.ts): public configuration and local encrypted credential-store access.
 - [`backend/service.ts`](backend/service.ts): MCP clients, transport lifecycle, validation, the shared call service and dynamic tool provider.
 - [`backend/oauth.ts`](backend/oauth.ts): OAuth discovery, browser authorization, loopback callbacks and issuer-bound token handling.
 - [`backend/capabilities.ts`](backend/capabilities.ts) and [`backend/index.ts`](backend/index.ts): validated management for the UI and assistant.

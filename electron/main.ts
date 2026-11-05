@@ -8,6 +8,9 @@ import { createHash } from 'node:crypto';
 import { applyUiAction, initialState, uiActionSchema } from '../shared/actions';
 import { initializeStore, loadState, saveState } from './store';
 import { settingsPatchSchema, normalizeSettings } from '../shared/settings';
+import { diagnosticsSettingsSchema } from '../shared/diagnostics';
+import { initializeDiagnostics, setDiagnosticsEnabled, getDiagnosticsStatus, exportDiagnostics, clearDiagnostics } from './diagnostics';
+import { initializeCredentialStore } from './credential-store';
 import { normalizeSessions, createSession, selectSession, renameSession, forkSession, updateSessionMessages, snapshotSessionReference } from '../shared/sessions';
 import { defaultAiConfig, normalizeAiConfig, parseAiInput, chatOptionsSchema, getKey, setKey, deleteKey, listModels, makeMessages } from './ai';
 import { initializeChatGptAuth, chatGptAuth } from './chatgpt-auth';
@@ -349,12 +352,40 @@ async function persistSettingsPatch(input: unknown): Promise<void> {
   const settings = { ...currentState.settings, ...patch };
   // Publish only after successful persistence, so all windows retain saved values on failure.
   await saveState({ ...currentState, settings });
+  if (patch.diagnosticsEnabled !== undefined) await setDiagnosticsEnabled(patch.diagnosticsEnabled);
   commit({ ...currentState, settings });
   dock?.setAlwaysOnTop(settings.dockAlwaysOnTop);
 }
 function changeSettings(input: unknown, _context: OperationContext): Promise<void> {
   const patch = settingsPatchSchema.parse(input);
   return queueSettingsWrite(() => persistSettingsPatch(patch));
+}
+async function updateDiagnosticSettings(input: unknown, context: OperationContext) {
+  const { enabled } = diagnosticsSettingsSchema.parse(input);
+  await changeSettings({ diagnosticsEnabled: enabled }, context);
+  return getDiagnosticsStatus();
+}
+async function exportDiagnosticLogs(context: OperationContext) {
+  const options: Electron.SaveDialogOptions = { title: 'Diagnoseprotokoll exportieren', defaultPath: path.join(app.getPath('downloads'), `OpenVibeDesk-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), filters: [{ name: 'Diagnoseprotokoll', extensions: ['json'] }], properties: ['createDirectory', 'showOverwriteConfirmation'] };
+  const owner = operationOwner(context);
+  context.signal.throwIfAborted();
+  const selection = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
+  context.signal.throwIfAborted();
+  if (selection.canceled || !selection.filePath) return { cancelled: true };
+  const parent = await fs.realpath(path.dirname(selection.filePath));
+  const destination = path.join(parent, path.basename(selection.filePath));
+  for (const protectedPath of [app.getPath('userData'), app.getAppPath()]) {
+    const resolved = await fs.realpath(protectedPath);
+    const relative = path.relative(resolved, destination);
+    if (relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error('Bitte das Diagnoseprotokoll außerhalb des OVD-Profils und des Programmordners speichern.');
+  }
+  await context.validateOperation?.();
+  return exportDiagnostics(destination);
+}
+async function clearDiagnosticLogs(context: OperationContext) {
+  if (context.origin === 'agent' && !await confirmCapability(context, 'Diagnoseprotokoll löschen?', 'Die lokal gespeicherten Diagnoseeinträge werden entfernt. Die Logging-Einstellung bleibt erhalten.')) return { ...await getDiagnosticsStatus(), cancelled: true, cleared: false };
+  await context.validateOperation?.();
+  return { ...await clearDiagnostics(), cleared: true };
 }
 async function confirmQuit(context: OperationContext) {
     if (await confirmCapability(context, 'OpenVibeDesk beenden?', 'Alle Workspace-Fenster werden geschlossen. Dein aktueller Zustand wird gespeichert.')) { app.quit(); return { quitRequested: true }; }
@@ -497,6 +528,10 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('settings.agent_save', args => prepareSettings('agent', args));
   workspaceCapabilities.register('settings.get', () => currentState.settings);
   workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return currentState.settings; });
+  workspaceCapabilities.register('diagnostics.status', () => getDiagnosticsStatus());
+  workspaceCapabilities.register('diagnostics.update', (args, context) => updateDiagnosticSettings(args, context));
+  workspaceCapabilities.register('diagnostics.export', (_args, context) => exportDiagnosticLogs(context));
+  workspaceCapabilities.register('diagnostics.clear', (_args, context) => clearDiagnosticLogs(context));
   workspaceCapabilities.register('navigation.get', ({ offset = 0, limit = 50 }) => {
     const entries = orderNavigationEntries(getNavigationEntries(moduleHost?.list() ?? []), currentState.settings.navigationOrder);
     const hasMore = offset + limit < entries.length;
@@ -965,10 +1000,10 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'chats.list', 'chats.read', 'settings.get', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
-    const revision = action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'settings.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
+    const revision = action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
     return { args, effect: 'write', resource: { id: `workspace:${action}:${typeof args.sessionId === 'string' ? args.sessionId : ''}`, version: createHash('sha256').update(JSON.stringify(revision ?? null)).digest('hex') } };
   } });
   if (moduleHost.isReady('ovd-mcp')) moduleHost.registerOperationAdapter('ovd-mcp', { prepare(action, args) { return { args, effect: ['mcp.servers', 'mcp.tools', 'mcp.audit'].includes(action) ? 'read' : 'unknown' }; } });
@@ -1015,6 +1050,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await operationJournal.initialize().catch(error => dialog.showErrorBox('Aktionsprotokoll nicht verfügbar', error instanceof Error ? error.message : 'Es wird keine Assistentenaktion gestartet. Die vorhandenen Daten bleiben erhalten.'));
   const loaded = loadState() ?? initialState();
   currentState = normalizeSessions({ ...loaded, settings: normalizeSettings(loaded.settings), agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });
+  await initializeDiagnostics({ dataDirectory: app.getPath('userData'), appVersion: app.getVersion(), enabled: currentState.settings.diagnosticsEnabled === true });
+  await initializeCredentialStore({ dataDirectory: app.getPath('userData') }).catch(() => dialog.showErrorBox('Lokaler Zugangsdaten-Speicher nicht verfügbar', 'Vorhandene Zugangsdaten-Dateien wurden nicht zurückgesetzt. Bitte das OVD-Profil prüfen. Die Einstellungen und Diagnose bleiben erreichbar.'));
   let previousChatGptProfile: string | undefined;
   initializeChatGptAuth({ dataDirectory: path.join(app.getPath('userData'), 'chatgpt'), openExternal: async destination => {
     const url = new URL(destination);
@@ -1028,7 +1065,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
       if (win && !win.isDestroyed()) win.webContents.send('ai:chatgpt:changed', status);
     }
   } });
-  previousChatGptProfile = (await chatGptAuth().status()).activeProfileId;
+  previousChatGptProfile = (await chatGptAuth().status().catch(() => undefined))?.activeProfileId;
   for (const item of currentState.sessions) if (item.messages.some(m => m.status === 'streaming')) currentState = updateSessionMessages(currentState, item.id, messages => messages.map(m => m.status === 'streaming' ? { ...m, status: 'cancelled' } : m));
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   ipcMain.handle('workspace:load', event => { verifySender(event); return currentState; });
@@ -1043,6 +1080,10 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle('workspace:quit', (event) => { verifySender(event); return confirmQuit(uiOperationContext(event)); });
   ipcMain.handle('settings:update', (event, input: unknown) => { verifySender(event); return changeSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('diagnostics:status', event => { verifyPanel(event, ['settings', 'chat']); return getDiagnosticsStatus(); });
+  ipcMain.handle('diagnostics:update', (event, input: unknown) => { verifyPanel(event, ['settings', 'chat']); return updateDiagnosticSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('diagnostics:export', event => { verifyPanel(event, ['settings', 'chat']); return exportDiagnosticLogs(uiOperationContext(event)); });
+  ipcMain.handle('diagnostics:clear', event => { verifyPanel(event, ['settings', 'chat']); return clearDiagnosticLogs(uiOperationContext(event)); });
   ipcMain.on('ai:settings:status', (event, status: unknown) => {
     const settings = panels.get('settings');
     if (!settings || settings.isDestroyed() || event.sender !== settings.webContents || event.senderFrame !== event.sender.mainFrame) return;

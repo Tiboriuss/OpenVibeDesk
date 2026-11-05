@@ -52,6 +52,10 @@ let pendingMailQuery: { result: import('../shared/mail-query').MailQueryResult; 
 ipcRenderer.on('mail:query-results', (_event, payload) => { if (showMailQuery) showMailQuery(payload); else pendingMailQuery = payload; });
 
 const api: WorkspaceApi = {
+  getDiagnosticsStatus: () => ipcRenderer.invoke('diagnostics:status'),
+  updateDiagnostics: input => ipcRenderer.invoke('diagnostics:update', input),
+  exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
+  clearDiagnostics: () => ipcRenderer.invoke('diagnostics:clear'),
   mcpListServers: () => ipcRenderer.invoke('mcp:servers:list'),
   mcpSaveServer: input => ipcRenderer.invoke('mcp:servers:save', input),
   mcpRemoveServer: id => ipcRenderer.invoke('mcp:servers:remove', id),

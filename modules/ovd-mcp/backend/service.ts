@@ -208,7 +208,7 @@ export class McpService {
       this.audit(server, 'sign_out', 'completed', start);
       return { serverId: id, signedOut: true };
     } catch {
-      const error = 'Die lokale OAuth-Anmeldung konnte nicht vollständig entfernt werden. Den sicheren Zugangsdaten-Speicher prüfen und die Anmeldung erneut zurücksetzen.';
+      const error = 'Die lokale OAuth-Anmeldung konnte nicht vollständig entfernt werden. Den lokalen Zugangsdaten-Speicher prüfen und die Anmeldung erneut zurücksetzen.';
       this.oauthStates.set(id, { status: 'error', error }); this.audit(server, 'sign_out', 'failed', start); throw new Error(error);
     } finally { this.changing.delete(id); this.host.changed(); }
   }

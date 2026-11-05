@@ -1,12 +1,12 @@
 import { isIP } from 'node:net';
 import { ImapFlow, type MessageAddressObject, type MessageStructureObject, type FetchMessageObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from '../../../electron/credential-store';
 import { z } from 'zod';
 import type { ImapPageCursor } from '../../../shared/mail';
 import { DEFAULT_MAIL_POLL_INTERVAL, mailPreferenceFields } from '../../../shared/mail-preferences';
 
-/** Passwords are held in the system credential store, never in these account records. */
+/** Passwords are held in the local encrypted credential store, never in these account records. */
 export type MailAccountConfig = {
   id: string; name: string; email: string; host: string; port: number;
   security: 'tls' | 'starttls'; username: string;
@@ -77,26 +77,26 @@ export function validateMailAccount(input: unknown): MailAccountInput {
   return result.data;
 }
 
-function accountEntry(id: string): AsyncEntry {
+function accountEntry(id: string) {
   if (!z.uuid().safeParse(id).success) throw new Error('Ungültige Konto-ID.');
-  return new AsyncEntry(PASSWORD_SERVICE, id, { linux: { store: 'secret-service' } });
+  return localCredentialEntry(PASSWORD_SERVICE, id);
 }
 export async function saveMailPassword(id: string, password: string): Promise<void> {
   if (typeof password !== 'string' || !password.length || password.length > 4096) throw new Error('Bitte ein gültiges Passwort eingeben.');
-  try { await accountEntry(id).setPassword(password); } catch { throw new Error('Das Mail-Passwort konnte nicht sicher gespeichert werden.'); }
+  try { await accountEntry(id).setPassword(password); } catch { throw new Error('Das Mail-Passwort konnte nicht lokal gespeichert werden.'); }
 }
 export async function deleteMailPassword(id: string): Promise<void> {
   try { await accountEntry(id).deletePassword(); } catch { throw new Error('Das Mail-Passwort konnte nicht gelöscht werden.'); }
 }
 export async function readMailPassword(id: string): Promise<string | null> {
   try { return await accountEntry(id).getPassword(); }
-  catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); }
+  catch { throw new Error('Der lokale Zugangsdaten-Speicher ist nicht verfügbar.'); }
 }
 async function storedPassword(id: string): Promise<string> {
   try {
     const password = await accountEntry(id).getPassword();
     if (password) return password;
-  } catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); }
+  } catch { throw new Error('Der lokale Zugangsdaten-Speicher ist nicht verfügbar.'); }
   throw new Error('Für dieses Konto ist kein IMAP-Passwort gespeichert.');
 }
 

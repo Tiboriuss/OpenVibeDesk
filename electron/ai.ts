@@ -1,7 +1,7 @@
 import { memoryContext, memoryContextInstruction } from './memory-context';
 import type { MemoryRecallSnapshot } from '../shared/module-memory';
 import { createHash } from 'node:crypto';
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from './credential-store';
 import { z } from 'zod';
 import type { AiConfig, ChatMessage, ChatOptions, ConfirmationMode, Mail, AgentSettings } from '../shared/model';
 import { normalizeAgentSettings } from '../shared/agent-settings';
@@ -77,13 +77,13 @@ export function parseAiInput(value: unknown) {
   return { ...input, provider, protocol, authMode: input.authMode ?? (provider === 'azure' ? 'api-key' as const : 'bearer' as const), ...(apiVersion ? { apiVersion } : { apiVersion: undefined }), baseUrl: url.toString().replace(/\/+$/, '') };
 }
 type KeyIdentity = string | Pick<AiConfig, 'baseUrl' | 'authMode' | 'provider'>;
-function entry(connection: KeyIdentity): AsyncEntry {
+function entry(connection: KeyIdentity) {
   const identity = typeof connection === 'string' ? connection : `${connection.baseUrl}${connection.authMode === 'api-key' ? '#auth=api-key' : ''}`;
   const account = createHash('sha256').update(identity).digest('hex');
-  return new AsyncEntry('Open Workspace AI', account, { linux: { store: 'secret-service' } });
+  return localCredentialEntry('Open Workspace AI', account);
 }
-export async function getKey(connection: KeyIdentity): Promise<string | null> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return null; try { return await entry(connection).getPassword(); } catch { throw new Error('Der sichere Zugangsdaten-Speicher ist nicht verfügbar.'); } }
-export async function setKey(connection: KeyIdentity, key: string): Promise<void> { try { await entry(connection).setPassword(key); } catch { throw new Error('Der API-Schlüssel konnte nicht sicher gespeichert werden.'); } }
+export async function getKey(connection: KeyIdentity): Promise<string | null> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return null; try { return await entry(connection).getPassword(); } catch { throw new Error('Der lokale Zugangsdaten-Speicher ist nicht verfügbar.'); } }
+export async function setKey(connection: KeyIdentity, key: string): Promise<void> { try { await entry(connection).setPassword(key); } catch { throw new Error('Der API-Schlüssel konnte nicht lokal gespeichert werden.'); } }
 export async function deleteKey(connection: KeyIdentity): Promise<void> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return; try { await entry(connection).deletePassword(); } catch { throw new Error('Der API-Schlüssel konnte nicht gelöscht werden.'); } }
 
 type ProviderMessage = { role: 'system' | 'user' | 'assistant'; content: string };

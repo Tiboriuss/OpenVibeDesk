@@ -454,7 +454,7 @@ async function saveMailAccount(input: unknown, context: OperationContext) {
       context.signal.throwIfAborted();
       const oldPassword = password ? await readMailPassword(account.id) : null;
       context.signal.throwIfAborted();
-      // Pause before changing credentials: pending keyring reads must not connect to an old endpoint.
+      // Pause before changing credentials: pending credential reads must not connect to an old endpoint.
       invalidateMailAccountConnections(account.id, true); paused = true;
       invalidateAccountCache(account.id);
       try {

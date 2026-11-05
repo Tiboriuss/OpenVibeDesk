@@ -82,7 +82,7 @@ Reload the catalog to check for updates, then select **Aktualisieren** for the c
 
 ### Private modules for your company
 
-Use the same settings to add a private company repository alongside public sources. A repository access token is entered locally and kept in the OS credential store. An IT service provider can publish a prebuilt ERP or order-management module for its customers without putting that integration in the OVD core. The repository supplies the module list and packages; each module owns its business functions, interface and Assistant integration.
+Use the same settings to add a private company repository alongside public sources. A repository access token is entered locally and kept in the local encrypted credential store. An IT service provider can publish a prebuilt ERP or order-management module for its customers without putting that integration in the OVD core. The repository supplies the module list and packages; each module owns its business functions, interface and Assistant integration.
 
 Start with the [module authoring contract](CONTRIBUTING.md#building-modules), the [Notes example](examples/notes-module/README.md), and the [publishing guide](docs/module-repositories.md#publish-a-module). Packages are checked before installation, and third-party code requires local approval. Approved backends run with the user's OS rights; they are not sandboxed plugins.
 
@@ -96,7 +96,7 @@ The Assistant can also inspect module sources, refresh catalogs, find updates an
 
 Installer downloads appear on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) after the release build finishes: a macOS DMG for Apple Silicon, a macOS DMG for Intel, and a Windows x64 installer. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. The operating system may therefore warn or require approval before opening them; see the [installation guide](docs/getting-started.md#install-or-update-the-app).
 
-To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and OS-stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Updates are installed manually; there is no in-app automatic updater yet.
+To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and locally stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Updates are installed manually; there is no in-app automatic updater yet.
 
 ## Run locally
 
@@ -124,7 +124,7 @@ The build targets do not imply verified cross-compilation, signing, or productio
 
 ## Data and current limitations
 
-- **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. API keys, mail passwords, and MCP secrets use the operating system's credential store.
+- **Local storage:** Settings, drafts, chats, and prepared outgoing message copies are stored on the computer. The workspace database and prepared message copies are currently **unencrypted**. Built-in credentials use an AES-256-GCM local vault with its key beside it, avoiding repeated OS password prompts while providing weaker protection than an OS keychain. Updating from an OS-store build needs one-time credential reentry/sign-in; see [credential storage](docs/getting-started.md#credential-storage).
 - **AI provider:** Messages, selected references, and requested tool results are sent to the configured provider. A local desktop app can use either a local or remote model endpoint.
 - **Answer reformulation:** Uses saved snapshots and bounded result evidence in a text-only branch, even with **Without confirmations** enabled. Older answers without usable evidence cannot be reformulated safely. Editing and sending a request starts a separate new execution. See [the chat workflow](docs/getting-started.md#reformulate-an-answer).
 - **Task recovery:** A separate unencrypted local journal records agent actions before dispatch and their known outcomes. Explicit continuation reuses completed results, restricts retries to eligible original steps, and blocks unknown effects until a module can reconcile them. New unplanned changes require a new request; restarting the app never resumes actions automatically. See [task continuation](docs/getting-started.md#continue-an-interrupted-task).

@@ -34,7 +34,7 @@ For a newer version, finish running work, quit OVD, and run the new installer us
 
 These are manual installer upgrades. OVD currently has no automatic update checker or in-app installer. Application releases and updates to optional modules are separate: manage module updates under **Settings → Modules**.
 
-App updates retain the `ai-workspace` user profile and existing OS credential entries. See [Local data](#local-data) for storage locations. Do not delete that profile when replacing the app. While OVD is still an early version, keep a backup of important local data before changing versions; downgrading to an older version is not an established recovery method.
+App updates retain the `ai-workspace` user profile. Existing legacy OS credential entries are left untouched, but this checkout uses local credential files and does not import those entries automatically. The first update from an OS-store build needs one-time password/key reentry and OAuth sign-in; see [Credential storage](#credential-storage). Do not delete the profile when replacing the app. While OVD is still an early version, keep a backup of important local data before changing versions; downgrading to an older version is not an established recovery method.
 
 ## Install the development tools
 
@@ -80,7 +80,7 @@ The interface currently uses primarily German labels. The names below pair the E
 
 See [AI providers](ai-providers.md) for complete setup, Azure v1/classic endpoint examples and direct ChatGPT sign-in. ChatGPT needs no additional program or API key. Streaming is required for chat. Workspace control additionally requires complete tool calls. Local loopback HTTP is permitted; remote HTTP providers require HTTPS. If a model does not support tools, disable workspace tools to use ordinary chat.
 
-API keys and ChatGPT OAuth credentials use the OS credential store. For ChatGPT, an identity-only sign-in is distinct from permission to use the plan; OVD shows the actual grant and provides account selection and usage controls. The same Workspace permissions and operation safeguards apply to every connection.
+API keys and ChatGPT OAuth credentials use the local encrypted credential store. For ChatGPT, an identity-only sign-in is distinct from permission to use the plan; OVD shows the actual grant and provides account selection and usage controls. The same Workspace permissions and operation safeguards apply to every connection.
 
 ### Reformulate an answer
 
@@ -128,7 +128,7 @@ Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. 
 
 1. Expand **Modulquellen**, then **Repository hinzufügen**.
 2. Enter a name and repository URL. Start with the public [OpenVibeDesk-Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules), which currently offers Notes and Skill Library. You can add multiple sources, including private company repositories or direct HTTPS JSON catalogs.
-3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the OS credential store. Save the source with **Quelle hinzufügen**.
+3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the local encrypted credential store. Save the source with **Quelle hinzufügen**.
 4. Expand **Modulkatalog** and select **Katalog laden**. Search or filter by source, then choose **Installieren** beside a module.
 5. Select **Freigeben & aktivieren**, review its declared access and approve the downloaded code. Its views, settings and Assistant tools are registered without restarting the app.
 
@@ -170,11 +170,21 @@ Important entries include:
 | `operation-journal/operations.json` | Durable agent run/action records, ordinary frozen arguments and bounded redacted results; currently unencrypted. Preserve it to retain recovery guards. |
 | `modules/<module-folder>/module.json` | Custom module discovery. |
 | `module-settings.json` | Module approvals and disabled module IDs. |
-| `module-repositories.json` | Source URLs and installation receipts; access tokens are stored separately in the OS credential store. |
+| `module-repositories.json` | Source URLs and installation receipts; access tokens are stored separately in the local encrypted credential store. |
 | `module-data/<moduleId>/` | Module-owned local data. |
-| `chatgpt/accounts.json` | Stable installation identity, saved ChatGPT registration/account metadata and selected profile; OAuth tokens remain in the OS credential store. |
+| `chatgpt/accounts.json` | Stable installation identity, saved ChatGPT registration/account metadata and selected profile; OAuth tokens remain in the local encrypted credential store. |
+| `credentials/vault.json` | Authenticated AES-256-GCM encrypted credentials for built-in services. |
+| `credentials/local.key` | Local encryption key; retain it with the vault when backing up the profile. |
 
-Other account and configuration files may also live here. Credentials are managed separately by the OS credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
+Other account and configuration files may also live here. Credentials are managed separately by the local encrypted credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
+
+### Credential storage
+
+The current checkout stores API keys, IMAP/SMTP passwords, repository tokens, ChatGPT credentials, and MCP secrets in `credentials/vault.json`, encrypted with AES-256-GCM. Its randomly generated key is stored beside it in `credentials/local.key`. Where POSIX permissions are supported, the directory is restricted to `0700` and both files to `0600`; Windows relies on the user profile's normal access controls. There is no master password or normal-use OS credential-store lookup, so this storage does not trigger repeated macOS Keychain password prompts.
+
+This is deliberately weaker than OS-keychain protection: a program or person able to read both files as your OS user can decrypt the credentials. Keep the vault and key together in a private backup, outside a public repository or support-log export. The vault has authenticated contents and serialized atomic writes; an unreadable, corrupted or missing-key store fails visibly without replacing its existing data.
+
+Releases through **v0.1.7** used the OS credential store. On the first update to this checkout, reenter provider keys, mail passwords and private-repository tokens in their existing settings, and sign in to ChatGPT/MCP OAuth again. Public account settings, registrations, chats, drafts and module data remain. Old OS entries are neither read automatically nor deleted; there is no automatic credential migration. A normal restart or later installer replacement retains the new local vault, so these credentials do not need repeated reentry. Downgrading is not a credential migration path.
 
 ## Troubleshooting
 
@@ -182,6 +192,7 @@ Other account and configuration files may also live here. Credentials are manage
 | --- | --- |
 | `pnpm: command not found` | Follow [development-tool installation](#install-the-development-tools) and check your terminal's `PATH`. |
 | The UI still shows the old build | Exit the running app, then run `pnpm dev` again. |
+| An AI request fails on another computer | Enable and export a local [diagnostic report](diagnostics.md) on that computer before reporting the failure. |
 | An agent cannot find module tools | Check the module's enabled/approval state, provider tool-calling support, and configured agent limits. |
 | Mail can be read but not sent | Check and save the account's SMTP settings independently of IMAP. |
 | A module does not appear | Check its `module.json`, runtime files, compatibility, and approval status; see the [module contract](../CONTRIBUTING.md#building-modules). |

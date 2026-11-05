@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X } from 'lucide-react';
+import { Activity, Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X } from 'lucide-react';
 import { AiSettings } from './AiSettings';
 import { AgentSettings } from './AgentSettings';
+import { DiagnosticsSettings } from './DiagnosticsSettings';
 import { NavigationOrderSettings } from './NavigationOrderSettings';
 import { settingsCategories, settingsEntries, matchesSettingsEntry, type SettingsCategoryId, type SettingsCategory, type SettingsEntry } from './settings-registry';
 import { defaultSettings } from '../shared/settings';
@@ -16,7 +17,7 @@ import type { ModuleEventStatus } from '../shared/modules';
 
 type GroupId = 'display' | 'dock';
 const groupStorageKey = 'openvibedesk.settings.groups';
-const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, modules: Package };
+const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, diagnostics: Activity, modules: Package };
 
 function initialGroups(): Record<GroupId, boolean> {
   try {
@@ -170,6 +171,10 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
           <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="dock-top">Dock im Vordergrund</label><p>Das Dock über anderen Fenstern anzeigen. Standard: Ein.</p></div><input id="dock-top" className="setting-toggle" type="checkbox" checked={settings.dockAlwaysOnTop} onChange={event => onUpdate({ dockAlwaysOnTop: event.target.checked })} /></div>{settings.dockAlwaysOnTop !== defaultSettings.dockAlwaysOnTop && <button type="button" className="settings-reset" onClick={() => onUpdate({ dockAlwaysOnTop: defaultSettings.dockAlwaysOnTop })}><RotateCcw size={13} /> Auf Standard zurücksetzen</button>}</div>
         </details>
       </section>
+      <section hidden={!visible('diagnostics')} aria-label="Diagnose">
+        {searching && <h3 className="settings-result-category">Diagnose</h3>}
+        <DiagnosticsSettings active={visible('diagnostics')} enabled={settings.diagnosticsEnabled ?? false} searchQuery={search} />
+      </section>
       <section hidden={!visible('modules')} aria-label="Module" className="module-management">
         {searching && <h3 className="settings-result-category">Module</h3>}
         {(moduleError || moduleState.error) && <p className="mail-account-feedback error" role="alert">{moduleError || moduleState.error}</p>}
@@ -185,7 +190,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         {searching && <h3 className="settings-result-category">{item.title}</h3>}
         <item.Component preparation={preparation} searchQuery={search} />
       </section>)}
-      {(!searching || anyResults) && <p className="settings-save-note">Darstellung, Dock und Navigationsreihenfolge werden sofort gespeichert. KI-, Agent- und Verbindungseinstellungen speicherst du im jeweiligen Bereich.</p>}
+      {(!searching || anyResults) && <p className="settings-save-note">Darstellung, Diagnose, Dock und Navigationsreihenfolge werden sofort gespeichert. KI-, Agent- und Verbindungseinstellungen speicherst du im jeweiligen Bereich.</p>}
     </main>
   </div>;
 }

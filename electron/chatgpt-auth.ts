@@ -1,4 +1,4 @@
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from './credential-store';
 import { createHash, createPublicKey, randomBytes, randomUUID, timingSafeEqual, verify, type JsonWebKey } from 'node:crypto';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import { promises as fs } from 'node:fs';
@@ -82,10 +82,10 @@ export class ChatGptAuthService {
   constructor(private readonly options: ChatGptAuthOptions) {
     this.fetcher = options.fetch ?? fetch;
     const prefix = createHash('sha256').update(path.resolve(options.dataDirectory)).digest('hex');
-    const entry = (key: string) => new AsyncEntry('OpenVibeDesk ChatGPT', `${prefix}:${key}`, { linux: { store: 'secret-service' } });
+    const entry = (key: string) => localCredentialEntry('OpenVibeDesk ChatGPT', `${prefix}:${key}`);
     this.secrets = options.secrets ?? {
-      async get(key) { try { return await entry(key).getPassword(); } catch { throw new ChatGptAuthError('Der sichere ChatGPT-Zugangsdaten-Speicher ist nicht verfügbar.'); } },
-      async set(key, value) { try { await entry(key).setPassword(value); } catch { throw new ChatGptAuthError('Die ChatGPT-Anmeldung konnte nicht sicher gespeichert werden.'); } },
+      async get(key) { try { return await entry(key).getPassword(); } catch { throw new ChatGptAuthError('Der lokale ChatGPT-Zugangsdaten-Speicher ist nicht verfügbar.'); } },
+      async set(key, value) { try { await entry(key).setPassword(value); } catch { throw new ChatGptAuthError('Die ChatGPT-Anmeldung konnte nicht lokal gespeichert werden.'); } },
       async delete(key) { try { await entry(key).deletePassword(); } catch { throw new ChatGptAuthError('Die gespeicherte ChatGPT-Anmeldung konnte nicht entfernt werden.'); } }
     };
   }
@@ -379,7 +379,7 @@ export class ChatGptAuthService {
           const current = this.registry!.profiles.find(item => item.id === profile.id);
           if (!current || current.credentialKey !== profile.credentialKey || this.blocked.has(profile.id)) throw new DOMException('ChatGPT-Anmeldung wurde ersetzt.', 'AbortError');
           try { await this.secrets.set(profile.credentialKey!, JSON.stringify(credentials)); }
-          catch { throw new ChatGptAuthError('Die erneuerte ChatGPT-Anmeldung konnte nicht sicher gespeichert werden. Bitte erneut anmelden.'); }
+          catch { throw new ChatGptAuthError('Die erneuerte ChatGPT-Anmeldung konnte nicht lokal gespeichert werden. Bitte erneut anmelden.'); }
           const { refreshPending: _intent, ...complete } = current;
           await this.persist({ ...this.registry!, profiles: this.registry!.profiles.map(item => item.id === profile.id ? complete : item) });
         });

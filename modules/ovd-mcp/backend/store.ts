@@ -1,4 +1,4 @@
-import { AsyncEntry } from '@napi-rs/keyring';
+import { localCredentialEntry } from '../../../electron/credential-store';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -16,15 +16,15 @@ const storedServerSchema = z.object({
 }).strict().transform(value => ({ ...value, authMode: value.authMode ?? (value.transport === 'http' && value.hasToken ? 'bearer' as const : 'none' as const) }));
 const storeSchema = z.object({ version: z.literal(1), servers: z.array(storedServerSchema).max(100) }).strict();
 export interface McpSecretStore { get(id: string, key: string): Promise<string | null>; set(id: string, key: string, value: string): Promise<void>; delete(id: string, key: string): Promise<void>; }
-function entry(id: string, key: string) { return new AsyncEntry('OpenVibeDesk MCP', `${id}:${key}`, { linux: { store: 'secret-service' } }); }
-const rawKeychainSecrets: McpSecretStore = {
-  async get(id, key) { try { return await entry(id, key).getPassword(); } catch { throw new Error('Der sichere MCP-Zugangsdaten-Speicher ist nicht verfügbar.'); } },
-  async set(id, key, value) { try { await entry(id, key).setPassword(value); } catch { throw new Error('MCP-Zugangsdaten konnten nicht sicher gespeichert werden.'); } },
+function entry(id: string, key: string) { return localCredentialEntry('OpenVibeDesk MCP', `${id}:${key}`); }
+const rawLocalSecrets: McpSecretStore = {
+  async get(id, key) { try { return await entry(id, key).getPassword(); } catch { throw new Error('Der lokale MCP-Zugangsdaten-Speicher ist nicht verfügbar.'); } },
+  async set(id, key, value) { try { await entry(id, key).setPassword(value); } catch { throw new Error('MCP-Zugangsdaten konnten nicht lokal gespeichert werden.'); } },
   async delete(id, key) { try { await entry(id, key).deletePassword(); } catch { throw new Error('MCP-Zugangsdaten konnten nicht entfernt werden.'); } }
 };
 const chunkPrefix = 'OVD-MCP-CHUNKS-v1:';
 const chunkManifestSchema = z.object({ generation: z.string().uuid(), count: z.number().int().min(1).max(96), hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-/** Windows credential blobs are small; OAuth state remains entirely in the OS store. */
+/** Compatibility adapter for secret stores with small entry limits; local storage needs no chunking. */
 export function chunkedOAuthSecrets(raw: McpSecretStore): McpSecretStore {
   const manifest = (value: string | null) => value?.startsWith(chunkPrefix) ? chunkManifestSchema.parse(JSON.parse(value.slice(chunkPrefix.length))) : undefined;
   const chunkKey = (key: string, generation: string, index: number) => `${key}:chunk:${generation}:${index}`;
@@ -73,7 +73,7 @@ export function chunkedOAuthSecrets(raw: McpSecretStore): McpSecretStore {
     }
   };
 }
-export const keychainSecrets = chunkedOAuthSecrets(rawKeychainSecrets);
+export const localSecrets = rawLocalSecrets;
 export function validateMcpUrl(raw: string): string {
   let url: URL;
   try { url = new URL(raw); } catch { throw new Error('Bitte eine gültige MCP-URL eingeben.'); }
@@ -94,10 +94,18 @@ export class McpConfigStore {
   private servers: McpServerConfig[] = [];
   private available = true;
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(private readonly dataRoot: string, readonly secrets: McpSecretStore = keychainSecrets) {}
+  constructor(private readonly dataRoot: string, readonly secrets: McpSecretStore = localSecrets) {}
   async initialize() {
     await fs.mkdir(this.dataRoot, { recursive: true });
-    try { const value = storeSchema.parse(JSON.parse(await fs.readFile(path.join(this.dataRoot, 'servers.json'), 'utf8'))); this.servers = value.servers; }
+    try {
+      const value = storeSchema.parse(JSON.parse(await fs.readFile(path.join(this.dataRoot, 'servers.json'), 'utf8')));
+      this.servers = await Promise.all(value.servers.map(async server => ({
+        ...server,
+        hasToken: server.hasToken && !!await this.secrets.get(server.id, 'token'),
+        hasOAuthClientSecret: server.hasOAuthClientSecret && !!await this.secrets.get(server.id, 'oauth-client-secret'),
+        hasOAuthTokens: server.hasOAuthTokens && !!await this.secrets.get(server.id, 'oauth')
+      })));
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.available = false; }
   }
   list(): McpServerConfig[] { return this.servers.map(server => ({ ...server, args: [...server.args], envKeys: [...server.envKeys], allowedTools: [...server.allowedTools] })); }

@@ -1,6 +1,7 @@
 import type { AiConfig, ChatOptions } from '../shared/model';
 import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
 import { requestResponsesTurn, streamResponsesTurn } from './responses';
+import { beginProviderDiagnostics } from './diagnostics';
 
 export type ToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
 export type ProviderMessage =
@@ -79,6 +80,7 @@ export async function requestCompleteTurn(
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), requestTimeoutMs);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const diagnostics = beginProviderDiagnostics(config, options, 'chat-completions', 'complete', messages.length, tools?.length ?? 0);
   try {
     const headers = providerHeaders(config, key, 'application/json');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
@@ -87,6 +89,7 @@ export async function requestCompleteTurn(
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
       body: JSON.stringify({ model, messages, stream: false, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
     });
+    diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response, 'auch ohne Streaming');
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > 4_000_000) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
@@ -104,6 +107,7 @@ export async function requestCompleteTurn(
     let result: any;
     try { result = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
     catch { throw new Error('Der Endpunkt hat auch ohne Streaming keine gültige JSON-Antwort geliefert.'); }
+    diagnostics.event(result);
     if (result?.error) throw new Error('Der Endpunkt meldet auch ohne Streaming einen Fehler.');
     const choice = result?.choices?.[0];
     if (!choice || typeof choice !== 'object' || (choice.finish_reason !== undefined && choice.finish_reason !== null && typeof choice.finish_reason !== 'string')) throw new Error('Der Endpunkt hat auch ohne Streaming keine gültige Antwort geliefert.');
@@ -131,8 +135,10 @@ export async function requestCompleteTurn(
     const finishReason: string | undefined = choice.finish_reason ?? undefined;
     if (toolCalls.length) validateToolCalls(toolCalls, finishReason, false, tools, 'complete');
     else if (finishReason !== 'stop' || !text.trim()) throw new Error('Der Endpunkt hat auch ohne Streaming keine vollständig abgeschlossene Antwort geliefert.');
+    diagnostics.finish(text.length, toolCalls.length, size);
     return { text, toolCalls };
   } catch (error) {
+    diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat auch ohne Streaming nicht rechtzeitig geantwortet.');
     if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die vollständige'))) throw error;
@@ -163,6 +169,7 @@ export async function streamTurn(
   const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(), requestTimeoutMs); };
   resetTimer();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const diagnostics = beginProviderDiagnostics(config, options, 'chat-completions', 'stream', messages.length, tools?.length ?? 0);
   try {
     const headers = providerHeaders(config, key, 'text/event-stream');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
@@ -171,6 +178,7 @@ export async function streamTurn(
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
       body: JSON.stringify({ model, messages, stream: true, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
     });
+    diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response);
     if (!response.body) throw new Error('Der Endpunkt hat keine Antwort geliefert.');
     reader = response.body.getReader();
@@ -178,7 +186,7 @@ export async function streamTurn(
     let line = '', pendingCR = false, data: string[] = [], eventSize = 0, wireSize = 0;
     let answer = '', complete = false, finishReason: string | undefined;
     const calls = new Map<number, ToolCall>();
-    const invalid = (field: ToolCallField): never => { throw toolCallError('structure', [...calls.values()], finishReason, 'stream', field); };
+    const invalid = (field: ToolCallField): never => { diagnostics.failure('chat_tool_structure_invalid', { field }); throw toolCallError('structure', [...calls.values()], finishReason, 'stream', field); };
     // Some compatible endpoints repeat metadata or send cumulative snapshots.
     // Argument deltas still append verbatim, including repeated characters inside strings.
     function appendMetadata(current: string, part: string): string {
@@ -196,6 +204,7 @@ export async function streamTurn(
       if (value.trim() === '[DONE]') { complete = true; return; }
       let parsed: any;
       try { parsed = JSON.parse(value); } catch { throw new Error('Der Endpunkt hat ungültige Streaming-Daten geliefert.'); }
+      diagnostics.event(parsed);
       if (parsed?.error) throw new Error('Der Endpunkt meldet einen Fehler beim Streaming.');
       const choice = parsed?.choices?.[0];
       if (choice?.finish_reason != null) {
@@ -257,8 +266,10 @@ export async function streamTurn(
     const toolCalls = [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => call);
     if (toolCalls.length) validateToolCalls(toolCalls, finishReason, complete, tools);
     else if (finishReason === 'tool_calls' || !answer.trim()) throw new Error('Der Endpunkt hat keine lesbare Textantwort geliefert.');
+    diagnostics.finish(answer.length, toolCalls.length, wireSize);
     return { text: answer, toolCalls };
   } catch (error) {
+    diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat nicht rechtzeitig geantwortet.');
     if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die Antwort') || error.message.startsWith('Die Streaming-Antwort'))) throw error;
