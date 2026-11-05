@@ -286,7 +286,8 @@ describe('Responses transport', () => {
       { done: { id: reasoningItem.id, type: 'reasoning', summary: [] }, final: reasoningItem },
       { done: { ...reasoningItem, summary: [{ type: 'summary_text', text: 'Synthetic summary' }] }, final: { ...reasoningItem, summary: [{ text: 'Synthetic summary', type: 'summary_text', annotations: [] }] } },
       { done: reasoningItem, final: { ...reasoningItem, encrypted_content: null } },
-      { done: reasoningItem, final: { type: 'reasoning', summary: [] } }
+      { done: reasoningItem, final: { type: 'reasoning', summary: [] } },
+      { done: { ...reasoningItem, status: 'completed', encrypted_content: 'a'.repeat(2552) }, final: { ...reasoningItem, status: 'completed', encrypted_content: 'b'.repeat(2552) } }
     ];
     let current = cases[0], replay: any;
     const server = await serve((req, res) => {
@@ -295,7 +296,12 @@ describe('Responses transport', () => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         if (body.input.some((item: any) => item.type === 'function_call_output')) {
           replay = body.input;
-          res.end(event({ type: 'response.completed', response: { status: 'completed', output: [answerItem] } }));
+          const message = { ...answerItem, id: 'msg_final' };
+          res.end([
+            { type: 'response.output_item.done', output_index: 0, item: current.done },
+            { type: 'response.output_item.done', output_index: 1, item: message },
+            { type: 'response.completed', response: { status: 'completed', output: [current.final, message] } }
+          ].map(event).join(''));
           return;
         }
         res.end([
@@ -319,6 +325,7 @@ describe('Responses transport', () => {
         expect(first.toolCalls).toEqual([{ id: functionItem.call_id, type: 'function', function: { name: functionItem.name, arguments: functionItem.arguments } }]);
         const second = await streamTurn(config, 'synthetic-key', [{ role: 'user', content: 'Read m1' }, { role: 'assistant', content: null, tool_calls: first.toolCalls, responseItems: first.responseItems }, { role: 'tool', tool_call_id: functionItem.call_id, content: '{"subject":"Synthetic"}' }], { tier: 'smart' }, new AbortController().signal, () => {}, tools);
         expect(second.text).toBe('Grüße 😀');
+        expect(second.responseItems?.[0]).toEqual(expectedReasoning);
         expect(replay[1]).toEqual(expectedReasoning);
       }
     } finally { await server.close(); }
@@ -349,7 +356,6 @@ describe('Responses transport', () => {
       [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, id: 'changed_reasoning_id' }, functionItem] } }],
       [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, encrypted_content: 42 }, functionItem] } }],
       [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, encrypted_content: 42 } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }],
-      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, encrypted_content: 'contradictory-continuation' }, functionItem] } }],
       [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, status: 'incomplete' } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }],
       [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, status: 'in_progress' }, functionItem] } }],
       [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, summary: [{ type: 'summary_text', text: 42 }] } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }]

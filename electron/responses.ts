@@ -209,11 +209,10 @@ export async function streamResponsesTurn(
           if (observed.type === 'reasoning') {
             const done = reasoningContinuation(observed.done, diagnostics), completed = reasoningContinuation(final, diagnostics);
             if (JSON.stringify(done.summary) !== JSON.stringify(completed.summary)) return inconsistentOutput('reasoning_summary_changed', { field: 'summary', outputIndex: index, expected: done.summary, actual: completed.summary });
-            if (done.encrypted_content && completed.encrypted_content && done.encrypted_content !== completed.encrypted_content) return inconsistentOutput('reasoning_encrypted_conflict', { field: 'encrypted_content', outputIndex: index, expected: done.encrypted_content, actual: completed.encrypted_content });
-            // Azure can add encrypted continuation data in the terminal response
-            // or omit data already supplied by item.done. Keep known values and
-            // fill only absent fields; never manufacture text or tool arguments.
-            if (done.encrypted_content && !completed.encrypted_content) output[index] = { ...output[index], encrypted_content: done.encrypted_content };
+            // Encrypted continuation data is opaque and can be re-encrypted in
+            // the terminal snapshot. Prefer the validated completed item payload;
+            // use terminal data only when item.done did not supply a value.
+            if (done.encrypted_content) output[index] = { ...output[index], encrypted_content: done.encrypted_content };
           }
           if (observed.type === 'function_call') for (const field of ['call_id', 'name', 'arguments'] as const) if (final[field] !== observed.done[field]) return invalid(field === 'name' ? 'name' : field === 'arguments' ? 'arguments' : 'id', 'completed_function_' + field + '_changed', { outputIndex: index, expected: observed.done[field], actual: final[field] });
         }
