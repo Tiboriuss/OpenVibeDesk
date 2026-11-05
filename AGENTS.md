@@ -12,6 +12,7 @@
 - Support keyboard operation and understandable labels. Clearly communicate saves, immediately applied changes, and errors.
 - Group mail settings by account. Allow prefilled editing of general/IMAP and SMTP configuration, check and save reception and sending separately, and preserve account IDs, drafts, and other unsaved account edits.
 - Preserve unsaved inputs when switching categories, searching, or expanding and collapsing groups. Integrate new settings into the existing structure and search.
+- Optional modules own their behavior and presentation preferences through their settings contributions and shared assistant-accessible services; keep host configuration limited to generic workspace concerns.
 
 # Product principles
 

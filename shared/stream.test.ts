@@ -280,6 +280,50 @@ describe('Responses transport', () => {
     } finally { await server.close(); }
   });
 
+  it('merges late Azure reasoning metadata without losing stateless tool replay', async () => {
+    const cases = [
+      { done: { ...reasoningItem, encrypted_content: null }, final: { id: reasoningItem.id, type: 'reasoning', summary: [] } },
+      { done: { id: reasoningItem.id, type: 'reasoning', summary: [] }, final: reasoningItem },
+      { done: { ...reasoningItem, summary: [{ type: 'summary_text', text: 'Synthetic summary' }] }, final: { ...reasoningItem, summary: [{ text: 'Synthetic summary', type: 'summary_text', annotations: [] }] } },
+      { done: reasoningItem, final: { ...reasoningItem, encrypted_content: null } },
+      { done: reasoningItem, final: { type: 'reasoning', summary: [] } }
+    ];
+    let current = cases[0], replay: any;
+    const server = await serve((req, res) => {
+      const chunks: Buffer[] = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString());
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        if (body.input.some((item: any) => item.type === 'function_call_output')) {
+          replay = body.input;
+          res.end(event({ type: 'response.completed', response: { status: 'completed', output: [answerItem] } }));
+          return;
+        }
+        res.end([
+          { type: 'response.output_item.added', output_index: 0, item: { id: reasoningItem.id, type: 'reasoning', summary: [] } },
+          { type: 'response.output_item.done', output_index: 0, item: current.done },
+          { type: 'response.output_item.added', output_index: 1, item: { ...functionItem, arguments: '', status: 'in_progress' } },
+          { type: 'response.function_call_arguments.delta', output_index: 1, item_id: functionItem.id, delta: functionItem.arguments },
+          { type: 'response.function_call_arguments.done', output_index: 1, item_id: functionItem.id, arguments: functionItem.arguments },
+          { type: 'response.output_item.done', output_index: 1, item: functionItem },
+          { type: 'response.completed', response: { status: 'completed', output: [current.final, functionItem], error: null, incomplete_details: null } }
+        ].map(event).join(''));
+      });
+    });
+    const config: AiConfig = { ...server.config, provider: 'azure', protocol: 'responses', authMode: 'api-key' };
+    try {
+      for (current of cases) {
+        const first = await streamTurn(config, 'synthetic-key', [{ role: 'user', content: 'Read m1' }], { tier: 'smart' }, new AbortController().signal, () => {}, tools);
+        const encrypted = 'encrypted_content' in current.done && current.done.encrypted_content || 'encrypted_content' in current.final && current.final.encrypted_content;
+        const expectedReasoning = { type: 'reasoning', summary: current.final.summary.map(part => ({ type: part.type, text: part.text })), id: reasoningItem.id, ...(encrypted ? { encrypted_content: encrypted } : {}) };
+        expect(first.responseItems?.[0]).toEqual(expectedReasoning);
+        expect(first.toolCalls).toEqual([{ id: functionItem.call_id, type: 'function', function: { name: functionItem.name, arguments: functionItem.arguments } }]);
+        const second = await streamTurn(config, 'synthetic-key', [{ role: 'user', content: 'Read m1' }, { role: 'assistant', content: null, tool_calls: first.toolCalls, responseItems: first.responseItems }, { role: 'tool', tool_call_id: functionItem.call_id, content: '{"subject":"Synthetic"}' }], { tier: 'smart' }, new AbortController().signal, () => {}, tools);
+        expect(second.text).toBe('Grüße 😀');
+        expect(replay[1]).toEqual(expectedReasoning);
+      }
+    } finally { await server.close(); }
+  });
+
   it('never accepts partial, contradictory or unvalidated item snapshots as completed output', async () => {
     const added = { type: 'response.output_item.added', output_index: 0, item: { ...functionItem, arguments: '', status: 'in_progress' } };
     const done = { type: 'response.output_item.done', output_index: 0, item: functionItem };
@@ -300,7 +344,15 @@ describe('Responses transport', () => {
       [{ ...done, item: { ...functionItem, name: 'unoffered_tool' } }, completed],
       [added, { type: 'response.function_call_arguments.delta', output_index: 0, item_id: functionItem.id, delta: '{"emailId":"different' }, done, completed],
       [done, { ...completed, response: { status: 'completed', output: [{ ...functionItem, arguments: '{"emailId":"changed"}' }] } }],
-      [{ type: 'response.output_item.done', output_index: 0, item: message }, { ...completed, response: { status: 'completed', output: [{ ...message, content: [{ type: 'output_text', text: 'Changed after completion' }] }] } }]
+      [{ type: 'response.output_item.done', output_index: 0, item: message }, { ...completed, response: { status: 'completed', output: [{ ...message, content: [{ type: 'output_text', text: 'Changed after completion' }] }] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, summary: [{ type: 'summary_text', text: 'Changed after completion' }] }, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, id: 'changed_reasoning_id' }, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, encrypted_content: 42 }, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, encrypted_content: 42 } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, encrypted_content: 'contradictory-continuation' }, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, status: 'incomplete' } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: reasoningItem }, { ...completed, response: { status: 'completed', output: [{ ...reasoningItem, status: 'in_progress' }, functionItem] } }],
+      [{ type: 'response.output_item.done', output_index: 0, item: { ...reasoningItem, summary: [{ type: 'summary_text', text: 42 }] } }, { ...completed, response: { status: 'completed', output: [reasoningItem, functionItem] } }]
     ];
     let events: unknown[] = [];
     const server = await serve((_req, res) => { res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.end(events.map(event).join('') + 'data: [DONE]\n\n'); });

@@ -4,7 +4,7 @@ import { ChatMarkdown } from './ChatMarkdown';
 import type { ChatMessage, EmailReferenceSummary, WorkspaceState } from '../shared/model';
 import type { OperationRunSummary } from '../shared/operations';
 import type { ChatGptStatus } from '../shared/chatgpt';
-import { normalizeMemoryRecallSnapshot, type MemoryRecallSnapshot } from '../shared/module-memory';
+import { deriveMemoryPresentation, normalizeMemoryRecallSnapshot, type MemoryRecallSnapshot } from '../shared/module-memory';
 import { SESSION_DRAG_PREFIX, SESSION_DRAG_TYPE } from './SessionsView';
 import { MAIL_DRAG_TYPE, readMailDrag } from './mail-reference';
 import { MODULE_REFERENCE_DRAG_TYPE, moduleReferenceKey, readModuleReferenceDrag, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
@@ -37,9 +37,11 @@ function ToolActivity({ events }: { events: NonNullable<ChatMessage['toolEvents'
 function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapshot }) {
   const [linkError, setLinkError] = useState('');
   const snapshot = normalizeMemoryRecallSnapshot(rawSnapshot);
-  if (!snapshot?.providers.length) return null;
-  const failures = snapshot.providers.filter(provider => provider.status === 'failed').length;
-  const summary = [snapshot.memories.length ? `${snapshot.memories.length} ${snapshot.memories.length === 1 ? 'Erinnerung' : 'Erinnerungen'}` : 'Keine übernommen', failures ? `${failures} ${failures === 1 ? 'Abruf fehlgeschlagen' : 'Abrufe fehlgeschlagen'}` : '', snapshot.truncated ? 'begrenzt' : ''].filter(Boolean).join(' · ');
+  if (!snapshot) return null;
+  const { visible, providers, memories, truncated } = deriveMemoryPresentation(snapshot);
+  if (!visible) return null;
+  const failures = providers.filter(provider => provider.status === 'failed').length;
+  const summary = [memories.length ? `${memories.length} ${memories.length === 1 ? 'Erinnerung' : 'Erinnerungen'}` : !failures && !truncated ? 'Keine übernommen' : '', failures ? `${failures} ${failures === 1 ? 'Abruf fehlgeschlagen' : 'Abrufe fehlgeschlagen'}` : '', truncated ? 'begrenzt' : ''].filter(Boolean).join(' · ');
   async function openSource(uri: string) {
     setLinkError('');
     try { await window.workspace.openExternalLink(uri); }
@@ -49,15 +51,15 @@ function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapsh
     <summary><ChevronRight size={13} aria-hidden="true"/><Brain size={13} aria-hidden="true"/><span>Gedächtnis</span><small>{summary}</small></summary>
     <div className="memory-context-content">
       <p className="memory-context-note">Momentaufnahme für diese Antwort · {new Date(snapshot.retrievedAt).toLocaleString()}</p>
-      {snapshot.providers.map(provider => <div className="memory-provider" key={provider.moduleId}><strong>{provider.title}</strong><span>{provider.status === 'failed' ? provider.detail || 'Abruf fehlgeschlagen.' : `${provider.count} übernommen${provider.status === 'truncated' ? ' · Auswahl begrenzt' : ''}`}</span></div>)}
-      {snapshot.memories.map(memory => <div className="memory-entry" key={`${memory.moduleId}:${memory.id}`}>
+      {providers.map(provider => <div className="memory-provider" key={provider.moduleId}><strong>{provider.title}</strong><span>{provider.status === 'failed' ? provider.detail || 'Abruf fehlgeschlagen.' : `${provider.count} übernommen${provider.status === 'truncated' ? ' · Auswahl begrenzt' : ''}`}</span></div>)}
+      {memories.map(memory => <div className="memory-entry" key={`${memory.moduleId}:${memory.id}`}>
         <div className="memory-source"><strong>{memory.moduleTitle}</strong>{memory.source.uri ? <a href={memory.source.uri} title={memory.source.uri} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); void openSource(memory.source.uri!); }} onAuxClick={event => { if (event.button === 1) { event.preventDefault(); void openSource(memory.source.uri!); } }}>{memory.source.title}</a> : <span>{memory.source.title}</span>}</div>
         <p>{memory.text}</p>
         {memory.source.reference && <small>Referenz: {memory.moduleId} · {memory.source.reference.type} · {memory.source.reference.id}</small>}
         {memory.updatedAt && <small>Stand: {new Date(memory.updatedAt).toLocaleString()}</small>}
         {memory.expiresAt && <small>Gültig bis: {new Date(memory.expiresAt).toLocaleString()}</small>}
       </div>)}
-      {snapshot.truncated && <p className="memory-context-note">Die Auswahl ist begrenzt. Weitere Inhalte sind über die Werkzeuge des zuständigen Moduls erreichbar.</p>}
+      {truncated && <p className="memory-context-note">Die Auswahl ist begrenzt. Weitere Inhalte sind über die Werkzeuge des zuständigen Moduls erreichbar.</p>}
       {linkError && <p className="memory-context-error" role="alert">{linkError}</p>}
     </div>
   </details>;

@@ -8,6 +8,16 @@ const MAX_TEXT_CHARS = 200_000;
 type Transport = 'stream' | 'complete';
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
+function reasoningContinuation(item: Record<string, unknown>) {
+  const invalid = (): never => { throw new Error('Der Endpunkt hat ungültige Responses-Fortsetzungsdaten geliefert.'); };
+  if (item.encrypted_content !== undefined && item.encrypted_content !== null && typeof item.encrypted_content !== 'string') return invalid();
+  if (item.id !== undefined && typeof item.id !== 'string') return invalid();
+  if (item.status !== undefined && item.status !== null && item.status !== 'completed') throw new Error('Der Endpunkt hat keine vollständig abgeschlossenen Responses-Fortsetzungsdaten geliefert.');
+  const summary = item.summary ?? [];
+  if (!Array.isArray(summary) || summary.some(part => !record(part) || part.type !== 'summary_text' || typeof part.text !== 'string')) return invalid();
+  return { type: 'reasoning', summary: summary.map(part => ({ type: 'summary_text', text: part.text as string })), ...(item.id ? { id: item.id as string } : {}), ...(item.encrypted_content ? { encrypted_content: item.encrypted_content as string } : {}) };
+}
+
 /** Replay only this run's validated output. No server-side conversation or tools. */
 function responseInput(messages: ProviderMessage[], directChatGpt = false): ResponseInputItem[] {
   return messages.flatMap((message): ResponseInputItem[] => {
@@ -69,11 +79,7 @@ function parseOutput(value: unknown, tools: readonly unknown[] | undefined, tran
       }
       responseItems.push({ type: 'message', role: 'assistant', content, ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}) });
     } else if (item.type === 'reasoning') {
-      if (item.encrypted_content !== undefined && item.encrypted_content !== null && typeof item.encrypted_content !== 'string') throw new Error('Der Endpunkt hat ungültige Responses-Fortsetzungsdaten geliefert.');
-      if (item.id !== undefined && typeof item.id !== 'string') throw new Error('Der Endpunkt hat ungültige Responses-Fortsetzungsdaten geliefert.');
-      const summary = item.summary ?? [];
-      if (!Array.isArray(summary) || summary.some(part => !record(part) || part.type !== 'summary_text' || typeof part.text !== 'string')) throw new Error('Der Endpunkt hat ungültige Responses-Fortsetzungsdaten geliefert.');
-      responseItems.push({ type: 'reasoning', summary: summary.map(part => ({ type: 'summary_text', text: part.text })), ...(item.id ? { id: item.id } : {}), ...(item.encrypted_content ? { encrypted_content: item.encrypted_content } : {}) });
+      responseItems.push(reasoningContinuation(item));
     } else {
       // OVD offers only its functions; a hosted web/shell/search call is not a
       // substitute for an approved local capability and is never replayed.
@@ -176,18 +182,28 @@ export async function streamResponsesTurn(
         if (ordered.some(([index, item], position) => index !== position || !item.done || item.done.status !== undefined && item.done.status !== null && item.done.status !== 'completed')) return unfinishedOutput();
         return { ...raw, output: ordered.map(([, item]) => item.done!) };
       }
+      const output = [...raw.output];
       for (const [index, observed] of items) {
         const final = raw.output[index];
         if (!record(final) || final.type !== observed.type || final.id !== undefined && final.id !== observed.id) return inconsistentOutput();
+        if (observed.type === 'reasoning' && final.id === undefined) output[index] = { ...final, id: observed.id };
         if (observed.done) {
           if (observed.type === 'message' && (final.role !== observed.done.role || messageContent(final) !== messageContent(observed.done))) return inconsistentOutput();
-          if (observed.type === 'reasoning' && (final.encrypted_content !== observed.done.encrypted_content || JSON.stringify(final.summary ?? []) !== JSON.stringify(observed.done.summary ?? []))) return inconsistentOutput();
+          if (observed.type === 'reasoning') {
+            const done = reasoningContinuation(observed.done), completed = reasoningContinuation(final);
+            if (JSON.stringify(done.summary) !== JSON.stringify(completed.summary)) return inconsistentOutput();
+            if (done.encrypted_content && completed.encrypted_content && done.encrypted_content !== completed.encrypted_content) return inconsistentOutput();
+            // Azure can add encrypted continuation data in the terminal response
+            // or omit data already supplied by item.done. Keep known values and
+            // fill only absent fields; never manufacture text or tool arguments.
+            if (done.encrypted_content && !completed.encrypted_content) output[index] = { ...output[index], encrypted_content: done.encrypted_content };
+          }
           if (observed.type === 'function_call' && (final.call_id !== observed.done.call_id || final.name !== observed.done.name || final.arguments !== observed.done.arguments)) return invalid('arguments');
         }
         const call = calls.get(index);
         if (call?.argumentsDone && (final.call_id !== call.call.id || final.name !== call.call.function.name || final.arguments !== call.call.function.arguments)) return invalid('arguments');
       }
-      return raw;
+      return { ...raw, output };
     }
     const emit = (text: string) => {
       answer += text;

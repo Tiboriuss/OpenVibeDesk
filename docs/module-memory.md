@@ -100,6 +100,45 @@ The optional `hasMore: true` reports that the module found additional relevant f
 
 The [shared schemas](../shared/module-memory.ts) are the authoritative contract. Bounds include 20 returned records per provider, 2,000 characters per memory text, 128 characters for a memory ID, 300 for a source title and 1,000 for a source URI. The question is limited to 6,000 characters; its JSON-encoded form also fits 6,000 UTF-8 bytes. The combined accepted memory array is limited to 20 records and 8,000 serialized characters, including host-bound provenance. Character limits are not token counts, and the ordinary process transport limits still apply. The host interleaves providers in stable module-ID order to prevent one provider from taking every slot. It records at most 500 providers; an installation beyond this bound reports truncation. Return your most relevant entries first; additional explicit searches remain available through ordinary module tools.
 
+## Chat presentation
+
+Successful empty retrievals are silent by default. The module owns any user-facing preference for displaying its recall results, alongside its other settings. The host has no dedicated memory display setting: it renders the generic result contract below. Errors and truncated results remain visible, so a missing or partial source is not mistaken for a complete result.
+
+A retrieval result can additionally return an optional presentation hint:
+
+```json
+{ "memories": [], "display": "hide" }
+```
+
+| `display` | Chat presentation |
+| --- | --- |
+| Omitted or `"auto"` | Show this provider when it contributes memories; hide a successful empty result. |
+| `"show"` | Show this provider's retrieval disclosure, including an intentionally empty result. |
+| `"hide"` | Hide this provider's memories and successful disclosure; keep any failure or truncation warning. |
+
+A module cannot suppress failure or truncation warnings. With multiple providers, the host filters their normal disclosures and memories independently; one module's `"hide"` does not hide another module's results. For a truncated result with `"hide"`, the warning remains visible while that module's memory text is hidden.
+
+This is presentation only. A hint does not disable retrieval, remove a memory from model context, change permissions or become an instruction. The host saves the hint with that answer's provider status, and continuation/reformulation reuses that snapshot. A later change to the module's preference affects new retrieval results; saved answers retain their recorded hints without another module call. Historical snapshots without hints follow the automatic default.
+
+### Module-owned display preferences
+
+If a module offers display controls, implement them inside that module:
+
+1. Declare its own settings entry in `contributions.settings` and render a compact choice in that settings form, for example **Show relevant results**, **Always show results**, and **Hide normal results**. Store the choice durably in the module's `dataDirectory` through one validated settings service.
+2. Expose reading and changing that preference through the module's ordinary tools, using the same service as its settings form. For example, `company-memory.get-settings` and `company-memory.update-settings` can handle “Hide this module's recall notices.” Keep authorization, saves and errors consistent across the interface and Assistant.
+3. In the read-only retrieval handler, read the already saved preference and map it to `display: "auto"`, `"show"` or `"hide"` in the returned envelope. Include it even when `memories` is empty. Do not update the setting or learn from the question while retrieving.
+
+For example, after your module's own service has loaded the preference and retrieved the matching records:
+
+```js
+const display = savedSettings.recallDisplay ?? 'auto';
+return { memories, hasMore, display };
+```
+
+Validate the stored value with the shared `memoryResultDisplaySchema`. This is an authoring pattern, not a bundled settings service or memory module; each module supplies its own storage, interface and tools. The host does not inspect module-specific settings or add their controls to core categories.
+
+The `display` hint is supported from **v0.1.7**; releases through **v0.1.6** do not accept it in the strict result envelope. Modules supporting those hosts must omit the field. The original `memories`/`hasMore` contract remains compatible.
+
 ## Minimal CommonJS backend
 
 This adapter reads `memories.json` from its own `dataDirectory`. The JSON file contains an array of records matching the response example above. The example deliberately supplies only the retrieval part; a complete memory module adds its own explicit save/edit/delete tools, durable storage, settings and interface. It must not write this file from `recall` or from activation.
@@ -150,7 +189,7 @@ Production modules should validate their store, rank relevance meaningfully, dis
 - Only available, enabled modules with approved current code run. A new package or changed fingerprint retains the existing code-approval flow. Disabling Workspace tools skips automatic memory retrieval.
 - Retrieval uses at most four concurrent callbacks under one five-second host deadline, propagates cancellation and makes no automatic retry. A queued callback that cannot start before the deadline is reported as failed without being invoked. An unavailable, invalid or timed-out provider contributes a bounded failure status; other successful results can still be used. The Assistant must not claim that missing results prove no memories exist.
 - The host binds module identity, validates sources and validity, and adds the bounded selection as untrusted context for the current task. Tool schemas and the complete memory store are not preloaded.
-- Chat shows a compact **Gedächtnis** disclosure with the number of selected memories and unavailable sources. Expanding it reveals source labels, recorded text, dates and provider results. Truncation is visible.
+- When the display rules above call for it, chat shows a compact **Gedächtnis** disclosure with the number of selected memories and unavailable sources. Expanding it reveals source labels, recorded text, dates and provider results. Successful empty retrievals do not add a disclosure under the default behavior; failure and truncation warnings remain visible.
 - The accepted snapshot is saved with that assistant message before inference. It records what was supplied for this answer, rather than becoming a second editable memory store. Ordinary future history does not automatically reinsert earlier snapshots; a new request retrieves again.
 - **Reformulate answer** uses the stored snapshot and evidence only. It does not run a memory callback, even under **Without confirmations**. Explicit task continuation reuses the original snapshot instead of refreshing facts halfway through the saved task.
 
@@ -164,6 +203,6 @@ Keep the two entry points separate. `recall` only retrieves already stored facts
 
 ## Practical validation before publishing
 
-Use synthetic facts and an isolated profile. Verify the module through its interface and ordinary Assistant tools, then start a new chat and ask a question that requires a saved fact. Inspect the exact provider request and the **Gedächtnis** disclosure. Also exercise no matches, an expired fact, malformed output, cancellation, a slow provider, multiple modules and the combined budget. Confirm that an unapproved/disabled module and disabled Workspace tools cause no recall invocation. Restart and reformulate a saved answer: the recorded snapshot must remain available without a new lookup or write. Test explicit continuation with the same expectation.
+Use synthetic facts and an isolated profile. Verify the module through its interface and ordinary Assistant tools, then start a new chat and ask a question that requires a saved fact. Inspect the exact provider request and the **Gedächtnis** disclosure. Also exercise no matches, `display: "show"`/`"hide"`, changing the module's saved display preference through its interface and Assistant, an expired fact, malformed output, cancellation, a slow provider, multiple modules and the combined budget. Confirm that hiding presentation leaves the model context unchanged and cannot hide failures or truncation. Confirm that an unapproved/disabled module and disabled Workspace tools cause no recall invocation. Restart and reformulate a saved answer: the recorded snapshot and presentation hint must remain available without a new lookup or write. Test explicit continuation with the same expectation.
 
 Publish the prepared module through the existing [repository workflow](module-repositories.md#publish-a-module). Installing the package alone does not execute its code or grant new access.

@@ -548,12 +548,12 @@ export class ModuleHost {
               if (seen.has(item.id) || item.expiresAt && Date.parse(item.expiresAt) <= Date.parse(request.now)) return false;
               seen.add(item.id); return true;
             }).map(item => ({ ...item, moduleId: module.id, moduleTitle: module.title }));
-            return { memories, fingerprint: record.fingerprint, hasMore: parsed.hasMore === true };
+            return { memories, fingerprint: record.fingerprint, hasMore: parsed.hasMore === true, display: parsed.display };
           })());
           return { module, ...result };
         } catch {
           context.signal.throwIfAborted();
-          return { module, memories: undefined, fingerprint: undefined, hasMore: false };
+          return { module, memories: undefined, fingerprint: undefined, hasMore: false, display: undefined };
         }
       };
       const results: Awaited<ReturnType<typeof retrieve>>[] = [];
@@ -571,6 +571,7 @@ export class ModuleHost {
         if (!current || current.module.status !== 'ready' || current.fingerprint !== result.fingerprint) result.memories = undefined;
         if (result.memories && result.hasMore) snapshot.truncated = true;
         snapshot.providers.push({ moduleId: result.module.id, title: result.module.title, status: result.memories ? result.hasMore ? 'truncated' : 'completed' : 'failed', count: 0,
+          ...(result.memories && result.display ? { display: result.display } : {}),
           ...(!result.memories ? { detail: 'Der Gedächtnisabruf ist fehlgeschlagen oder hat sein Zeitlimit überschritten.' } : {}) });
       }
       // Round-robin keeps one large provider from consuming every context slot.
