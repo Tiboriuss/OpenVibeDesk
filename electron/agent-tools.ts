@@ -7,7 +7,7 @@ export type ProviderToolDefinition = { type: 'function'; function: { name: strin
 const MAX_ARGUMENT_LENGTH = 16_000;
 const MAX_SCHEMA_LENGTH = 12_000;
 const discoveryNames = new Set(['find_modules', 'get_module_tools']);
-const resultEnvelopeKeys = new Set(['ok', 'outcome', 'status', 'message', 'error', 'warning', 'retryBlocked', 'moduleId', 'untrusted']);
+const resultEnvelopeKeys = new Set(['ok', 'outcome', 'status', 'message', 'error', 'warning', 'retryBlocked', 'hostOperation', 'moduleId', 'untrusted']);
 
 /** Only these small discovery schemas are sent before a task selects module tools. */
 function discoveryDefinitions(settings: AgentSettings): readonly ProviderToolDefinition[] {
@@ -64,13 +64,22 @@ function descriptorTool(moduleId: string, descriptor: ModuleToolDescriptor): Act
   return { moduleId, descriptor, definition };
 }
 
+// Reserved host metadata is deliberately a small allowlist, never a second
+// channel for original arguments or arbitrary module-provided result content.
+function boundedHostOperation(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const identifier = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(item);
+  if (!identifier(record.actionId) || !identifier(record.runId) || !identifier(record.rootRunId) || typeof record.policy !== 'string' || !['read', 'write', 'unknown'].includes(record.policy) || typeof record.status !== 'string' || !['prepared', 'running', 'completed', 'failed', 'cancelled', 'uncertain'].includes(record.status) || typeof record.effect !== 'string' || !['none', 'applied', 'unknown'].includes(record.effect) || typeof record.retryBlocked !== 'boolean') return undefined;
+  return { actionId: record.actionId, runId: record.runId, rootRunId: record.rootRunId, policy: record.policy, status: record.status, effect: record.effect, retryBlocked: record.retryBlocked, ...(identifier(record.blockedByActionId) ? { blockedByActionId: record.blockedByActionId } : {}), ...(record.notExecuted === true && identifier(record.reusedActionId) ? { notExecuted: true, reusedActionId: record.reusedActionId } : {}) };
+}
 function boundedResult(value: unknown, depth = 0): unknown {
   if (depth > 7) return '[gekürzt]';
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') return value.slice(0, 12_000);
   if (Array.isArray(value)) return value.slice(0, 50).map(item => boundedResult(item, depth + 1));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).filter(([key, item]) => item !== undefined && !['password', 'apikey', 'authorization', 'accesstoken', 'refreshtoken', 'privatekey'].includes(key.toLowerCase())).sort(([a], [b]) => Number(resultEnvelopeKeys.has(b)) - Number(resultEnvelopeKeys.has(a))).slice(0, 60).map(([key, item]) => [key, boundedResult(item, depth + 1)]));
+    return Object.fromEntries(Object.entries(value).filter(([key, item]) => item !== undefined && !['password', 'apikey', 'authorization', 'accesstoken', 'refreshtoken', 'privatekey'].includes(key.toLowerCase())).sort(([a], [b]) => Number(resultEnvelopeKeys.has(b)) - Number(resultEnvelopeKeys.has(a))).slice(0, 60).map(([key, item]) => [key, key === 'hostOperation' ? boundedHostOperation(item) : boundedResult(item, depth + 1)]).filter(([, item]) => item !== undefined));
   }
   return null;
 }
@@ -78,7 +87,11 @@ function resultJson(value: unknown): string {
   const bounded = boundedResult(value), serialized = JSON.stringify(bounded);
   if (serialized.length <= 32_000) return serialized;
   const envelope = bounded && typeof bounded === 'object' && !Array.isArray(bounded) ? Object.fromEntries(['ok', 'outcome', 'status', 'message', 'error', 'warning', 'moduleId', 'untrusted', 'retryBlocked'].filter(key => Object.hasOwn(bounded, key)).map(key => [key, (bounded as Record<string, unknown>)[key]]).filter(([, item]) => item === null || ['string', 'number', 'boolean'].includes(typeof item)).map(([key, item]) => [key, typeof item === 'string' ? item.slice(0, 500) : item])) : {};
-  return JSON.stringify({ ...envelope, truncated: true, note: 'Das Ergebnis ist zu groß. Bitte die Abfrage eingrenzen.', preview: serialized.slice(0, 8000) });
+  const hostOperation = bounded && typeof bounded === 'object' && !Array.isArray(bounded) ? boundedHostOperation((bounded as Record<string, unknown>).hostOperation) : undefined;
+  const summary = { ...envelope, ...(hostOperation ? { hostOperation } : {}), truncated: true, note: 'Das Ergebnis ist zu groß. Bitte die Abfrage eingrenzen.' };
+  let preview = serialized.slice(0, 8000);
+  while (JSON.stringify({ ...summary, preview }).length > 32_000) preview = preview.slice(0, Math.floor(preview.length / 2));
+  return JSON.stringify({ ...summary, preview });
 }
 
 const outcomes = new Set<ToolOutcome>(['completed', 'failed', 'cancelled', 'uncertain']);

@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { ModuleToolRuntime, workspaceToolDefinitions, type WorkspaceToolDependencies } from '../electron/agent-tools';
+import { OperationJournal } from '../electron/operation-journal';
+import { OperationRunner } from '../electron/operation-runner';
+import type { ModuleHost } from '../electron/module-host';
+import type { CapabilityContext } from '../electron/workspace-capabilities';
+import type { OperationBinding, OperationRun } from './operations';
 import { WorkspaceCapabilityRegistry } from '../electron/workspace-capabilities';
 import { mailCapabilityDefinitions } from '../modules/ovd-mail/backend/capabilities';
 import { applyUiAction, initialState } from './actions';
@@ -80,9 +89,14 @@ describe('module tool discovery', () => {
     registry.registerDefinition(mailCapabilityDefinitions['mail.open'], () => ({ outcome: 'completed', error: undefined }));
     expect(await registry.invoke('mail.open', {}, { origin: 'agent', signal: new AbortController().signal })).not.toHaveProperty('error');
     for (const outcome of ['failed', 'cancelled', 'uncertain'] as const) {
-      const largeResult = { payload: Array.from({ length: 50 }, () => 'x'.repeat(12000)), ...Object.fromEntries(Array.from({ length: 70 }, (_, index) => ['field' + index, index])), outcome, ok: false, message: 'Das tatsächliche Aktionsergebnis.' };
+      const hostOperation = { actionId: randomUUID(), runId: randomUUID(), rootRunId: randomUUID(), policy: 'unknown', status: 'uncertain', effect: 'unknown', retryBlocked: true };
+      const largeResult = { payload: Array.from({ length: 50 }, () => 'x'.repeat(12000)), ...Object.fromEntries(Array.from({ length: 70 }, (_, index) => ['field' + index, index])), outcome, ok: false, message: 'Das tatsächliche Aktionsergebnis.', hostOperation: { ...hostOperation, args: { originalValue: 'must not enter reserved metadata' } } };
       deps.invokeModuleTool = async () => largeResult;
-      expect(await call('mail_open', { emailId: 'm1' })).toMatchObject({ ok: false, outcome, message: 'Das tatsächliche Aktionsergebnis.', truncated: true });
+      const bounded = await call('mail_open', { emailId: 'm1' });
+      expect(bounded).toMatchObject({ ok: false, outcome, message: 'Das tatsächliche Aktionsergebnis.', truncated: true, hostOperation });
+      expect(bounded.hostOperation).not.toHaveProperty('args');
+      expect(JSON.stringify(bounded)).not.toContain('must not enter reserved metadata');
+      expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(32000);
       const largeRegistry = new WorkspaceCapabilityRegistry();
       largeRegistry.registerDefinition(mailCapabilityDefinitions['mail.open'], () => largeResult);
       expect(await largeRegistry.invoke('mail.open', {}, { origin: 'agent', signal: new AbortController().signal })).toMatchObject({ ok: false, outcome, message: 'Das tatsächliche Aktionsergebnis.', truncated: true });
@@ -124,4 +138,105 @@ describe('module tool discovery', () => {
     expect(await call('execute_workspace_action', { action: 'app.quit', arguments: {} })).toMatchObject({ ok: false });
     expect(actions).toEqual([]);
   });
+});
+
+async function operationFixture(run: (fixture: {
+  journal: OperationJournal;
+  root: OperationRun;
+  runner: OperationRunner;
+  makeRunner(root: OperationRun): OperationRunner;
+  policies: Record<string, OperationBinding['effect']>;
+  handlers: Record<string, (args: Record<string, unknown>, context: CapabilityContext) => Promise<unknown>>;
+  dispatched: string[];
+  beforeInvoke?: (name: string) => Promise<void>;
+}) => Promise<void>) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ovd-operation-recovery-'));
+  try {
+    const journal = new OperationJournal(directory); await journal.initialize();
+    const root = await journal.createRun({ sessionId: 'synthetic-session', userMessageId: 'synthetic-request', assistantMessageId: 'synthetic-answer' });
+    const policies: Record<string, OperationBinding['effect']> = {}, handlers: Record<string, (args: Record<string, unknown>, context: CapabilityContext) => Promise<unknown>> = {}, dispatched: string[] = [];
+    const fixture = { journal, root, policies, handlers, dispatched, beforeInvoke: undefined as ((name: string) => Promise<void>) | undefined, runner: undefined as unknown as OperationRunner, makeRunner: undefined as unknown as (root: OperationRun) => OperationRunner };
+    const host = {
+      prepareOperation: async (moduleId: string, name: string, args: Record<string, unknown>) => ({ binding: { moduleId, action: name, fingerprint: 'synthetic-approved-binding', effect: policies[name] ?? 'unknown', resource: { id: 'synthetic-resource', version: '1' } }, args, label: name }),
+      invoke: async (_moduleId: string, name: string, args: Record<string, unknown>, context: CapabilityContext) => {
+        await fixture.beforeInvoke?.(name);
+        await context.validateOperation?.(); await context.beforeDispatch?.(); await context.validateOperation?.();
+        dispatched.push(name);
+        return handlers[name] ? handlers[name](args, context) : { ok: true, outcome: 'completed' };
+      }
+    } as unknown as ModuleHost;
+    fixture.makeRunner = task => new OperationRunner(journal, host, task, { origin: 'agent', signal: new AbortController().signal });
+    fixture.runner = fixture.makeRunner(root);
+    await run(fixture);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
+}
+
+describe('operation recovery', () => {
+  const signal = () => new AbortController().signal;
+  const call = (id: string, name: string, args: Record<string, unknown> = {}) => ({ id, moduleId: 'synthetic-module', name, args, label: name });
+
+  it('keeps reads and reconciliation available while blocking uncertain changes, then reuses confirmed effects', async () => operationFixture(async ({ journal, root, runner, policies, handlers, dispatched }) => {
+    policies.change = 'write'; policies.mutate_status_read = 'read'; policies.reconcile = 'read';
+    handlers.change = async () => ({ ok: false, outcome: 'failed', hostOperation: { actionId: 'spoofed', policy: 'read', effect: 'none' } });
+    const planned = [call('first', 'change', { value: 1 }), call('status', 'mutate_status_read'), call('blocked', 'change', { value: 1 })];
+    await runner.plan(planned, signal());
+    const first = await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'first') as { hostOperation: { actionId: string } };
+    expect(first).toMatchObject({ outcome: 'uncertain', hostOperation: { policy: 'write', status: 'uncertain', effect: 'unknown', retryBlocked: true } });
+    expect(first.hostOperation.actionId).not.toBe('spoofed');
+    runner.enterRecovery();
+    expect(await runner.invoke('synthetic-module', 'mutate_status_read', {}, signal(), 'status')).toMatchObject({ hostOperation: { policy: 'read', status: 'completed', effect: 'none' } });
+    expect(await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'blocked')).toMatchObject({ outcome: 'failed', hostOperation: { status: 'failed', effect: 'none', blockedByActionId: first.hostOperation.actionId } });
+    // The name is irrelevant: an unclassified search-looking tool is not an audited read.
+    await runner.plan([call('unknown', 'search_looks_safe')], signal());
+    expect(await runner.invoke('synthetic-module', 'search_looks_safe', {}, signal(), 'unknown')).toMatchObject({ outcome: 'failed', hostOperation: { policy: 'unknown', effect: 'none', blockedByActionId: first.hostOperation.actionId } });
+    handlers.reconcile = async () => {
+      const action = journal.getAction(first.hostOperation.actionId)!;
+      await journal.finishAction(action.id, action.attemptId, { status: 'completed', effect: 'applied', result: JSON.stringify({ ok: true, outcome: 'completed', reconciled: true }) });
+      return { state: 'completed' };
+    };
+    await runner.plan([call('reconcile', 'reconcile', { actionId: first.hostOperation.actionId })], signal());
+    await runner.invoke('synthetic-module', 'reconcile', { actionId: first.hostOperation.actionId }, signal(), 'reconcile');
+    await runner.plan([call('again', 'change', { value: 1 })], signal());
+    expect(await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'again')).toMatchObject({ outcome: 'completed', reconciled: true, reused: true, hostOperation: { actionId: first.hostOperation.actionId, status: 'completed', effect: 'applied' } });
+    expect(dispatched).toEqual(['change', 'mutate_status_read', 'reconcile']);
+    expect(journal.listActions(root.rootRunId).some(action => action.status === 'prepared')).toBe(false);
+  }));
+
+  it('rechecks for an uncertain change immediately before dispatch', async () => operationFixture(async fixture => {
+    fixture.policies.change = 'write';
+    await fixture.runner.plan([call('pending', 'change')], signal());
+    fixture.beforeInvoke = async () => {
+      fixture.beforeInvoke = undefined;
+      const blocker = await fixture.journal.recordIntent(fixture.root.id, { binding: { moduleId: 'synthetic-module', action: 'other-change', fingerprint: 'synthetic-approved-binding', effect: 'write' }, args: {}, label: 'other-change' });
+      await fixture.journal.markDispatched(blocker.id, blocker.attemptId);
+    };
+    expect(await fixture.runner.invoke('synthetic-module', 'change', {}, signal(), 'pending')).toMatchObject({ outcome: 'failed', hostOperation: { status: 'failed', effect: 'none', retryBlocked: true } });
+    expect(fixture.dispatched).toEqual([]);
+    expect(fixture.journal.listActions(fixture.root.rootRunId).find(action => action.binding.action === 'change')).toMatchObject({ status: 'failed', effect: 'none' });
+  }));
+
+  it('does not replay a completed warning during recovery or deduplicate intentional normal requests', async () => operationFixture(async ({ journal, root, runner, makeRunner, policies, handlers, dispatched }) => {
+    policies.change = 'write'; handlers.change = async () => ({ ok: true, outcome: 'completed', warning: 'Synthetic partial recipient warning.' });
+    await runner.plan([call('first', 'change', { value: 1 }), call('pending', 'change', { value: 1 })], signal());
+    const first = await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'first') as { hostOperation: { actionId: string } };
+    runner.enterRecovery();
+    expect(await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'pending')).toMatchObject({ outcome: 'completed', reused: true, historical: true, hostOperation: { actionId: first.hostOperation.actionId } });
+    const skipped = journal.listActions(root.rootRunId).find(action => action.id !== first.hostOperation.actionId)!;
+    expect(skipped).toMatchObject({ status: 'failed', effect: 'none' });
+    expect(JSON.parse(skipped.result!)).toMatchObject({ notExecuted: true, reusedActionId: first.hostOperation.actionId });
+    expect(runner.actionWasReused(skipped)).toBe(true);
+    expect(makeRunner(root).actionWasReused(skipped)).toBe(true);
+    const claimed = await journal.recordIntent(root.id, { binding: skipped.binding, args: { value: 1 }, label: 'module-claimed-reuse' });
+    const untrustedClaim = await journal.finishAction(claimed.id, claimed.attemptId, { status: 'failed', effect: 'none', result: JSON.stringify({ notExecuted: true, reusedActionId: first.hostOperation.actionId }) });
+    expect(runner.actionWasReused(untrustedClaim)).toBe(false);
+    await runner.plan([call('again', 'change', { value: 1 })], signal());
+    expect(await runner.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'again')).toMatchObject({ reused: true });
+    expect(dispatched).toEqual(['change']);
+    const separate = await journal.createRun({ sessionId: 'synthetic-session', userMessageId: 'new-request', assistantMessageId: 'new-answer' });
+    const normal = makeRunner(separate);
+    await normal.plan([call('normal1', 'change', { value: 1 }), call('normal2', 'change', { value: 1 })], signal());
+    await normal.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'normal1');
+    await normal.invoke('synthetic-module', 'change', { value: 1 }, signal(), 'normal2');
+    expect(dispatched).toEqual(['change', 'change', 'change']);
+  }));
 });

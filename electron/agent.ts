@@ -4,6 +4,7 @@ import { normalizeAgentSettings } from '../shared/agent-settings';
 import { createChatEvidenceCollector, type ChatEvidence, type ChatEvidenceStatus } from '../shared/chat-evidence';
 import type { AgentRunLimit, AgentSettings, AiConfig, ChatOptions, ToolEvent } from '../shared/model';
 import type { ModuleListing, ModuleQuery, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
+import type { AgentDiagnosticEvent } from './diagnostics';
 
 export type AgentDependencies = {
   settings?: AgentSettings;
@@ -15,6 +16,9 @@ export type AgentDependencies = {
   onReplaceText?(text: string): void;
   onLimitReached?(info: AgentRunLimit): void;
   onEvidence?(evidence: ChatEvidence): void;
+  /** Switch the host to recovery policy before any subsequent tool dispatch. */
+  onRecovery?(): void;
+  onProgress?(event: AgentDiagnosticEvent): void;
   /** A host-controlled handoff ends this run before any more calls or provider turns. */
   finishAfterTool?(): string | undefined;
 };
@@ -40,8 +44,13 @@ export async function runAgent(
   const evidence = createChatEvidenceCollector(deps.onEvidence);
   let evidenceStatus: Exclude<ChatEvidenceStatus, 'running'> = 'completed';
   let toolRounds = 0, callCount = 0, discoveryCalls = 0, actionCalls = 0, visibleText = '', turnPrefix = '';
-  let stoppedAtLimit = false, awaitingAction = false;
-  let inFlightCall: { name: string; label: string; discovery: boolean } | undefined;
+  let stoppedAtLimit = false, awaitingAction = false, recoveryNoted = false;
+  let finishReason: NonNullable<AgentDiagnosticEvent['reason']> = 'error', limitReason: AgentDiagnosticEvent['limitReason'];
+  let inFlightCall: { name: string; label: string; discovery: boolean; moduleId?: string } | undefined;
+  const progress = (event: AgentDiagnosticEvent) => {
+    // Optional diagnostics must never alter execution or its recorded outcome.
+    try { deps.onProgress?.({ toolRounds, toolCalls: callCount, ...event }); } catch { /* Keep logging separate from execution. */ }
+  };
   const emit = (text: string) => { visibleText += text; onDelta(text); };
   const emitMessage = (text: string) => emit(`${visibleText ? '\n\n' : ''}${text}`);
   const replace = (text: string) => { deps.onReplaceText?.(text); visibleText = text; };
@@ -49,6 +58,7 @@ export async function runAgent(
     if (stoppedAtLimit) return;
     stoppedAtLimit = true;
     evidenceStatus = 'limited';
+    finishReason = 'limit'; limitReason = reason;
     const limit = reason === 'tool_rounds' ? settings.maxToolRounds : reason === 'tool_calls' ? settings.maxToolCalls : settings.timeoutSeconds;
     const info: AgentRunLimit = { status: 'limit_reached', reason, toolRounds, toolCalls: callCount, discoveryCalls, actionCalls, elapsedMs: Math.max(0, Date.now() - startedAt), limit, nextToolType };
     const reached = reason === 'tool_rounds' ? `Das eingestellte Limit von ${limit} Werkzeugrunden ist erreicht.` : reason === 'tool_calls' ? `Das eingestellte Limit von ${limit} Werkzeugaufrufen ist erreicht.` : `Das eingestellte Zeitlimit von ${limit} Sekunden ist erreicht.`;
@@ -86,6 +96,7 @@ export async function runAgent(
       };
       let turn: StreamTurn;
       try {
+        progress({ phase: 'provider_turn' });
         turn = await streamTurn(config, key, conversation, options, combined, emitTurnText, offeredTools, settings.requestTimeoutSeconds * 1000);
       } catch (error) {
         if (!(error instanceof ToolStreamError) || combined.aborted || settings.transportRetries === 0) throw error;
@@ -106,6 +117,7 @@ export async function runAgent(
       if (checkAbort()) return;
       if (!turn.toolCalls.length) {
         if (!deps.onReplaceText && turn.text) emitMessage(turn.text);
+        finishReason = 'answer';
         return;
       }
       if (deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
@@ -127,6 +139,7 @@ export async function runAgent(
       if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls)); return; }
       toolRounds++;
       conversation.push({ role: 'assistant', content: turn.text || null, tool_calls: turn.toolCalls, ...(turn.responseItems ? { responseItems: turn.responseItems } : {}) });
+      let needsRecovery = false;
       for (let index = 0; index < turn.toolCalls.length; index++) {
         if (checkAbort()) return;
         if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls.slice(index))); return; }
@@ -134,8 +147,10 @@ export async function runAgent(
         callCount++;
         if (discovery) discoveryCalls++; else actionCalls++;
         awaitingAction = !discovery;
-        inFlightCall = { name: call.function.name, label: runtime.label(call.function.name, offer.active), discovery };
+        const moduleId = offer.active.get(call.function.name)?.moduleId;
+        inFlightCall = { name: call.function.name, label: runtime.label(call.function.name, offer.active), discovery, ...(moduleId ? { moduleId } : {}) };
         if (!discovery) evidence.start();
+        progress({ phase: 'tool_start', name: call.function.name, discovery, ...(moduleId ? { moduleId } : {}) });
         const result = await withinDeadline(runtime.execute(call.function.name, call.function.arguments, {
           getModules: async query => { combined.throwIfAborted(); return deps.getModules(query); },
           getModuleTools: async query => { combined.throwIfAborted(); return deps.getModuleTools(query); },
@@ -151,33 +166,45 @@ export async function runAgent(
           ...(interruptedAction ? { detail: 'Das Zeitlimit wurde während des Aufrufs erreicht. Bitte den tatsächlichen Status prüfen; der Aufruf wird nicht wiederholt.' } : outcome.detail ? { detail: outcome.detail } : {}) };
         if (!discovery) evidence.record(event, result, offer.active.get(call.function.name)?.moduleId);
         deps.onToolEvent?.(event);
+        const operation = parsed && typeof parsed === 'object' && 'hostOperation' in parsed && parsed.hostOperation && typeof parsed.hostOperation === 'object' ? parsed.hostOperation : undefined;
+        const policy = operation && 'policy' in operation && (operation.policy === 'read' || operation.policy === 'write' || operation.policy === 'unknown') ? operation.policy : undefined;
+        const effect = operation && 'effect' in operation && (operation.effect === 'none' || operation.effect === 'applied' || operation.effect === 'unknown') ? operation.effect : undefined;
+        progress({ phase: 'tool_result', name: call.function.name, discovery, status: event.status, ...(moduleId ? { moduleId } : {}), ...(policy ? { policy } : {}), ...(effect ? { effect } : {}) });
         inFlightCall = undefined;
         conversation.push({ role: 'tool', tool_call_id: call.id, content: result });
         if (!interruptedAction) awaitingAction = false;
         if (checkAbort()) return;
-        if (outcome.explicit && outcome.status !== 'completed') {
-          const statusText = outcome.status === 'cancelled' ? 'abgebrochen' : outcome.status === 'uncertain' ? 'Ergebnis unklar' : 'fehlgeschlagen';
-          emitMessage(`${label}: ${statusText}.${outcome.detail ? ` ${outcome.detail}` : ''}`);
+        if (outcome.status === 'cancelled') {
+          emitMessage(`${label}: abgebrochen.${outcome.detail ? ` ${outcome.detail}` : ''}`);
+          evidenceStatus = 'cancelled'; finishReason = 'cancelled';
           return;
         }
         const handoff = deps.finishAfterTool?.();
-        if (handoff) { emitMessage(handoff); return; }
-        if (outcome.explicit && outcome.status === 'completed' && parsed && typeof parsed === 'object' && 'warning' in parsed && typeof parsed.warning === 'string' && parsed.warning.trim()) {
-          const warning = parsed.warning.trim().slice(0, 500);
-          const message = 'message' in parsed && typeof parsed.message === 'string' ? parsed.message.trim().slice(0, 500) : '';
-          emitMessage(`${label}: abgeschlossen.${message && message !== warning ? ` ${message}` : ''} ${warning}`);
-          return;
+        if (handoff) { emitMessage(handoff); finishReason = 'handoff'; return; }
+        const warning = parsed && typeof parsed === 'object' && 'warning' in parsed && typeof parsed.warning === 'string' && parsed.warning.trim();
+        if (outcome.status === 'failed' || outcome.status === 'uncertain' || warning) {
+          if (!needsRecovery) { deps.onRecovery?.(); progress({ phase: 'recovery', status: outcome.status }); }
+          needsRecovery = true;
         }
+      }
+      if (needsRecovery && !recoveryNoted) {
+        // Keep every tool result paired with its call before adding trusted
+        // guidance. The host still decides which operations may execute.
+        conversation.push({ role: 'system', content: 'Ein Werkzeug hat einen Fehler, ein unbestätigtes Ergebnis oder eine Einschränkung gemeldet. Prüfe seine tatsächlichen Ergebnisse und arbeite im beauftragten Umfang weiter, soweit du das durch angebotene Lese-, Such- oder Statusfunktionen selbst klären kannst. Nutze für operations.reconcile die hostOperation.blockedByActionId, falls vorhanden, sonst die hostOperation.actionId des betroffenen Werkzeugergebnisses; finde und lade die zuständigen Funktionen bei Bedarf zuerst über die Modul- und Werkzeugsuche. Unklare oder bereits ausgeführte Änderungen darfst du nicht erneut ausführen. Fehlgeschlagen oder unklar bedeutet niemals erfolgreich; eine Warnung bei completed hebt die abgeschlossene Wirkung nicht auf. Wenn eine fehlende Angabe oder Entscheidung des Nutzers den Abschluss verhindert, stelle eine konkrete Frage statt mit einem vagen Status aufzuhören. Bestätigungen und Wiederholbarkeit entscheidet ausschließlich der Host.' });
+        recoveryNoted = true;
       }
     }
   } catch (error) {
     evidenceStatus = 'failed';
+    finishReason = 'error';
     if (signal.aborted) {
       evidenceStatus = 'cancelled';
+      finishReason = 'cancelled';
       if (inFlightCall) {
         const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'cancelled' : 'uncertain', detail: inFlightCall.discovery ? 'Die Modul-/Werkzeugsuche wurde gestoppt.' : 'Der Assistent wurde gestoppt. Der gestartete Vorgang kann noch laufen; bitte den tatsächlichen Status prüfen. Kein automatischer weiterer Versuch.' };
         if (!inFlightCall.discovery) evidence.record(event);
         deps.onToolEvent?.(event);
+        progress({ phase: 'tool_result', name: inFlightCall.name, discovery: inFlightCall.discovery, status: event.status, ...(inFlightCall.moduleId ? { moduleId: inFlightCall.moduleId } : {}) });
       }
       throw new DOMException('Abgebrochen', 'AbortError');
     }
@@ -186,11 +213,16 @@ export async function runAgent(
         const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'failed' : 'uncertain', detail: inFlightCall.discovery ? 'Das Zeitlimit wurde während der Modul-/Werkzeugsuche erreicht.' : 'Das Zeitlimit wurde während des Aufrufs erreicht. Der Vorgang kann noch laufen; bitte seinen Status prüfen. Kein automatischer weiterer Versuch.' };
         if (!inFlightCall.discovery) evidence.record(event);
         deps.onToolEvent?.(event);
+        progress({ phase: 'tool_result', name: inFlightCall.name, discovery: inFlightCall.discovery, status: event.status, ...(inFlightCall.moduleId ? { moduleId: inFlightCall.moduleId } : {}) });
       }
       if (!awaitingAction && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
       stopAtLimit('timeout', 'none'); return;
     }
     if (error instanceof ToolStreamError && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
     throw error;
-  } finally { clearTimeout(timer); evidence.finish(evidenceStatus); }
+  } finally {
+    clearTimeout(timer);
+    try { evidence.finish(evidenceStatus); }
+    finally { progress({ phase: 'finished', reason: finishReason, ...(limitReason ? { limitReason } : {}) }); }
+  }
 }

@@ -8,6 +8,7 @@ import { defaultAgentSettings } from './agent-settings';
 import type { ChatEvidence } from './chat-evidence';
 import { WorkspaceCapabilityRegistry } from '../electron/workspace-capabilities';
 import { mailCapabilityDefinitions } from '../modules/ovd-mail/backend/capabilities';
+import type { AgentDiagnosticEvent } from '../electron/diagnostics';
 
 async function serve(handler: (request: IncomingMessage, response: ServerResponse) => void) {
   const server = createServer(handler);
@@ -120,31 +121,52 @@ describe('workspace agent integration', () => {
     } finally { await server.close(); }
   });
 
-  it('removes speculative success text before actions and reports terminal host outcomes without another model call or effect', async () => {
+  it('returns factual failures and warnings to the model for follow-up reads and clarification while respecting cancellation', async () => {
     for (const outcome of ['failed', 'cancelled', 'uncertain', 'completed'] as const) {
-      let requests = 0, invocations = 0, visible = '', replacements = 0;
-      const events: ToolEvent[] = [];
-      const server = await serve((req, res) => collect(req, () => {
+      let requests = 0, invocations = 0, visible = '', replacements = 0, recoveries = 0;
+      const events: ToolEvent[] = [], payloads: any[] = [], invoked: string[] = [], progress: AgentDiagnosticEvent[] = [];
+      const operationIds = { actionId: '00000000-0000-0000-0000-000000000001', runId: '00000000-0000-0000-0000-000000000002', rootRunId: '00000000-0000-0000-0000-000000000002' };
+      const answer = outcome === 'failed' ? 'Die Aktion ist fehlgeschlagen. Welche SMTP-Verbindung soll verwendet werden?' : outcome === 'uncertain' ? 'Die Statussuche bestätigt die Änderung nicht. Unter welcher Vorgangsnummer kann ich ihren Status prüfen?' : 'Die Aktion ist abgeschlossen. Ein Empfänger wurde abgelehnt; die abgeschlossene Aktion wird nicht wiederholt.';
+      const server = await serve((req, res) => collect(req, payload => {
+        payloads.push(payload);
         requests++; res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         if (requests === 1) res.end(sse(call('load', 'get_module_tools', '{"moduleId":"mail"}'), finishCalls));
         else if (requests === 2) res.end(sse({ choices: [{ delta: { content: 'ERFOLGREICH ERLEDIGT.', tool_calls: [
-          { index: 0, id: 'action', type: 'function', function: { name: 'mail_open', arguments: '{"emailId":"m1"}' } },
-          { index: 1, id: 'later-action', type: 'function', function: { name: 'mail_search', arguments: '{"query":"Launch"}' } }
+          { index: 0, id: 'action', type: 'function', function: { name: 'mail_open', arguments: '{"emailId":"m1"}' } }
         ] }, finish_reason: null }] }, finishCalls));
-        else res.end(sse(finishText('ERFOLGREICH ERLEDIGT.')));
+        else if (requests === 3) res.end(sse(call('follow-up-read', 'mail_search', '{"query":"Launch"}'), finishCalls));
+        else res.end(sse(finishText(answer)));
       }));
-      const deps = { ...workspace(), onReplaceText: (text: string) => { visible = text; replacements++; }, onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async () => {
+      const deps = { ...workspace(), onReplaceText: (text: string) => { visible = text; replacements++; }, onRecovery: () => { recoveries++; }, onProgress: (event: AgentDiagnosticEvent) => progress.push(event), onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async (_moduleId: string, name: string) => {
         invocations++; expect(visible).not.toContain('ERFOLGREICH');
-        return { outcome, ok: outcome === 'completed', message: 'Tatsächliches Ergebnis prüfen.', ...(outcome === 'failed' ? { error: 'SMTP-Verbindung nicht eingerichtet.' } : {}), ...(outcome === 'completed' ? { warning: 'Ein Empfänger wurde abgelehnt.' } : {}) };
+        invoked.push(name);
+        if (name === 'mail_search') { expect(recoveries).toBe(1); return { outcome: 'completed', hostOperation: { ...operationIds, policy: 'read', effect: 'none', status: 'completed', retryBlocked: false }, matches: [{ id: 'm1' }] }; }
+        return { outcome, ok: outcome === 'completed', hostOperation: { ...operationIds, policy: 'write', effect: outcome === 'completed' ? 'applied' : outcome === 'uncertain' ? 'unknown' : 'none', status: outcome, retryBlocked: outcome === 'uncertain' }, message: 'Tatsächliches Ergebnis prüfen.', ...(outcome === 'failed' ? { error: 'SMTP-Verbindung nicht eingerichtet.' } : {}), ...(outcome === 'completed' ? { warning: 'Ein Empfänger wurde abgelehnt.' } : {}) };
       } };
       try {
         await runAgent(server.config, null, [{ role: 'user', content: 'Führe die Aktion aus.' }], { tier: 'smart' }, new AbortController().signal, text => { visible += text; }, deps);
-        expect(requests).toBe(2);
-        expect(invocations).toBe(1);
+        expect(requests).toBe(outcome === 'cancelled' ? 2 : 4);
+        expect(invocations).toBe(outcome === 'cancelled' ? 1 : 2);
+        expect(recoveries).toBe(outcome === 'cancelled' ? 0 : 1);
+        expect(invoked).toEqual(outcome === 'cancelled' ? ['mail_open'] : ['mail_open', 'mail_search']);
         expect(replacements).toBe(1);
-        expect(events.at(-1)).toMatchObject({ status: outcome, detail: outcome === 'failed' ? 'SMTP-Verbindung nicht eingerichtet.' : outcome === 'completed' ? 'Ein Empfänger wurde abgelehnt.' : 'Tatsächliches Ergebnis prüfen.' });
+        expect(events.find(event => event.name === 'mail_open')).toMatchObject({ status: outcome, detail: outcome === 'failed' ? 'SMTP-Verbindung nicht eingerichtet.' : outcome === 'completed' ? 'Ein Empfänger wurde abgelehnt.' : 'Tatsächliches Ergebnis prüfen.' });
+        expect(progress.filter(event => event.phase === 'finished')).toEqual([{ phase: 'finished', reason: outcome === 'cancelled' ? 'cancelled' : 'answer', toolRounds: outcome === 'cancelled' ? 2 : 3, toolCalls: outcome === 'cancelled' ? 2 : 3 }]);
+        expect(progress.find(event => event.phase === 'tool_result' && event.name === 'mail_open')).toMatchObject({ policy: 'write', effect: outcome === 'completed' ? 'applied' : outcome === 'uncertain' ? 'unknown' : 'none', status: outcome });
+        expect(JSON.stringify(progress)).not.toContain('SMTP-Verbindung');
         expect(visible).not.toContain('ERFOLGREICH');
-        expect(visible).toContain(outcome === 'failed' ? 'SMTP-Verbindung nicht eingerichtet.' : outcome === 'completed' ? 'Ein Empfänger wurde abgelehnt.' : 'Tatsächliches Ergebnis prüfen.');
+        if (outcome === 'cancelled') expect(visible).toContain('abgebrochen. Tatsächliches Ergebnis prüfen.');
+        else {
+          expect(visible).toBe(answer);
+          const returned = payloads[2].messages.find((message: any) => message.role === 'tool' && message.tool_call_id === 'action');
+          expect(JSON.parse(returned.content)).toMatchObject({ outcome, ok: outcome === 'completed' });
+          const guidance = payloads[2].messages.at(-1);
+          expect(guidance).toMatchObject({ role: 'system' });
+          expect(guidance.content).toContain('stelle eine konkrete Frage');
+          expect(guidance.content).not.toContain('SMTP-Verbindung nicht eingerichtet');
+          expect(payloads[3].messages.filter((message: any) => message.role === 'system')).toHaveLength(1);
+          expect(JSON.parse(payloads[3].messages.find((message: any) => message.role === 'tool' && message.tool_call_id === 'follow-up-read').content)).toMatchObject({ outcome: 'completed', matches: [{ id: 'm1' }] });
+        }
       } finally { await server.close(); }
     }
   });

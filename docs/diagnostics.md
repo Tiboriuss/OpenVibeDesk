@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [AI providers](ai-providers.md) · [Local credentials](getting-started.md#credential-storage)
 
-The current checkout provides switchable local diagnostics for AI requests, including Responses streaming and Azure Foundry protocol mismatches. It is disabled by default. This is a general host feature; domain-specific preferences still belong to their modules.
+The current checkout provides switchable local diagnostics for AI requests and host agent execution, including Responses streaming and Azure Foundry protocol mismatches. It is disabled by default. This is a general host feature; domain-specific preferences still belong to their modules.
 
 ## Capture a problem on the affected computer
 
@@ -16,6 +16,8 @@ The same workflow works on another computer. Exporting can be cancelled without 
 ## What is recorded
 
 Reports contain application/runtime/platform information, technical provider configuration, per-request correlation IDs, HTTP status and recognised provider request IDs, stream event types, item indexes, completion states, and specific parser failure categories. Request bodies and complete provider replies are never written to the log.
+
+Agent records also show provider-turn boundaries, tool start/result, entry into recovery and the reason execution ended (`answer`, `handoff`, `cancelled`, `limit` or `error`). Tool results include the host's read/write/unknown policy and recorded effect when available. A random `agentRunId` connects these records to the individual provider requests; it is unrelated to saved chat or operation IDs. Tool and module names are fingerprinted, and no tool arguments, results, question text or error messages are copied. This distinguishes a provider failure from a host stop or a model answer after a tool result. A generated answer is not itself proof that an uncertain action succeeded; the operation journal remains authoritative.
 
 Potentially sensitive values such as message text, tool arguments, encrypted reasoning and custom identifiers are represented only by their type, length and keyed fingerprints. These fingerprints can show that two fields differ without exposing their contents. Fingerprints use a fresh in-memory key per process; do not compare them across different process sessions. Known public model names may be included, while custom deployment and endpoint identities are fingerprinted. No passwords, API keys, OAuth tokens, mail bodies or raw server error descriptions are included.
 

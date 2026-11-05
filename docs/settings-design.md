@@ -13,6 +13,7 @@ This is a continuing product contract. **Current implementation** notes describe
 - Put related settings in expandable groups. Summaries show useful current state without exposing secrets. Allow several groups to remain open, preserve their state during use, and temporarily reveal relevant groups during search.
 - Group Mail settings **per account**: name and email identify the account, followed by editable IMAP incoming and SMTP outgoing details. Prefill existing accounts; test and save incoming/outgoing connections separately. Preserve other accounts' unsaved edits.
 - Use clear labels and short help text. Reveal technical detail when useful. Support keyboard operation, visible focus and accessible icon labels.
+- Keep persistent help tied to the current task or a setting the user can change. Put migration history and background implementation details in documentation rather than adding unrelated information groups.
 
 **Current implementation:** [SettingsView](../src/SettingsView.tsx) combines core categories with available module contributions from the [frontend registry](../src/module-registry.tsx). The core covers AI connection/access, Agent, display, Dock/window behavior and module management. Mail and MCP contribute their own settings through their manifests and frontend adapters. Groups and responsive navigation are present; this is not a claim of a completed accessibility audit for every control.
 

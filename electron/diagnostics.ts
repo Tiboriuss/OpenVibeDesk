@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AiConfig, ChatOptions } from '../shared/model';
@@ -19,11 +20,25 @@ const diagnosticReasons = new Set(['reasoning_metadata_invalid', 'reasoning_not_
 const diagnosticFields = new Set(['index', 'id', 'type', 'role', 'name', 'arguments', 'tool_calls', 'function', 'summary', 'encrypted_content', 'status', 'content', 'output', 'delta']);
 const errorCodes = new Set(['DeploymentNotFound', 'ResourceNotFound', 'InvalidApiKey', 'Unauthorized', 'PermissionDenied', 'BadRequest', 'InvalidRequest', 'OperationNotSupported', 'InvalidApiVersionParameter', 'AuthenticationError', 'ContentFilter', 'content_filter', 'invalid_api_key', 'invalid_request_error', 'insufficient_quota', 'rate_limit_exceeded', 'quota_exceeded', 'model_not_found', 'unsupported_parameter', 'unsupported_value', 'missing_required_parameter', 'invalid_api_version', 'context_length_exceeded']);
 const appendRecord = Symbol('append sanitized diagnostic record');
-type LogRecord = { version: 1; at: string; sessionId: string; appVersion: string; event: string; requestId?: string; details: Record<string, unknown> };
+const agentContext = new AsyncLocalStorage<{ agentRunId: string }>();
+type LogRecord = { version: 1; at: string; sessionId: string; appVersion: string; event: string; requestId?: string; agentRunId?: string; details: Record<string, unknown> };
 type FileInfo = { bytes: number; entries: number; lastEventAt?: string };
 interface DiagnosticsOptions { dataDirectory: string; appVersion: string; enabled?: boolean; changed?(status: DiagnosticsStatus): void; }
 export type DiagnosticField = 'index' | 'id' | 'type' | 'role' | 'name' | 'arguments' | 'tool_calls' | 'function' | 'summary' | 'encrypted_content' | 'status' | 'content' | 'output' | 'delta';
 export interface DiagnosticComparison { field?: DiagnosticField; outputIndex?: unknown; expected?: unknown; actual?: unknown; }
+export type AgentDiagnosticEvent = {
+  phase: 'provider_turn' | 'tool_start' | 'tool_result' | 'recovery' | 'finished';
+  toolRounds?: number;
+  toolCalls?: number;
+  name?: string;
+  moduleId?: string;
+  discovery?: boolean;
+  status?: 'completed' | 'failed' | 'cancelled' | 'uncertain';
+  policy?: 'read' | 'write' | 'unknown';
+  effect?: 'none' | 'applied' | 'unknown';
+  reason?: 'answer' | 'handoff' | 'cancelled' | 'limit' | 'error';
+  limitReason?: 'tool_rounds' | 'tool_calls' | 'timeout';
+};
 
 /** No key or input value is ever serialized: fingerprints are keyed per process. */
 export class DiagnosticsLog {
@@ -136,7 +151,8 @@ export class DiagnosticsLog {
   }
   [appendRecord](event: string, details: Record<string, unknown>, requestId?: string): void {
     if (!this.isEnabled()) return;
-    const record: LogRecord = { version: 1, at: new Date().toISOString(), sessionId: this.sessionId, appVersion: this.options!.appVersion, event, ...(requestId ? { requestId } : {}), details };
+    const agentRunId = agentContext.getStore()?.agentRunId;
+    const record: LogRecord = { version: 1, at: new Date().toISOString(), sessionId: this.sessionId, appVersion: this.options!.appVersion, event, ...(requestId ? { requestId } : {}), ...(agentRunId ? { agentRunId } : {}), details };
     const text = JSON.stringify(record) + '\n', bytes = Buffer.byteLength(text);
     if (bytes > MAX_RECORD_BYTES) { this[appendRecord]('diagnostics.record_omitted', { sizeBytes: bytes }, requestId); return; }
     void this.enqueue(async () => {
@@ -206,6 +222,34 @@ export const setDiagnosticsEnabled = (enabled: boolean) => diagnosticsLog.setEna
 export const getDiagnosticsStatus = () => diagnosticsLog.status();
 export const clearDiagnostics = () => diagnosticsLog.clear();
 export const exportDiagnostics = (destination: string) => diagnosticsLog.export(destination);
+
+/** Correlates host activity and provider requests without recording chat IDs or content. */
+export class AgentDiagnosticsTrace {
+  private readonly agentRunId = randomUUID();
+  private readonly active = diagnosticsLog.isEnabled();
+  private readonly started = Date.now();
+  run<T>(work: () => Promise<T>): Promise<T> {
+    return agentContext.run({ agentRunId: this.agentRunId }, async () => {
+      if (this.active) diagnosticsLog[appendRecord]('agent.started', {});
+      return work();
+    });
+  }
+  progress(event: AgentDiagnosticEvent): void {
+    if (!this.active || !diagnosticsLog.isEnabled() || !['provider_turn', 'tool_start', 'tool_result', 'recovery', 'finished'].includes(event.phase)) return;
+    const details: Record<string, unknown> = { elapsedMs: Math.max(0, Date.now() - this.started) };
+    for (const key of ['toolRounds', 'toolCalls'] as const) if (Number.isSafeInteger(event[key]) && event[key]! >= 0) details[key] = event[key];
+    for (const key of ['name', 'moduleId'] as const) if (typeof event[key] === 'string') details[key] = diagnosticsLog.fingerprint(event[key]);
+    if (typeof event.discovery === 'boolean') details.discovery = event.discovery;
+    const allowed = {
+      status: ['completed', 'failed', 'cancelled', 'uncertain'], policy: ['read', 'write', 'unknown'],
+      effect: ['none', 'applied', 'unknown'], reason: ['answer', 'handoff', 'cancelled', 'limit', 'error'],
+      limitReason: ['tool_rounds', 'tool_calls', 'timeout']
+    };
+    for (const key of Object.keys(allowed) as (keyof typeof allowed)[]) if (typeof event[key] === 'string' && allowed[key].includes(event[key]!)) details[key] = event[key];
+    agentContext.run({ agentRunId: this.agentRunId }, () => diagnosticsLog[appendRecord]('agent.' + event.phase, details));
+  }
+}
+export const beginAgentDiagnostics = () => new AgentDiagnosticsTrace();
 
 /** Each transport turn gets a separate ID; no chat identifiers enter the log. */
 export class ProviderDiagnosticsTrace {

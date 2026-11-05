@@ -4,8 +4,7 @@
 .diagnostics-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:7px 10px;border:1px solid #bcc7d7;border-radius:7px;background:#fff;color:var(--ink);font-size:11px;font-weight:600}
 .diagnostics-actions button:hover:not(:disabled){background:#f3f1ff;border-color:var(--accent)}
 .diagnostics-actions button:disabled{opacity:.55;cursor:default}
-.diagnostics-help,.diagnostics-credentials p{margin:12px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
-.diagnostics-credentials p:first-child{margin-top:0}
+.diagnostics-help{margin:12px 0 0;color:var(--muted);font-size:11px;line-height:1.5}
 .diagnostics-feedback{margin:0 0 11px;color:#386b59;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .diagnostics-feedback.error{color:#a43a4a}
 .diagnostics-storage .diagnostics-feedback{margin:4px 0 0}

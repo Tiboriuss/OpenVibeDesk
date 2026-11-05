@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
-import { ChevronDown, KeyRound, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { ChevronDown, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import { matchesSettingsEntry, settingsEntries } from './settings-registry';
 import { preparationValues, SettingsPreparationNotice, useSettingsPreparation, type SettingsSuggestion } from './settings-preparation';
 import type { AiSettings as SavedAiSettings } from '../shared/model';
@@ -287,7 +287,6 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Assistent kann für deine Aufträge selbstständig in verfügbaren Modulen suchen, Inhalte lesen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
       <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Suchen und Lesen laufen bereits selbstständig. Dieser Schalter überspringt auch Bestätigungen für angeforderte Aktionen wie Senden und Löschen. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
       </details>
-      <div className="ai-privacy"><ShieldCheck size={15} /><span>{provider === 'chatgpt' ? 'Deine Anmeldung wird verschlüsselt im lokalen App-Profil gespeichert.' : 'Der Schlüssel liegt verschlüsselt im lokalen App-Profil.'}</span></div>
       <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Änderungen noch nicht gespeichert' : 'Änderungen werden mit Speichern übernommen.'}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy}>{busy ? 'Bitte warten …' : 'KI-Einstellungen speichern'}</button></div>
     </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}

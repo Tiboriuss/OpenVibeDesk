@@ -9,7 +9,7 @@ import { applyUiAction, initialState, uiActionSchema } from '../shared/actions';
 import { initializeStore, loadState, saveState } from './store';
 import { settingsPatchSchema, normalizeSettings } from '../shared/settings';
 import { diagnosticsSettingsSchema } from '../shared/diagnostics';
-import { initializeDiagnostics, setDiagnosticsEnabled, getDiagnosticsStatus, exportDiagnostics, clearDiagnostics } from './diagnostics';
+import { initializeDiagnostics, setDiagnosticsEnabled, getDiagnosticsStatus, exportDiagnostics, clearDiagnostics, beginAgentDiagnostics } from './diagnostics';
 import { initializeCredentialStore } from './credential-store';
 import { normalizeSessions, createSession, selectSession, renameSession, forkSession, updateSessionMessages, snapshotSessionReference } from '../shared/sessions';
 import { defaultAiConfig, normalizeAiConfig, parseAiInput, chatOptionsSchema, getKey, setKey, deleteKey, listModels, makeMessages } from './ai';
@@ -763,6 +763,18 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     controller.signal.throwIfAborted();
     if (toolsEnabled && currentState.ai?.workspaceTools === false) throw new Error('Die Workspace-Werkzeuge wurden während der Vorbereitung deaktiviert. Die Anfrage wurde nicht an den KI-Anbieter gesendet.');
     const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()), memory);
+    if (toolsEnabled && !continuation) {
+      const roots = new Set<string>();
+      const unresolved = [...history].reverse().flatMap(item => {
+        const run = item.operationRunId ? operationJournal.getRun(item.operationRunId) : undefined;
+        if (!run || roots.has(run.rootRunId) || roots.size >= 3) return [];
+        const actions = operationJournal.listActions(run.rootRunId).filter(action => action.binding.effect !== 'read' && (action.effect === 'unknown' || action.status === 'running'));
+        if (!actions.length) return [];
+        roots.add(run.rootRunId);
+        return [{ messageId: run.assistantMessageId, sessionId: run.sessionId, actions: actions.slice(0, 5).map(action => ({ actionId: action.id, status: action.status, effect: action.effect })), hasMore: actions.length > 5 }];
+      });
+      if (unresolved.length) providerMessages.splice(1, 0, { role: 'system', content: `Hoststatus früherer Vorgänge in diesem Chat: ${JSON.stringify(unresolved)}. Diese Aktionsausgänge sind weiterhin unbestätigt. Falls sich die aktuelle Anfrage darauf bezieht, kläre sie über operations.reconcile beziehungsweise operations.get_run; lade die Funktionen gezielt nach. Eine neue Chatnachricht bestätigt keine Wirkung und erlaubt keine blinde Wiederholung dieser Änderungen. Andere beauftragte Lese- und Recherchearbeit bleibt möglich.` });
+    }
     if (continuation) {
       const actions = operationJournal.summary(operationRun.id).actions;
       providerMessages.unshift({ role: 'system', content: `Gespeicherter Quellauftrag für operations.get_run: messageId=${continuation.answer.id}, sessionId=${continuation.session.id}. Diese IDs stammen vom Host; weitere Schritte sind über offset/nextOffset erreichbar. Originale Argumente bleiben im Host und werden bei operations.retry(actionId) exakt gebunden verwendet.` });
@@ -774,26 +786,35 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     const operationContext: OperationContext = { origin: 'agent', signal: controller.signal, owner: panels.get('chat'), referenceIds, primaryEmailId, sessionId };
     const runner = new OperationRunner(operationJournal, moduleHost!, operationRun, operationContext, !!continuation);
     activeOperationRunner = runner;
-    if (toolsEnabled) await runAgent(config, key, providerMessages, options, controller.signal, onDelta,
+    if (toolsEnabled) {
+      const diagnostics = beginAgentDiagnostics();
+      await diagnostics.run(() => runAgent(config, key, providerMessages, options, controller.signal, onDelta,
       { settings: agentSettings, getModules: query => moduleHost!.find(query),
         getModuleTools: query => moduleHost!.getTools(query),
         onToolPlan: (calls, signal) => runner.plan(calls, signal),
         invokeModuleTool: (moduleId, name, args, signal, callId) => runner.invoke(moduleId, name, args, signal, callId),
+        onRecovery: () => runner.enterRecovery(),
+        onProgress: event => diagnostics.progress(event),
         onLimitReached: info => { runLimit = info; updateAssistant({ agentRunLimit: info }); },
         onEvidence: evidence => updateAssistant({ evidence }),
         finishAfterTool: () => pendingReformulation ? 'Die Neuformulierung wird jetzt aus gespeicherten Belegen erstellt. Der ursprüngliche Auftrag wird nicht erneut ausgeführt.' : pendingContinuation ? 'Der gespeicherte Auftrag wird jetzt gezielt fortgesetzt. Erledigte Aktionen werden nicht erneut ausgeführt.' : undefined,
         onReplaceText: text => { flush(); updateAssistant({ text }); },
-        onToolEvent: event => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, toolEvents: [...(m.toolEvents ?? []), event] } : m))) });
+        onToolEvent: event => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, toolEvents: [...(m.toolEvents ?? []), event] } : m))) }));
+    }
     else {
       await streamCompletion(config, key, providerMessages, options, controller.signal, onDelta, agentSettings.requestTimeoutSeconds * 1000);
       updateAssistant({ evidence: textEvidence.finish('completed') });
     }
     flush(); updateAssistant({ status: runLimit ? 'limited' : 'completed' });
     const actions = operationJournal.listActions(operationRun.rootRunId);
-    const events = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id)?.toolEvents ?? [];
-    const status = runLimit ? 'limited' : actions.some(action => action.effect === 'unknown' || action.status === 'running') || events.some(event => event.status === 'uncertain') ? 'uncertain' : actions.some(action => ['prepared', 'failed', 'cancelled'].includes(action.status)) || events.some(event => event.status === 'failed' || event.status === 'cancelled') ? 'failed' : 'completed';
+    const answer = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
+    // The journal can reconcile an earlier tool event. Keep its current facts
+    // authoritative, while retaining a valid answer/question in chat history.
+    const status = runLimit ? 'limited' : actions.some(action => action.effect === 'unknown' || action.status === 'running') ? 'uncertain'
+      : answer?.evidence?.status === 'cancelled' ? 'cancelled'
+        : actions.some(action => action.status === 'prepared' || action.binding.effect !== 'read' && ['failed', 'cancelled'].includes(action.status) && !runner.actionWasReused(action)) ? 'failed' : 'completed';
     await operationJournal.finishRun(operationRun.id, status);
-    if (status === 'uncertain' || status === 'failed') updateAssistant({ status: 'failed', error: status === 'uncertain' ? 'Ein Aktionsausgang ist unklar. Bitte den Auftragsstatus prüfen; es wird kein Aufruf automatisch wiederholt.' : 'Der Auftrag enthält fehlgeschlagene oder offene Schritte. Du kannst ihn gezielt fortsetzen; erledigte Aktionen bleiben erhalten.' });
+    if (answer?.evidence?.status === 'cancelled') updateAssistant({ status: 'cancelled' });
     await persistFinished();
   } catch (error) {
     if (!prepared) throw error;
