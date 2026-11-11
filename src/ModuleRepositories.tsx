@@ -78,15 +78,18 @@ function RepositoryEditor({ source, preparation, locked, onSave, onRemove, onSta
   </details>;
 }
 
-export function ModuleRepositories({ preparation, installedModules, moduleBusy, onActivate }: {
-  preparation?: SettingsSuggestion; installedModules: ModuleInfo[]; moduleBusy: boolean; onActivate(id: string): Promise<void>;
+export function ModuleRepositories({ preparation, installedModules, moduleBusy, onActivate, searchQuery = '' }: {
+  preparation?: SettingsSuggestion; installedModules: ModuleInfo[]; moduleBusy: boolean; onActivate(id: string): Promise<void>; searchQuery?: string;
 }) {
   const [state, setState] = useState<RepositoryState>(emptyState);
   const [loading, setLoading] = useState(true), [operation, setOperation] = useState('');
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [statuses, setStatuses] = useState<Record<string, EditStatus>>({});
   const [sourceFilter, setSourceFilter] = useState(''), [query, setQuery] = useState('');
-  const [sourcesOpen, setSourcesOpen] = useState(true), [catalogOpen, setCatalogOpen] = useState(true);
+  const [sourcesOpen, setSourcesOpen] = useState(false), [catalogOpen, setCatalogOpen] = useState(false);
+  const [searchGroups, setSearchGroups] = useState({ sources: true, catalog: true });
+  const searching = !!searchQuery.trim();
+  useEffect(() => { if (searching) setSearchGroups({ sources: true, catalog: true }); }, [searchQuery]);
   const mounted = useRef(true), loadVersion = useRef(0);
   const setEditorStatus = useCallback((id: string, status: EditStatus | undefined) => setStatuses(current => {
     if (current[id] === status) return current;
@@ -148,16 +151,16 @@ export function ModuleRepositories({ preparation, installedModules, moduleBusy, 
   return <div className="module-repositories">
     {loading && <p role="status">Modulquellen werden geladen …</p>}
     {(error || state.error) && <p className="repository-feedback error" role="alert">{error || state.error}</p>}{notice && <p className="repository-feedback" role="status">{notice}</p>}
-    <details className="workspace-settings-group" open={sourcesOpen} onToggle={event => { if (event.target === event.currentTarget) setSourcesOpen(event.currentTarget.open); }}>
-      <summary><span><strong>Modulquellen</strong><small>{state.sources.length} {state.sources.length === 1 ? 'Repository' : 'Repositories'} · Öffentliche und private Quellen{dirty ? ' · Änderungen offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+    <details className="workspace-settings-group" open={searching ? searchGroups.sources : sourcesOpen}>
+      <summary onClick={event => { event.preventDefault(); if (searching) setSearchGroups(current => ({ ...current, sources: !current.sources })); else setSourcesOpen(value => !value); }}><span><strong>Modulquellen</strong><small>{state.sources.length} {state.sources.length === 1 ? 'Repository' : 'Repositories'}{dirty ? ' · Änderungen offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="repository-sources">
         {state.sources.map(source => <RepositoryEditor key={source.id} source={source} preparation={preparedSource === source.id ? preparation : undefined} locked={blocked || moduleBusy} onSave={save} onRemove={remove} onStatus={setEditorStatus} />)}
         <RepositoryEditor preparation={!preparedSource ? preparation : undefined} locked={loading || blocked || moduleBusy} onSave={save} onRemove={remove} onStatus={setEditorStatus} />
         {preparedSource && !loading && !state.sources.some(source => source.id === preparedSource) && <p className="repository-feedback error" role="alert">Die für den Vorschlag ausgewählte Quelle ist nicht mehr vorhanden.</p>}
       </div>
     </details>
-    <details className="workspace-settings-group" open={catalogOpen} onToggle={event => { if (event.target === event.currentTarget) setCatalogOpen(event.currentTarget.open); }}>
-      <summary><span><strong>Modulkatalog</strong><small>{state.modules.length} {state.modules.length === 1 ? 'Modul' : 'Module'}{updates > 0 ? ` · ${updates} Updates verfügbar` : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+    <details className="workspace-settings-group" open={searching ? searchGroups.catalog : catalogOpen}>
+      <summary onClick={event => { event.preventDefault(); if (searching) setSearchGroups(current => ({ ...current, catalog: !current.catalog })); else setCatalogOpen(value => !value); }}><span><strong>Modulkatalog</strong><small>{state.modules.length} {state.modules.length === 1 ? 'Modul' : 'Module'}{updates > 0 ? ` · ${updates} Updates verfügbar` : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="repository-catalog">
         <div className="repository-catalog-toolbar"><input type="search" value={query} placeholder="Module suchen …" aria-label="Modulkatalog durchsuchen" onChange={event => setQuery(event.target.value)} /><select aria-label="Modulquelle filtern" value={sourceFilter} onChange={event => setSourceFilter(event.target.value)}><option value="">Alle Quellen</option>{state.sources.map(source => <option key={source.id} value={source.id}>{source.title}</option>)}</select><button type="button" disabled={loading || blocked || !state.sources.length} onClick={() => void refresh(sourceFilter || undefined)}><RefreshCw size={14} aria-hidden="true" />{operation.startsWith('refresh') ? 'Wird geladen …' : 'Katalog laden'}</button></div>
         <div className="repository-source-statuses">{state.sources.filter(source => !sourceFilter || source.id === sourceFilter).map(source => <div key={source.id} className={source.status === 'error' ? 'error' : ''}><span><strong>{source.title}</strong> · {source.status === 'unloaded' ? 'Noch nicht geladen' : source.status === 'loading' ? 'Wird geladen …' : source.status === 'error' ? source.error || 'Katalog konnte nicht geladen werden.' : `${source.moduleCount} Module`}{source.checkedAt && <small>Geprüft: {new Date(source.checkedAt).toLocaleString()}</small>}</span>{source.status !== 'loading' && <button type="button" disabled={blocked} aria-label={`Katalog von ${source.title} laden`} title="Katalog laden" onClick={() => void refresh(source.id)}><RefreshCw size={13} aria-hidden="true" /></button>}</div>)}</div>

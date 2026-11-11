@@ -248,7 +248,7 @@ export class ModuleRegistry {
   disable(id: string, reason = 'Das Modul ist deaktiviert.'): void {
     const record = this.records.get(id); if (!record) return;
     if (record.module.required) throw new Error('Das Pflichtmodul kann nicht deaktiviert werden.');
-    if (!['ready', 'approval_required', 'disabled'].includes(record.module.status)) throw new Error('Ein fehlerhaftes oder inkompatibles Modul kann nicht aktiviert oder deaktiviert werden.');
+    if (!['ready', 'approval_required', 'disabled', 'invalid'].includes(record.module.status)) throw new Error('Dieses inkompatible Modul kann nicht aktiviert oder deaktiviert werden.');
     record.module.status = 'disabled'; record.module.reason = reason.slice(0, 500);
   }
   enable(id: string): ModuleInfo {

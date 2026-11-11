@@ -177,7 +177,11 @@ async function main() {
     active = await launch(await appInfo(installed), appData);
     pass('First real packaged app opens from the disposable Applications folder with local credential storage and renderer assets.');
     assert(await active.credentialFixture(true), 'The packaged app could not save and read its synthetic local credential.');
-    const sentinel = await active.ui(`(async()=>{const api=window.workspace;await api.updateSettings({textSize:'large'});const sessionId=await api.createChatSession();await api.renameChatSession(sessionId,'Synthetic installer upgrade QA');await api.dispatchAction({type:'create_draft'});const state=await api.loadState();const draftId=state.activeDraftId;await api.dispatchAction({type:'update_draft',draftId,patch:{to:'upgrade@example.org',subject:'Retain this synthetic draft',body:'Synthetic package upgrade fixture. Never send.'}});return{sessionId,draftId}})()`);
+    const sessionId = await active.ui(`(async()=>{const api=window.workspace;await api.updateSettings({textSize:'large'});const id=await api.createChatSession();await api.renameChatSession(id,'Synthetic installer upgrade QA');await api.dispatchAction({type:'create_draft'});return id})()`);
+    // Each renderer receives only its own view. Read and edit draft content in
+    // its actual window rather than relying on the OVD-Bar's settings projection.
+    const draftId = await active.ui(`(async()=>{const api=window.workspace;const state=await api.loadState();const id=state.activeDraftId;if(!id)throw Error('The fixture draft was not opened');await api.dispatchAction({type:'update_draft',draftId:id,patch:{to:'upgrade@example.org',subject:'Retain this synthetic draft',body:'Synthetic package upgrade fixture. Never send.'}});return id})()`, 'draft');
+    const sentinel = { sessionId, draftId };
     assert(sentinel?.sessionId && sentinel.draftId, 'Could not create synthetic data through the actual packaged window API.');
     await active.ui(`window.workspace.saveDraft(${JSON.stringify(sentinel.draftId)})`, 'draft');
     await active.close(); active = undefined;
@@ -197,10 +201,13 @@ async function main() {
     await fs.rm(installed, { recursive: true }); execFileSync('/usr/bin/ditto', [next.app, installed]);
     active = await launch(await appInfo(installed), appData);
     assert(await active.credentialFixture(false), 'Replacing the app lost the synthetic local credential.');
-    const restored = await active.ui('window.workspace.loadState()');
-    assert(restored.settings.textSize === 'large', 'The upgrade lost settings.');
-    assert(restored.sessions.some(session => session.id === sentinel.sessionId && session.title === 'Synthetic installer upgrade QA'), 'The upgrade lost the saved chat.');
-    const draft = restored.drafts.find(draft => draft.id === sentinel.draftId);
+    const restoredSettings = await active.ui('(async()=>{const state=await window.workspace.loadState();return state.settings})()');
+    assert(restoredSettings.textSize === 'large', 'The upgrade lost settings.');
+    await active.ui(`(async()=>{const api=window.workspace;await api.dispatchAction({type:'open_window',kind:'chat'});await api.selectChatSession(${JSON.stringify(sentinel.sessionId)});await api.setActiveDraft(${JSON.stringify(sentinel.draftId)})})()`);
+    const restoredChat = await active.ui('window.workspace.loadState()', 'chat');
+    assert(restoredChat.sessions.some(session => session.id === sentinel.sessionId && session.title === 'Synthetic installer upgrade QA'), 'The upgrade lost the saved chat.');
+    const restoredDraft = await active.ui('window.workspace.loadState()', 'draft');
+    const draft = restoredDraft.drafts.find(draft => draft.id === sentinel.draftId);
     assert(draft && draft.to === 'upgrade@example.org' && draft.subject === 'Retain this synthetic draft' && draft.body === 'Synthetic package upgrade fixture. Never send.', 'The upgrade lost the saved draft.');
     assert(await fs.readFile(notes, 'utf8') === noteData, 'The upgrade changed module-owned data.');
     pass('Replacing the app with a newer real package retains settings, chat identity, draft content, module data and readable local credentials in the same profile.');

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, ArrowUp, Check, ChevronRight, File, FilePlus2, Folder, FolderOpen, Home, Link2, Paperclip, Pencil, RefreshCw, Search, X } from 'lucide-react';
+import { ArrowRight, ArrowUp, Check, ChevronLeft, ChevronRight, File, FilePlus2, Folder, FolderOpen, Home, Link2, Paperclip, Pencil, RefreshCw, Search, X } from 'lucide-react';
 import type { Draft } from '../../../shared/model';
 import type { FileChooseKind, FileEntry, FileListingPage, FileListRequest, FileNavigationTarget, FileReadResult } from '../../../shared/files';
 import { writeModuleReferenceDrag } from '../../../shared/references';
@@ -35,7 +35,8 @@ function breadcrumbs(listing?: FileListingPage): { title: string; path: string }
 
 export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: { path: string; name: string; size: number }): void | Promise<void> }) {
   const [listing, setListing] = useState<FileListingPage>();
-  const [loading, setLoading] = useState(true), [loadingMore, setLoadingMore] = useState(false);
+  const [loading, setLoading] = useState(true), [paging, setPaging] = useState(false);
+  const [pagePosition, setPagePosition] = useState({ index: 0, offset: 0 });
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [query, setQuery] = useState('');
   const [filterPending, setFilterPending] = useState(false);
@@ -50,7 +51,10 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
   const currentQuery = useRef('');
   const currentSort = useRef<Pick<FileListRequest, 'sort' | 'direction'>>({ sort: 'name', direction: 'asc' });
   const queryTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pageHistory = useRef<{ cursor?: string; offset: number }[]>([{ offset: 0 }]);
+  const pagingFocus = useRef<{ button: HTMLButtonElement; version: number } | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
+  const pathRef = useRef<HTMLElement>(null);
   const pathInputRef = useRef<HTMLInputElement>(null), pathEditButtonRef = useRef<HTMLButtonElement>(null);
   const pathNavigationVersion = useRef<number | undefined>(undefined);
 
@@ -71,11 +75,12 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
     pathNavigationVersion.current = fromPathEditor ? version : undefined;
     previewVersion.current++;
     currentPath.current = path;
-    setLoading(true); setLoadingMore(false); setFilterPending(false); setError(''); setNotice('');
+    setLoading(true); setPaging(false); setFilterPending(false); setError(''); setNotice('');
     setSelected(undefined); setPreview(undefined); setPreviewText(''); setPreviewError(''); setPreviewLoading(false);
     try {
       const result = await window.workspace.filesList({ path, query: currentQuery.current || undefined, ...currentSort.current, limit: 100 });
       if (version !== browseVersion.current) return;
+      pageHistory.current = [{ offset: 0 }]; setPagePosition({ index: 0, offset: 0 });
       currentPath.current = result.path; setListing(result); listRef.current?.scrollTo({ top: 0 });
       if (fromPathEditor) { setEditingPath(false); setPathDraft(result.path); }
       if (selectedId) {
@@ -99,7 +104,7 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
     setPathDraft(listing?.path ?? currentPath.current ?? ''); setEditingPath(true);
   }
   function cancelPathEdit() {
-    if (pathNavigationVersion.current === browseVersion.current) { browseVersion.current++; setLoading(false); setLoadingMore(false); }
+    if (pathNavigationVersion.current === browseVersion.current) { browseVersion.current++; setLoading(false); setPaging(false); }
     pathNavigationVersion.current = undefined; currentPath.current = listing?.path;
     setEditingPath(false); setError('');
     requestAnimationFrame(() => pathEditButtonRef.current?.focus());
@@ -123,21 +128,52 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
     if (editingPath) { pathInputRef.current?.focus(); pathInputRef.current?.select(); }
   }, [editingPath]);
   useEffect(() => {
+    const ids = [...new Set([...(listing?.entries.map(entry => entry.id) ?? []), ...(selected ? [selected.id] : [])])];
+    window.workspace.filesSetViewContext(ids);
+  }, [listing, selected?.id]);
+  useEffect(() => () => { window.workspace.filesSetViewContext([]); }, []);
+  useEffect(() => {
+    if (paging) return;
+    const focused = pagingFocus.current;
+    pagingFocus.current = undefined;
+    if (!focused || focused.version !== browseVersion.current || !focused.button.isConnected || (document.activeElement !== document.body && document.activeElement !== focused.button)) return;
+    const target = focused.button.disabled ? focused.button.parentElement?.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? listRef.current?.querySelector<HTMLButtonElement>('.ovd-files-entry') : focused.button;
+    target?.focus();
+  }, [paging, listing]);
+  useEffect(() => {
+    const path = pathRef.current;
+    if (!path) return;
+    const revealCurrentFolder = () => { path.scrollLeft = path.scrollWidth; };
+    revealCurrentFolder();
+    const observer = new ResizeObserver(revealCurrentFolder);
+    observer.observe(path);
+    return () => observer.disconnect();
+  }, [listing?.path, editingPath]);
+  useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'l') { event.preventDefault(); editPath(); }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
   }, [listing?.path]);
-  async function loadMore() {
-    if (!listing?.nextCursor || loadingMore || loading || filterPending || queryTimer.current) return;
-    const version = browseVersion.current;
-    setLoadingMore(true); setError('');
+  async function changePage(direction: -1 | 1) {
+    if (!listing || paging || loading || filterPending || queryTimer.current) return;
+    const index = pagePosition.index + direction;
+    const target = direction === 1
+      ? listing.nextCursor && { cursor: listing.nextCursor, offset: pagePosition.offset + listing.entries.length }
+      : pageHistory.current[index];
+    if (!target || index < 0) return;
+    const version = ++browseVersion.current;
+    pagingFocus.current = document.activeElement instanceof HTMLButtonElement && document.activeElement.closest('.ovd-files-pages') ? { button: document.activeElement, version } : undefined;
+    setPaging(true); setError('');
     try {
-      const result = await window.workspace.filesList({ path: listing.path, cursor: listing.nextCursor, query: currentQuery.current || undefined, ...currentSort.current, limit: 100 });
-      if (version === browseVersion.current) setListing(previous => previous && ({ ...result, entries: [...previous.entries, ...result.entries] }));
+      const result = await window.workspace.filesList({ path: listing.path, cursor: target.cursor, query: currentQuery.current || undefined, ...currentSort.current, limit: 100 });
+      if (version !== browseVersion.current) return;
+      if (direction === 1) pageHistory.current = [...pageHistory.current.slice(0, index), target];
+      setListing(result); setPagePosition({ index, offset: target.offset });
+      listRef.current?.scrollTo({ top: 0 });
     } catch (reason) { if (version === browseVersion.current) setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { if (version === browseVersion.current) setLoadingMore(false); }
+    finally { if (version === browseVersion.current) setPaging(false); }
   }
   async function readMore() {
     if (!preview?.nextCursor || !selected || previewLoading) return;
@@ -184,7 +220,7 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
       </div>
     </header>
     <div className={`ovd-files-pathbar${editingPath ? ' is-editing' : ''}`}>
-      {editingPath ? <form className="ovd-files-path-editor" onSubmit={event => { event.preventDefault(); submitPath(); }}><input ref={pathInputRef} aria-label="Ordnerpfad" value={pathDraft} maxLength={4096} placeholder="Absoluten Ordnerpfad eingeben …" onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); cancelPathEdit(); } }}/><button type="submit" className="ovd-files-icon" aria-label="Ordnerpfad öffnen" title="Ordnerpfad öffnen"><ArrowRight size={14}/></button><button type="button" className="ovd-files-icon" aria-label="Pfadbearbeitung abbrechen" title="Abbrechen (Esc)" onClick={cancelPathEdit}><X size={14}/></button></form> : <><nav className="ovd-files-path" aria-label="Aktueller Dateipfad" title={listing?.path}>{breadcrumbs(listing).map((crumb, index, all) => <span key={crumb.path}>{index > 0 && <ChevronRight size={11} aria-hidden="true"/>}<button type="button" disabled={index === all.length - 1} onClick={() => navigate(crumb.path)} aria-current={index === all.length - 1 ? 'location' : undefined}>{crumb.title}</button></span>)}</nav><button ref={pathEditButtonRef} type="button" className="ovd-files-icon" aria-label="Ordnerpfad eingeben" title="Ordnerpfad eingeben (⌘/Strg+L)" onClick={editPath}><Pencil size={13}/></button></>}
+      {editingPath ? <form className="ovd-files-path-editor" onSubmit={event => { event.preventDefault(); submitPath(); }}><input ref={pathInputRef} aria-label="Ordnerpfad" value={pathDraft} maxLength={4096} placeholder="Absoluten Ordnerpfad eingeben …" onChange={event => setPathDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); cancelPathEdit(); } }}/><button type="submit" className="ovd-files-icon" aria-label="Ordnerpfad öffnen" title="Ordnerpfad öffnen"><ArrowRight size={14}/></button><button type="button" className="ovd-files-icon" aria-label="Pfadbearbeitung abbrechen" title="Abbrechen (Esc)" onClick={cancelPathEdit}><X size={14}/></button></form> : <><nav ref={pathRef} className="ovd-files-path" aria-label="Aktueller Dateipfad" title={listing?.path}>{breadcrumbs(listing).map((crumb, index, all) => <span key={crumb.path}>{index > 0 && <ChevronRight size={11} aria-hidden="true"/>}<button type="button" disabled={index === all.length - 1} onClick={() => navigate(crumb.path)} aria-current={index === all.length - 1 ? 'location' : undefined}>{crumb.title}</button></span>)}</nav><button ref={pathEditButtonRef} type="button" className="ovd-files-icon" aria-label="Ordnerpfad eingeben" title="Ordnerpfad eingeben (⌘/Strg+L)" onClick={editPath}><Pencil size={13}/></button></>}
     </div>
     <div className="ovd-files-filters"><label className="ovd-files-search"><Search size={14} aria-hidden="true"/><input aria-label="Dateien im aktuellen Ordner filtern" placeholder="In diesem Ordner filtern …" maxLength={200} value={query} onChange={event => { const value = event.target.value; setQuery(value); currentQuery.current = value; clearQueryTimer(); setFilterPending(true); queryTimer.current = setTimeout(() => { queryTimer.current = undefined; void browse(currentPath.current); }, 200); }}/>{query && <button type="button" aria-label="Dateifilter zurücksetzen" onClick={() => { clearQueryTimer(); currentQuery.current = ''; setQuery(''); void browse(currentPath.current); }}><X size={13}/></button>}</label>
       <select aria-label="Dateien sortieren" value={sort} onChange={event => { const value = event.target.value; setSort(value); const [field, direction] = value.split(':'); currentSort.current = { sort: field as FileListRequest['sort'], direction: direction as FileListRequest['direction'] }; clearQueryTimer(); void browse(currentPath.current); }}><option value="name:asc">Name A–Z</option><option value="name:desc">Name Z–A</option><option value="modified:desc">Zuletzt geändert</option><option value="size:desc">Größte zuerst</option></select>
@@ -194,12 +230,11 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
     <div className={`ovd-files-content${selected ? ' has-selection' : ''}`}>
       <div className="ovd-files-browser">
         <div className="ovd-files-columns" aria-hidden="true"><span>Name</span><span>Größe</span><span>Geändert</span></div>
-        <div ref={listRef} className="ovd-files-list" aria-label="Dateien und Ordner" aria-busy={loading}>
+        <div ref={listRef} className="ovd-files-list" aria-label="Dateien und Ordner" aria-busy={loading || paging}>
           {loading ? <p className="ovd-files-empty" role="status">Ordner wird geladen …</p> : listing?.entries.map(entry => <button type="button" key={entry.id} className={`ovd-files-entry${selected?.id === entry.id ? ' is-selected' : ''}`} aria-pressed={selected?.id === entry.id} title={`${entry.name}${entry.isDirectory ? ' · Doppelklick oder Enter zum Öffnen' : ' · Zur Vorschau auswählen oder in den Chat ziehen'}`} draggable={!entry.isDirectory} onDragStart={event => { writeModuleReferenceDrag(event.dataTransfer, { moduleId: 'ovd-files', type: 'file', id: entry.id }); }} onClick={() => void select(entry)} onDoubleClick={() => { if (entry.isDirectory) navigate(entry.path); }} onKeyDown={event => { if (event.key === 'Enter' && entry.isDirectory) { event.preventDefault(); navigate(entry.path); } }}>
             <span className={`ovd-files-entry-icon${entry.isDirectory ? ' is-folder' : ''}`}>{entry.isDirectory ? <Folder size={17} aria-hidden="true"/> : <File size={17} aria-hidden="true"/>}</span><span className="ovd-files-entry-name"><strong>{entry.name}</strong><small>{fileType(entry)}</small></span><span className="ovd-files-entry-size">{entry.isDirectory ? '–' : sizeLabel(entry.size)}</span><time dateTime={entry.modifiedAt}>{dateLabel(entry.modifiedAt)}</time>
           </button>)}
           {!loading && listing && !listing.entries.length && <p className="ovd-files-empty">{query ? 'Keine Dateien mit diesem Namen gefunden.' : 'Dieser Ordner ist leer.'}</p>}
-          {!loading && listing?.hasMore && <button type="button" className="ovd-files-more" disabled={loadingMore || filterPending} onClick={() => void loadMore()}>{loadingMore ? 'Weitere Einträge werden geladen …' : 'Weitere Einträge laden'}</button>}
         </div>
       </div>
       {selected && <aside className="ovd-files-preview" aria-label="Ausgewählte Datei">
@@ -212,6 +247,6 @@ export function FilesView({ draft, onAttach }: { draft?: Draft; onAttach(file: {
         </div>
       </aside>}
     </div>
-    <footer className="ovd-files-footer"><span>{listing ? `${loading ? '…' : listing.entries.length} von ${listing.total} ${listing.total === 1 ? 'Eintrag' : 'Einträgen'}` : 'Lokale Dateien'}</span><span>Dateien in den Chat ziehen</span></footer>
+    <footer className="ovd-files-footer"><span role="status" aria-live="polite">{listing ? `${loading || paging ? '…' : listing.entries.length ? `${pagePosition.offset + 1}–${pagePosition.offset + listing.entries.length}` : '0'} von ${listing.total} ${listing.total === 1 ? 'Eintrag' : 'Einträgen'}` : 'Lokale Dateien'}</span>{listing && (pagePosition.index > 0 || listing.hasMore) && <nav className="ovd-files-pages" aria-label="Dateiseiten"><button type="button" aria-label="Vorherige Dateiseite" title="Vorherige Seite" disabled={pagePosition.index === 0 || loading || paging || filterPending} onClick={() => void changePage(-1)}><ChevronLeft size={15}/></button><button type="button" aria-label="Nächste Dateiseite" title="Nächste Seite" disabled={!listing.hasMore || loading || paging || filterPending} onClick={() => void changePage(1)}><ChevronRight size={15}/></button></nav>}</footer>
   </div>;
 }

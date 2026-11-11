@@ -10,7 +10,9 @@ The assistant works with the same app you see. Ask it to find an email, and it c
 
 This is an early, single-user **alpha**. Releases include installers for **macOS Apple Silicon, macOS Intel and Windows x64**. Development and practical use have been exercised on macOS; automated package checks do not establish complete Windows runtime or upgrade validation. Linux remains a local build target. The application interface is currently primarily German; this repository's documentation is maintained in English.
 
-[Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Add modules](#modules-and-a-small-ai-context) · [Download](#download-and-install) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Maturation plan](docs/maturation-plan.md)
+[Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Add modules](#modules-and-a-small-ai-context) · [Download](#download-and-install) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Maturation plan](docs/maturation-plan.md)
+
+**v0.1.9:** configurable OVD-Bar, whole-request context budgeting, paged full Mail/draft text and measured improvements to memory use and window traffic. See the [changes and remaining limits](CHANGELOG.md#v019--11-november-2026).
 
 ## Who we are building this for
 
@@ -26,7 +28,11 @@ This is the direction of the project. The early version already has Mail, Files,
 
 Read a message, bring it into Chat as a reference, and let the Assistant prepare a reply in a separate draft window. Files and approved MCP tools join the same workspace.
 
-These screenshots show the running app with **fictional sample data in isolated profiles**, captured on 28 October 2026. They illustrate the workspace; later layout refinements and the module catalog are not pictured. The interface is currently primarily German. Click any image to view it at full size.
+These screenshots show the running app with **fictional sample data in isolated profiles**. The OVD-Bar images are from 11 November 2026; the module gallery below is from 28 October and predates the latest density and paging refinements. The interface is currently primarily German. Click any image to view it at full size.
+
+[![The compact horizontal OVD-Bar with module icons and an overflow menu](assets/screenshots/ovd-bar.png)](assets/screenshots/ovd-bar.png)
+
+Place the OVD-Bar vertically or horizontally, resize it, adjust its background opacity, or let it collapse while idle. [View its settings](assets/screenshots/ovd-bar-settings.png) or read the [OVD-Bar guide](docs/ovd-bar.md).
 
 | Assistant | Mail |
 | --- | --- |
@@ -49,15 +55,16 @@ These screenshots show the running app with **fictional sample data in isolated 
 
 | Area | Current scope |
 | --- | --- |
-| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable agent execution. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
-| **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML/text reading, attachments, local drafts, SMTP sending and separate Sent-copy filing with retry. |
+| **OVD-Bar** | Vertical or horizontal floating launcher; adjustable size, background opacity and placement, optional idle collapse, keyboard navigation and module ordering. |
+| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
+| **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML previews and paged full-text reading, attachments, local drafts with paged Assistant access, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local Stdio and remote Streamable HTTP servers, browser OAuth or Bearer authentication, individual tool approvals, and a compact activity log. |
 | **Module management** | Multiple public/private repositories, searchable catalogs, module installation and updates, local code approval, and shared Assistant access. |
 
-Mail, chat, files, and settings open in separate windows. The dock and its module order are configurable. Settings use compact groups and global search.
+Mail, chat, files, and settings open in separate windows. The [OVD-Bar](docs/ovd-bar.md) keeps modules close at hand with adjustable orientation, size, transparency, placement and optional idle collapse. Settings use compact groups and global search.
 
-Modules can signal new activity with a small dot on their Dock and Settings icons: it briefly breathes, then stays visible until acknowledged. The Mail module uses this for newly observed Inbox activity.
+Modules can signal new activity with a small dot on their OVD-Bar and Settings icons: it briefly breathes, then stays visible until acknowledged. The Mail module uses this for newly observed Inbox activity.
 
 ## Modules and a small AI context
 
@@ -76,7 +83,7 @@ OVD can grow with the tools a person or small business actually uses. A module c
 3. Select **Katalog laden**, choose a module and click **Installieren**.
 4. Review and select **Freigeben & aktivieren**. Its declared views, settings and tools become available in the running app.
 
-The separate [module repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) currently publishes **Notes** (`sample-notes`), a small example of shared UI/Assistant functions, and **Skill Library** (`skill-library`), for storing and explicitly attaching reusable working instructions to a request. These are optional downloads, not bundled features. Check each module's documentation for host requirements.
+The separate [module repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) currently publishes **Notes** (`sample-notes`), **Skill Library** (`skill-library`) and **Memory** (`memory`). Notes demonstrates shared UI/Assistant functions; Skill Library stores explicitly attached working instructions; Memory stores sourced facts with automatic recall and optional observation review. These are optional downloads, not bundled features. Check each module's documentation for host requirements and its own behavior.
 
 Reload the catalog to check for updates, then select **Aktualisieren** for the chosen module. Updates preserve its separate data directory, but changed code needs renewed approval before running. Module updates and application installer upgrades are separate; neither happens automatically. See the [repository guide](docs/module-repositories.md) for the complete workflow and troubleshooting.
 
@@ -89,6 +96,12 @@ Start with the [module authoring contract](CONTRIBUTING.md#building-modules), th
 ### Discover only what the task needs
 
 The Assistant initially sees short descriptions of available modules and just two discovery tools: `find_modules` finds relevant modules; `get_module_tools` loads the selected functions. Repository catalogs and unused schemas stay out of the initial context. References carry a stable resource ID and a bounded snapshot; the owning module supplies reading tools for more content.
+
+Long runs also have a [whole-request context budget](docs/architecture.md#whole-request-context-budget). OVD removes the oldest history first, then replaces complete older tool exchanges with compact result references that the Assistant can read in pages without repeating an action. **Settings → Agent → Context** sets the global budget and answer reserve. The default is 128,000 conservatively estimated tokens with an 8,192-token reserve; this is a local size estimate, not automatic model-limit detection. If the current request still cannot fit, OVD stops with the results retained.
+
+Mail and draft reading have their own [source-content continuation](docs/architecture.md#complete-mail-and-draft-text). A long message can be read in sections through the Mail window or Assistant, and newly saved mail references can reopen their exact source after restart. Reference snapshots and HTML previews remain compact; they are separate from complete text retrieval and its documented size limits.
+
+For larger workspaces, window state is scoped to each view, Mail body caches are bounded, and older chats and directory entries load in pages. See the [performance measurements](docs/performance-2026-11.md).
 
 The Assistant can also inspect module sources, refresh catalogs, find updates and request installation. Source credentials and code approval stay in the local interface. See [repository control through Chat](docs/module-repositories.md#assistant-control).
 
@@ -142,7 +155,7 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 
 | Priority | Focus | Next work |
 | --- | --- | --- |
-| First | Trustworthy existing workflows | Bound complete agent context (R02); add long-content continuation (R03), aggregate memory budgets and visible save recovery. Tool-free answer reformulation (R01a) is implemented and practically verified. |
+| First | Trustworthy existing workflows | Extend visible save/error recovery to the whole workspace (R05), then finish explicit Mail-list paging. Tool-free reformulation (R01a), context budgeting (R02), source continuation (R03) and measured memory/window-traffic improvements (R04) are implemented and practically verified. |
 | Foundation | Storage and module lifecycle | Add migrations and backup/restore; finish module compatibility and settings lifecycle contracts; assess MCP compatibility. External reference resolution, explicit instruction references and durable task continuation are implemented. |
 | Daily use | Existing modules and interface | Complete everyday mail actions, synchronization and composition; refine Chat, Files, MCP, settings and accessibility. |
 | Release | Reproducible distribution | macOS/Windows installers and integrity checks are available. Trusted publisher signing, notarization and broader runtime/upgrade validation remain. |

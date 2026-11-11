@@ -3,12 +3,17 @@ import { ImapMailView } from './ImapMailView';
 import { MailQueryControls } from './MailQueryControls';
 import { useMailPreviews } from './use-mail-previews';
 import type { ImapFolder, ImapMessage, ImapPageCursor, MailAccountSummary, MailPreview, MailSearchResults } from '../../../shared/mail';
+import { mailMessageMetadata } from '../../../shared/mail';
 import type { MailCountRequest, MailCountResult, MailQueryRequest, MailQueryResult } from '../../../shared/mail-query';
 import { draftCollection } from '../../../shared/draft-status';
 import type { Draft, MailNavigationTarget } from '../../../shared/model';
 import './mail-workspace.css';
 
 type MailOpenRequest = MailNavigationTarget & { refreshVersion: number };
+function readerBody(message: ImapMessage) {
+  const { id, bodyText, bodyHtml, htmlTruncated, inlineImages, bodyLoaded, truncated } = message;
+  return { id, bodyText, bodyHtml, htmlTruncated, inlineImages, bodyLoaded, truncated };
+}
 
 export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const [mode, setMode] = useState<'loading' | 'real' | 'drafts'>('loading');
@@ -17,8 +22,16 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const [folders, setFolders] = useState<ImapFolder[]>([]);
   const [folder, setFolder] = useState('');
   const [messages, setMessages] = useState<ImapMessage[]>([]);
-  const [messageId, setMessageId] = useState<string>();
+  const [messageId, setMessageIdValue] = useState<string>();
+  const [selectedBody, setSelectedBody] = useState<ReturnType<typeof readerBody>>();
+  const selectedId = useRef<string | undefined>(undefined);
+  const setMessageId = useCallback((id?: string) => {
+    selectedId.current = id; setMessageIdValue(id);
+    setSelectedBody(current => current?.id === id ? current : undefined);
+  }, []);
   const [bodyLoading, setBodyLoading] = useState<string>();
+  const [textReadRequest, setTextReadRequest] = useState<{ emailId: string; cursor?: string; limit?: number; version: number }>();
+  useEffect(() => window.workspace.onShowMailText(request => setTextReadRequest(previous => ({ ...request, version: (previous?.version ?? 0) + 1 }))), []);
   const [searchResults, setSearchResults] = useState<MailSearchResults>();
   const [queryResults, setQueryResults] = useState<MailQueryResult>();
   const [queryRequest, setQueryRequest] = useState<MailQueryRequest>();
@@ -44,12 +57,17 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const listVersion = useRef(0);
   const loadMoreBusy = useRef(false);
   const pendingLookup = useRef<string | undefined>(undefined);
+  const bodyRequestVersion = useRef(0);
+  useEffect(() => () => { bodyRequestVersion.current++; void window.workspace.cancelMailBody().catch(() => {}); }, [mode, accountId, folder]);
   const inboxRefreshBusy = useRef(false);
   const liveView = useRef({ mode, accountId, folder, loading, searching: false });
   liveView.current = { mode, accountId, folder, loading, searching: !!(searchResults || queryResults || searchLoading || queryBusy) };
   currentFolder.current = { accountId, folder };
 
   const visibleMessages = queryResults?.messages ?? searchResults?.messages ?? messages;
+  // Lists hold metadata only. Exactly one payload is owned by the reader and
+  // released when selection changes, instead of accumulating HTML/CID copies.
+  const readerMessages = selectedBody?.id === messageId ? visibleMessages.map(message => message.id === messageId ? { ...message, ...selectedBody } : message) : visibleMessages;
   const applyPreviews = useCallback((previews: MailPreview[]) => {
     const byId = new Map(previews.map(item => [item.emailId, item.preview]));
     const merge = (items: ImapMessage[]) => items.map(item => byId.has(item.id) ? { ...item, preview: byId.get(item.id)! } : item);
@@ -60,7 +78,13 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const onVisibleMessages = useMailPreviews(visibleMessages, mode === 'real' && !loading && !searchLoading && !queryBusy,
     JSON.stringify([accountId, folder, refresh, searchVersion.current, visibleMessages.map(message => message.id)]), applyPreviews);
 
-  useEffect(() => window.workspace.onMailMessageChanged(message => { setMessages(items => items.map(item => item.id === message.id ? message : item)); setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? message : item) } : current); setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? message : item) } : current); }), []);
+  useEffect(() => window.workspace.onMailMessageChanged(message => {
+    const metadata = mailMessageMetadata(message);
+    setMessages(items => items.map(item => item.id === message.id ? metadata : item));
+    setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? metadata : item) } : current);
+    setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === message.id ? metadata : item) } : current);
+    if (message.bodyLoaded && selectedId.current === message.id) setSelectedBody(readerBody(message));
+  }), []);
   useEffect(() => window.workspace.onMailSearchResults(results => { searchVersion.current++; setSearchResults(results); setQueryResults(undefined); setQueryRequest(undefined); setCountResult(undefined); setQueryBusy(false); setSearchLoading(false); setMode('real'); setMessageId(undefined); setBodyLoading(undefined); setError(''); setPendingOpen(undefined); }), []);
   useEffect(() => window.workspace.onMailQueryResults(({ result, request }) => { searchVersion.current++; setQueryResults(result); setQueryRequest(request); setCountResult(undefined); setSearchResults(undefined); setQueryBusy(false); setQueryLoadingMore(false); setSearchLoading(false); setMode('real'); setMessageId(undefined); setBodyLoading(undefined); setError(''); setPendingOpen(undefined); }), []);
   useEffect(() => {
@@ -183,15 +207,23 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const openSettings = () => void window.workspace.openMailSettings().catch(reason => setError(String(reason)));
   const openDraft = (messageId?: string) => void window.workspace.createMailDraft((queryResults?.messages ?? searchResults?.messages)?.find(message => message.id === messageId)?.accountId ?? accountId, messageId).catch(reason => setError(String(reason)));
   const selectMessage = (id: string) => {
-    setMessageId(id);
+    const version = ++bodyRequestVersion.current;
+    void window.workspace.cancelMailBody().catch(() => {});
+    setMessageId(id); setBodyLoading(undefined);
     const selected = (queryResults?.messages ?? searchResults?.messages ?? messages).find(message => message.id === id);
-    if (!selected || selected.bodyLoaded) return;
+    if (!selected || (selectedBody?.id === id && selectedBody.bodyLoaded)) return;
     const before = { accountId, folder };
     setBodyLoading(id); setError('');
     void window.workspace.loadMailBody(id).then(message => {
-      if (currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) { setMessages(items => items.map(item => item.id === id ? message : item)); setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? message : item) } : current); setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? message : item) } : current); }
-    }).catch(reason => { if (currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) setError(reason instanceof Error ? reason.message : 'Nachricht konnte nicht geladen werden.'); })
-      .finally(() => setBodyLoading(current => current === id ? undefined : current));
+      if (version === bodyRequestVersion.current && selectedId.current === id && currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) {
+        setSelectedBody(readerBody(message));
+        const metadata = mailMessageMetadata(message);
+        setMessages(items => items.map(item => item.id === id ? metadata : item));
+        setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? metadata : item) } : current);
+        setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? metadata : item) } : current);
+      }
+    }).catch(reason => { if (version === bodyRequestVersion.current && currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) setError(reason instanceof Error ? reason.message : 'Nachricht konnte nicht geladen werden.'); })
+      .finally(() => { if (version === bodyRequestVersion.current) setBodyLoading(current => current === id ? undefined : current); });
   };
   useEffect(() => {
     if (!pendingOpen || !accountsLoaded) return;
@@ -280,15 +312,14 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
     </button>)}
   </div>;
   const draftsView = <section className="local-drafts" aria-label="Lokale Entwürfe">
-    <header><h2>Lokale Entwürfe</h2><p>Hier stehen deine noch nicht versendeten Nachrichten. Versand und Ablage werden separat geführt.</p></header>
+    <header><h2>Lokale Entwürfe</h2></header>
     {!editableDrafts.length ? <p className="local-drafts-empty">Keine ungesendeten Entwürfe.</p> : draftRows(editableDrafts, 'Ungesendete Entwürfe')}
     {!!outgoingDrafts.length && <section className="local-drafts-group" aria-labelledby="local-outgoing-title">
-      <header><h3 id="local-outgoing-title">Versand &amp; Ablage <span>{outgoingDrafts.length}</span></h3><p>Offene oder unklare Vorgänge prüfen. Bereits angenommene Nachrichten werden nicht erneut versendet.</p></header>
+      <header><h3 id="local-outgoing-title">Versand &amp; Ablage <span>{outgoingDrafts.length}</span></h3></header>
       {draftRows(outgoingDrafts, 'Offener Versand und Ablage')}
     </section>}
     {!!sentDrafts.length && <details className="local-sent-history">
       <summary>Versandverlauf <span>{sentDrafts.length}</span></summary>
-      <p>Abgeschlossene Sendungen bleiben für ihren Status und den Schutz vor erneutem Versand erhalten.</p>
       {draftRows(sentDrafts, 'Abgeschlossene Sendungen')}
     </details>}
     {error && <p className="imap-error" role="alert">{error}</p>}
@@ -297,7 +328,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   return <div className="mail-workspace">
     <div className="mail-workspace-content">
       {mode === 'loading' ? <div className="mail-workspace-loading">Mailkonten werden geladen …</div> :
-        <ImapMailView accounts={accounts} folders={folders} messages={visibleMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
+        <ImapMailView accounts={accounts} folders={folders} messages={readerMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
           dateBasis={queryResults && (queryRequest?.sort ?? queryResults.request?.sort ?? 'received_desc').startsWith('received') ? 'received' : 'sent'}
           queryControls={<MailQueryControls accounts={accounts} folders={folders} accountId={accountId} folder={folder} hidden={mode === 'drafts'} busy={queryBusy || queryLoadingMore} summary={countResult ?? queryResults} onQuery={queryMail} onCount={countMail} onReset={clearSearch}/>}
           searchState={queryResults ? { title: 'Mailabfrage', query: '', description: 'Kombinierte Serverfilter', total: queryResults.count, countExact: queryResults.countExact, complete: queryResults.complete, hasMore: queryResults.hasMore, scope: queryResults.scope, loading: queryBusy } : searchResults ? { query: searchResults.query, total: searchResults.total, hasMore: searchResults.hasMore, scope: searchResults.scope + (searchResults.foldersRemaining ? ` · ${searchResults.foldersRemaining} weitere Ordner nicht durchsucht` : '') + (searchResults.warnings?.length ? ' · Einige Ordner nicht erreichbar' : ''), loading: searchLoading } : searchLoading ? { query: pendingSearchQuery, total: 0, hasMore: false, scope: 'Postfachsuche läuft …', loading: true } : undefined}
@@ -306,7 +337,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
           loadingMore={queryResults ? queryLoadingMore : loadingMore}
           hasMore={queryResults ? !!queryResults.nextCursor && queryResults.messages.length < 500 : !searchResults && !!nextCursor}
           onLoadMore={() => void (queryResults ? loadMoreQuery() : loadMore())}
-          bodyLoading={bodyLoading === messageId} error={error}
+          bodyLoading={bodyLoading === messageId} error={error} textReadRequest={textReadRequest}
           onAccount={id => { clearSearch(); setPendingOpen(undefined); setMode('real'); setAccountId(id); }}
           onFolder={path => { clearSearch(); setPendingOpen(undefined); setMode('real'); setFolder(path); }}
           onSelect={id => { setPendingOpen(undefined); selectMessage(id); }}

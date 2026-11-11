@@ -56,7 +56,7 @@ const moduleToolQuerySchema = (maximum: number) => z.object({ moduleId: z.string
 type ActiveTool = { moduleId: string; descriptor: ModuleToolDescriptor; definition: ProviderToolDefinition };
 
 function descriptorTool(moduleId: string, descriptor: ModuleToolDescriptor): ActiveTool {
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(descriptor.name) || discoveryNames.has(descriptor.name)) throw new Error('Das Modul bietet einen ungültigen oder reservierten Werkzeugnamen an.');
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(descriptor.name) || discoveryNames.has(descriptor.name) || descriptor.name === 'read_tool_result') throw new Error('Das Modul bietet einen ungültigen oder reservierten Werkzeugnamen an.');
   if (typeof descriptor.description !== 'string' || !descriptor.parameters || typeof descriptor.parameters !== 'object' || Array.isArray(descriptor.parameters) || descriptor.parameters.type !== 'object') throw new Error('Das Modul bietet ein ungültiges Werkzeugschema an.');
   const schema = JSON.stringify(descriptor.parameters);
   if (schema.length > MAX_SCHEMA_LENGTH) throw new Error('Das Werkzeugschema des Moduls ist zu groß. Bitte ein kleineres Werkzeug auswählen.');
@@ -66,7 +66,7 @@ function descriptorTool(moduleId: string, descriptor: ModuleToolDescriptor): Act
 
 // Reserved host metadata is deliberately a small allowlist, never a second
 // channel for original arguments or arbitrary module-provided result content.
-function boundedHostOperation(value: unknown): Record<string, unknown> | undefined {
+export function boundedHostOperation(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const identifier = (item: unknown): item is string => typeof item === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(item);
@@ -117,19 +117,25 @@ export class ModuleToolRuntime {
   private readonly settings: AgentSettings;
   private readonly bootstrap: readonly ProviderToolDefinition[];
   private readonly querySchema: ReturnType<typeof moduleToolQuerySchema>;
+  private resultReader?: { definition: ProviderToolDefinition; read(input: unknown): unknown };
   constructor(settings?: Partial<AgentSettings>) {
     this.settings = normalizeAgentSettings(settings);
     this.bootstrap = discoveryDefinitions(this.settings);
     this.querySchema = moduleToolQuerySchema(this.settings.maxActiveTools);
   }
   private offeredDefinitions(active: ReadonlyMap<string, ActiveTool>): readonly ProviderToolDefinition[] {
-    return [...this.bootstrap, ...[...active.values()].map(tool => tool.definition)];
+    return [...this.bootstrap, ...(this.resultReader ? [this.resultReader.definition] : []), ...[...active.values()].map(tool => tool.definition)];
+  }
+  enableResultReader(definition: ProviderToolDefinition, read: (input: unknown) => unknown): void {
+    this.resultReader = { definition, read };
+    while (JSON.stringify(this.definitions).length > this.settings.toolSchemaBudget && this.active.size) this.active.delete(this.active.keys().next().value!);
   }
   get definitions(): readonly ProviderToolDefinition[] { return this.offeredDefinitions(this.active); }
   captureOffer() { return { definitions: this.definitions, active: new Map(this.active) as ReadonlyMap<string, ActiveTool> }; }
   label(name: string, offeredBindings?: ReadonlyMap<string, ActiveTool>): string {
     if (name === 'find_modules') return 'Passende Module finden';
     if (name === 'get_module_tools') return 'Modulwerkzeuge laden';
+    if (name === 'read_tool_result') return 'Gespeichertes Ergebnis lesen';
     const descriptor = (offeredBindings?.get(name) ?? this.active.get(name))?.descriptor;
     return descriptor?.label || name;
   }
@@ -141,6 +147,7 @@ export class ModuleToolRuntime {
     let input: unknown;
     try { input = JSON.parse(rawArguments); } catch { return error('Werkzeugargumente müssen gültiges JSON sein.'); }
     try {
+      if (name === 'read_tool_result') return this.resultReader ? JSON.stringify(this.resultReader.read(input)) : error('Gespeicherte Ergebnisse sind in diesem Auftrag nicht verfügbar.');
       if (name === 'find_modules') {
         const parsed = findModulesSchema.safeParse(input);
         if (!parsed.success) return error('Ungültige Anfrage an die Modulsuche.');

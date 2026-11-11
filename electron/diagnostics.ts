@@ -4,6 +4,7 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { AiConfig, ChatOptions } from '../shared/model';
 import type { DiagnosticsExportResult, DiagnosticsStatus } from '../shared/diagnostics';
+import { ContextBudgetError } from './provider-request';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FILES = 3;
@@ -27,7 +28,8 @@ interface DiagnosticsOptions { dataDirectory: string; appVersion: string; enable
 export type DiagnosticField = 'index' | 'id' | 'type' | 'role' | 'name' | 'arguments' | 'tool_calls' | 'function' | 'summary' | 'encrypted_content' | 'status' | 'content' | 'output' | 'delta';
 export interface DiagnosticComparison { field?: DiagnosticField; outputIndex?: unknown; expected?: unknown; actual?: unknown; }
 export type AgentDiagnosticEvent = {
-  phase: 'provider_turn' | 'tool_start' | 'tool_result' | 'recovery' | 'finished';
+  phase: 'provider_turn' | 'tool_start' | 'tool_result' | 'recovery' | 'finished' | 'context';
+  requestBytes?: number; estimatedInputTokens?: number; inputTokenBudget?: number; outputTokenReserve?: number; omittedHistoryMessages?: number; compactedResults?: number;
   toolRounds?: number;
   toolCalls?: number;
   name?: string;
@@ -37,7 +39,7 @@ export type AgentDiagnosticEvent = {
   policy?: 'read' | 'write' | 'unknown';
   effect?: 'none' | 'applied' | 'unknown';
   reason?: 'answer' | 'handoff' | 'cancelled' | 'limit' | 'error';
-  limitReason?: 'tool_rounds' | 'tool_calls' | 'timeout';
+  limitReason?: 'tool_rounds' | 'tool_calls' | 'timeout' | 'context_budget';
 };
 
 /** No key or input value is ever serialized: fingerprints are keyed per process. */
@@ -235,15 +237,15 @@ export class AgentDiagnosticsTrace {
     });
   }
   progress(event: AgentDiagnosticEvent): void {
-    if (!this.active || !diagnosticsLog.isEnabled() || !['provider_turn', 'tool_start', 'tool_result', 'recovery', 'finished'].includes(event.phase)) return;
+    if (!this.active || !diagnosticsLog.isEnabled() || !['provider_turn', 'tool_start', 'tool_result', 'recovery', 'finished', 'context'].includes(event.phase)) return;
     const details: Record<string, unknown> = { elapsedMs: Math.max(0, Date.now() - this.started) };
-    for (const key of ['toolRounds', 'toolCalls'] as const) if (Number.isSafeInteger(event[key]) && event[key]! >= 0) details[key] = event[key];
+    for (const key of ['toolRounds', 'toolCalls', 'requestBytes', 'estimatedInputTokens', 'inputTokenBudget', 'outputTokenReserve', 'omittedHistoryMessages', 'compactedResults'] as const) if (Number.isSafeInteger(event[key]) && event[key]! >= 0) details[key] = event[key];
     for (const key of ['name', 'moduleId'] as const) if (typeof event[key] === 'string') details[key] = diagnosticsLog.fingerprint(event[key]);
     if (typeof event.discovery === 'boolean') details.discovery = event.discovery;
     const allowed = {
       status: ['completed', 'failed', 'cancelled', 'uncertain'], policy: ['read', 'write', 'unknown'],
       effect: ['none', 'applied', 'unknown'], reason: ['answer', 'handoff', 'cancelled', 'limit', 'error'],
-      limitReason: ['tool_rounds', 'tool_calls', 'timeout']
+      limitReason: ['tool_rounds', 'tool_calls', 'timeout', 'context_budget']
     };
     for (const key of Object.keys(allowed) as (keyof typeof allowed)[]) if (typeof event[key] === 'string' && allowed[key].includes(event[key]!)) details[key] = event[key];
     agentContext.run({ agentRunId: this.agentRunId }, () => diagnosticsLog[appendRecord]('agent.' + event.phase, details));
@@ -283,7 +285,8 @@ export class ProviderDiagnosticsTrace {
     const source = object(error) || error instanceof Error ? error as Record<string, unknown> : {};
     const diagnostic = object(source.diagnostics) ? source.diagnostics : {};
     const errorType = typeof source.name === 'string' && ['ToolStreamError', 'ProviderHttpError', 'ChatGptAuthError', 'AbortError', 'TypeError', 'Error'].includes(source.name) ? source.name : 'other';
-    this.write('provider.failed', { elapsedMs: Date.now() - this.started, kind: signal?.aborted ? 'cancelled' : timeout?.aborted ? 'timeout' : errorType, errorMessage: diagnosticsLog.fingerprint(source.message), ...(typeof source.httpStatus === 'number' ? { httpStatus: source.httpStatus } : {}), ...(typeof source.code === 'string' ? { code: errorCodes.has(source.code) ? source.code : diagnosticsLog.fingerprint(source.code) } : {}), ...(typeof source.requestId === 'string' ? { providerRequestId: diagnosticsLog.fingerprint(source.requestId) } : {}), ...(typeof diagnostic.reason === 'string' && ['finish', 'metadata', 'arguments', 'duplicate_ids', 'structure', 'size'].includes(diagnostic.reason) ? { toolFailure: diagnostic.reason } : {}), ...(typeof diagnostic.field === 'string' && ['tool_calls', 'index', 'type', 'id', 'function', 'name', 'arguments'].includes(diagnostic.field) ? { field: diagnostic.field } : {}), events: this.events, omittedEvents: this.omittedEvents });
+    const allocation = error instanceof ContextBudgetError ? Object.fromEntries(Object.entries({ requestBytes: error.observedBytes, estimatedInputTokens: error.estimatedInputTokens, inputTokenBudget: error.inputTokenBudget, outputTokenReserve: error.outputTokenReserve }).filter(([, value]) => Number.isSafeInteger(value) && value >= 0)) : {};
+    this.write('provider.failed', { elapsedMs: Date.now() - this.started, kind: signal?.aborted ? 'cancelled' : timeout?.aborted ? 'timeout' : error instanceof ContextBudgetError ? 'context_budget' : errorType, ...allocation, errorMessage: diagnosticsLog.fingerprint(source.message), ...(typeof source.httpStatus === 'number' ? { httpStatus: source.httpStatus } : {}), ...(typeof source.code === 'string' ? { code: errorCodes.has(source.code) ? source.code : diagnosticsLog.fingerprint(source.code) } : {}), ...(typeof source.requestId === 'string' ? { providerRequestId: diagnosticsLog.fingerprint(source.requestId) } : {}), ...(typeof diagnostic.reason === 'string' && ['finish', 'metadata', 'arguments', 'duplicate_ids', 'structure', 'size'].includes(diagnostic.reason) ? { toolFailure: diagnostic.reason } : {}), ...(typeof diagnostic.field === 'string' && ['tool_calls', 'index', 'type', 'id', 'function', 'name', 'arguments'].includes(diagnostic.field) ? { field: diagnostic.field } : {}), events: this.events, omittedEvents: this.omittedEvents });
   }
 }
 export const beginProviderDiagnostics = (config: AiConfig, options: ChatOptions, protocol: 'responses' | 'chat-completions', transport: 'stream' | 'complete', inputCount: number, toolCount: number) => new ProviderDiagnosticsTrace(config, options, protocol, transport, inputCount, toolCount);

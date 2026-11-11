@@ -26,6 +26,7 @@ export interface FilesModuleHost {
 export function createFilesModule(host: FilesModuleHost) {
   const service = new FilesService({ documents: app.getPath('documents'), dataRoot: host.dataRoot, selectedLocalFiles: host.selectedLocalFiles });
   let active = false;
+  let viewOwner: BrowserWindow | undefined;
   const assertActive = (context: CapabilityContext) => { if (!active) throw new Error('Das Dateienmodul ist nicht verfügbar. Bitte unter Einstellungen → Module aktivieren.'); context.signal.throwIfAborted(); };
   async function list(request: FileListRequest = {}, context: CapabilityContext) { assertActive(context); const result = await service.list(request, context.signal); assertActive(context); return result; }
   async function read(request: FileReadRequest, context: CapabilityContext) { assertActive(context); const result = await service.read(request, context.signal); assertActive(context); return result; }
@@ -82,6 +83,17 @@ export function createFilesModule(host: FilesModuleHost) {
     registry.registerDefinition(filesCapabilityDefinitions['files.reference'], ({ id }, context) => reference(id, context));
   }
   function registerIpc() {
+    ipcMain.on('files:view-context', (event, rawIds: unknown) => {
+      const win = host.panels.get('files');
+      if (!active || !win || win.isDestroyed() || event.sender !== win.webContents || event.senderFrame !== event.sender.mainFrame) return;
+      const parsed = fileIdSchema.array().max(501).safeParse(rawIds);
+      if (!parsed.success) return;
+      if (viewOwner !== win) {
+        viewOwner = win;
+        win.once('closed', () => { if (viewOwner === win) { viewOwner = undefined; service.setViewContext([]); } });
+      }
+      service.setViewContext(parsed.data);
+    });
     ipcMain.handle('files:list-page', (event, request: unknown) => { host.verifySender(event); return list(request as FileListRequest, host.uiOperationContext(event)); });
     ipcMain.handle('files:read', (event, request: unknown) => { host.verifySender(event); return read(request as FileReadRequest, host.uiOperationContext(event)); });
     ipcMain.handle('files:open', (event, request: unknown) => { host.verifySender(event); return open(request as FileOpenRequest, host.uiOperationContext(event)); });
@@ -108,7 +120,9 @@ export function createFilesModule(host: FilesModuleHost) {
   return {
     async initialize() { await service.initialize(); active = true; },
     activate() { active = true; },
-    deactivate() { active = false; },
+    deactivate() { active = false; service.clearTransientState(); },
+    knowsPath(canonical: string) { return active && service.knowsPath(canonical); },
+    getCacheStats() { return service.getCacheStats(); },
     registerCapabilities, registerIpc, list, read, open, choose, getReference, snapshotReference, operationAdapter
   };
 }

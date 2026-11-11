@@ -18,6 +18,7 @@ interface Dependencies {
   resolveMailId(id: string | undefined, context: CapabilityContext): string;
   reference(id: string, context: CapabilityContext): EmailReference;
   live(id: string): { accountId: string; folder: string; message: ImapMessage } | undefined;
+  ensureMail?(id: string, context: CapabilityContext): Promise<unknown>;
   activeView(): MailViewContext | null;
   saveStatus(id: string): DraftSaveState;
   existingSendResult(draft: Draft): MailSendResult | undefined;
@@ -91,6 +92,8 @@ export function createMailOperationAdapter(deps: Dependencies): ModuleOperationA
       if (mailTargets.has(action)) {
         const id = deps.resolveMailId(typeof args.emailId === 'string' ? args.emailId : undefined, context);
         args.emailId = id;
+        // Rehydrate the exact saved locator before freezing the resource binding.
+        if (!deps.live(id)) await deps.ensureMail?.(id, context);
         return { args, effect, resource: mailResource(id, context, action !== 'mail.read') };
       }
       if (action === 'mail.previews') {

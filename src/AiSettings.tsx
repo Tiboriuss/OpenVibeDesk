@@ -29,7 +29,7 @@ function ModelField({ id, label, value, onChange, models, deployment = false }: 
   const custom = value && !models.includes(value);
   return <div className="ai-field"><label htmlFor={id}>{label}</label>
     {models.length > 0 && !manual ? <select id={id} value={value} onChange={event => {
-      if (event.target.value === '__manual_model__') { setManual(true); onChange(''); }
+      if (event.target.value === '__manual_model__') setManual(true);
       else onChange(event.target.value);
     }}><option value="">{deployment ? 'Deployment auswählen' : 'Modell auswählen'}</option>{custom && <option value={value}>{value} (manuell)</option>}{models.map(item => <option key={item} value={item}>{item}</option>)}<option value="__manual_model__">{deployment ? 'Deployment-Namen eingeben …' : 'Andere Modell-ID eingeben …'}</option></select>
       : <input id={id} value={value} onChange={event => onChange(event.target.value)} autoComplete="off" spellCheck={false} placeholder={deployment ? 'Deployment-Namen aus Azure eingeben' : 'Modell-ID eingeben'} />}
@@ -38,7 +38,7 @@ function ModelField({ id, label, value, onChange, models, deployment = false }: 
 }
 
 function ThinkingField({ id, label, value, onChange }: { id: string; label: string; value: Thinking; onChange(value: Thinking): void }) {
-  return <div className="ai-field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={event => onChange(event.target.value as Thinking)}><option value="off">Aus</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option></select><p>Diese Stufe wird bei Auswahl dieses Modells verwendet. Die Unterstützung hängt vom Anbieter und Modell ab.</p></div>;
+  return <div className="ai-field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={event => onChange(event.target.value as Thinking)}><option value="off">Aus</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option></select></div>;
 }
 
 export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { searchQuery?: string; onClearSearch?(): void; preparation?: SettingsSuggestion }) {
@@ -271,23 +271,23 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       <details className="ai-section" hidden={searching && !matches('models')} open={groupOpen('models')} onToggle={event => onGroupToggle('models', event.currentTarget.open)}>
       <summary><span><strong>Modelle</strong><small>Intelligent: {configuration.smartModel || 'nicht festgelegt'} · Einfach: {configuration.simpleModel || 'nicht festgelegt'}{smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="ai-section-content">
-      <div className="ai-models-heading"><div><strong>Modelle</strong><p>{discovering ? 'Modelle werden geladen …' : models.length ? `${models.length} Modelle gefunden` : 'Keine Modelle geladen'}</p></div><button className="ai-refresh" type="button" disabled={busy || discovering || connectionChanged} onClick={() => void discover()}><RefreshCw size={14} /> Aktualisieren</button></div>
+      <div className="ai-models-heading"><p role="status">{discovering ? 'Modelle werden geladen …' : models.length ? `${models.length} Modelle gefunden` : 'Keine Modelle geladen'}</p><button className="ai-refresh" type="button" disabled={busy || discovering || connectionChanged} onClick={() => void discover()}><RefreshCw size={14} /> Aktualisieren</button></div>
       {connectionChanged && <p className="ai-model-hint">Speichere zuerst die geänderte Verbindung, um deren Modellliste zu laden.</p>}
       {discoveryError && !connectionChanged && <p className="ai-model-hint" role="status">{discoveryError}</p>}
       {!discoveryError && !discovering && models.length === 0 && <p className="ai-model-hint">Speichere die Verbindung oder gib die Modell-IDs manuell ein.</p>}
-      {provider === 'azure' && <p className="ai-model-hint">Trage den Namen deines Deployments ein. Ein Eintrag im Modellkatalog ist nicht automatisch ein nutzbares Deployment; eine fehlende Liste verhindert die manuelle Eingabe nicht.</p>}
+      {provider === 'azure' && <p className="ai-model-hint">Verwende deine Azure-Deployment-Namen; Modellkatalog-Einträge können davon abweichen.</p>}
       <ModelField id="ai-smart-model" label={provider === 'azure' ? 'Intelligentes Deployment' : 'Intelligentes Modell'} value={smartModel} onChange={setSmartModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
       <ThinkingField id="ai-smart-thinking" label="Thinking für intelligentes Modell" value={smartThinking} onChange={setSmartThinking} />
       <ModelField id="ai-simple-model" label={provider === 'azure' ? 'Einfaches Deployment' : 'Einfaches Modell'} value={simpleModel} onChange={setSimpleModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
       <ThinkingField id="ai-simple-thinking" label="Thinking für einfaches Modell" value={simpleThinking} onChange={setSimpleThinking} />
-      <p className="ai-model-hint">Bei „Aus“ wird kein Thinking-Parameter gesendet. Das Modell kann dennoch intern nachdenken.</p>
+      <p className="ai-model-hint">Thinking-Unterstützung hängt vom Modell ab. „Aus“ verwendet dessen Standard.</p>
       </div></details>
       <details className="ai-section" hidden={searching && !matches('workspace')} open={groupOpen('workspace')} onToggle={event => onGroupToggle('workspace', event.currentTarget.open)}>
       <summary><span><strong>Workspace-Zugriff</strong><small>Werkzeuge {configuration.workspaceTools ? 'aktiviert' : 'deaktiviert'} · {configuration.confirmationMode === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen'}{workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Assistent kann für deine Aufträge selbstständig in verfügbaren Modulen suchen, Inhalte lesen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
       <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Suchen und Lesen laufen bereits selbstständig. Dieser Schalter überspringt auch Bestätigungen für angeforderte Aktionen wie Senden und Löschen. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
       </details>
-      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Änderungen noch nicht gespeichert' : 'Änderungen werden mit Speichern übernommen.'}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy}>{busy ? 'Bitte warten …' : 'KI-Einstellungen speichern'}</button></div>
+      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Ungespeicherte Änderungen' : ''}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy || !dirty && configuration.configured}>{busy ? 'Wird gespeichert …' : 'Speichern'}</button></div>
     </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}
     {notice && <p className="ai-feedback ai-success" role="status">{notice}</p>}

@@ -665,21 +665,41 @@ export class ModuleHost {
       return await this.runtimes.invoke(record, binding.action, args, context.signal, context.operation);
     } finally { this.pending.set(id, Math.max(0, (this.pending.get(id) ?? 1) - 1)); }
   }
-  async setEnabled(id: string, enabled: boolean, context: CapabilityContext): Promise<void> {
+  async setEnabled(id: string, enabled: boolean, context: CapabilityContext): Promise<boolean> {
+    this.assertAgentAccess(context); context.signal.throwIfAborted();
     if (this.changing) throw new Error('Es wird bereits ein Modul geändert.');
     if (this.configError) throw new Error('Die lokale Modulkonfiguration ist nicht lesbar. Bitte module-settings.json prüfen; die vorhandene Datei bleibt erhalten.');
     const record = this.registry.getRuntimeRecord(id);
     if (!record || typeof enabled !== 'boolean') throw new Error('Ungültiges Modul.');
     if (record.module.required) throw new Error('Das Pflichtmodul bleibt immer aktiv.');
-    if (enabled && record.module.status === 'ready' || !enabled && record.module.status === 'disabled') return;
+    if (enabled && record.module.status === 'ready' || !enabled && record.module.status === 'disabled') return true;
     if (enabled && !['disabled', 'approval_required'].includes(record.module.status)) throw new Error(record.module.reason ?? 'Dieses Modul kann nicht aktiviert werden.');
-    if (!enabled && !['ready', 'approval_required'].includes(record.module.status)) throw new Error(record.module.reason ?? 'Dieses Modul kann nicht deaktiviert werden.');
+    if (!enabled && !['ready', 'approval_required', 'invalid'].includes(record.module.status)) throw new Error(record.module.reason ?? 'Dieses Modul kann nicht deaktiviert werden.');
+    const initialStatus = record.module.status, initialFingerprint = record.fingerprint;
+    const assertUnchanged = () => {
+      const current = this.registry.getRuntimeRecord(id);
+      if (this.changing || this.configError || !current || current.fingerprint !== initialFingerprint || current.module.status !== initialStatus) throw new Error('Das Modul wurde inzwischen geändert. Bitte seinen aktuellen Zustand prüfen.');
+      if (!enabled && ((this.pending.get(id) ?? 0) > 0 || this.runtimes.isBusy(id))) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
+    };
+    const processModule = record.module.manifest?.runtime.type === 'process';
+    const needsApproval = enabled && processModule && this.config.approvals[id] !== record.fingerprint;
+    if (!enabled) {
+      if ((this.pending.get(id) ?? 0) > 0 || this.runtimes.isBusy(id)) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
+      await this.options.beforeDisable(id);
+      if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} deaktivieren?`, 'Seine Ansichten werden geschlossen; gespeicherte Daten bleiben erhalten.')) return false;
+    } else {
+      if (needsApproval && !await this.options.confirm(context, `${record.module.title} freigeben?`, `Dieses lokale Modul führt Programmcode mit deinen Benutzerrechten aus. Der eigene Prozess schützt OVD vor Abstürzen, ist aber keine Betriebssystem-Sandbox.\n\nDeklarierte Zugriffe: ${record.module.manifest!.permissions.join(', ') || 'keine'}\n\nQuelle: ${record.rootPath}\nVersion: ${record.module.version}`, { alwaysAsk: true })) return false;
+      if (!needsApproval && context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} aktivieren?`, 'Das Modul und seine Funktionen werden in OVD verfügbar.')) return false;
+    }
+    // Confirmation must not hold the mutation lock: journal validation calls
+    // prepareOperation through the host. A rejected dialog never marks dispatch.
+    if (!enabled) await this.options.beforeDisable(id);
+    assertUnchanged();
+    await this.beforeOperationDispatch(context);
+    assertUnchanged();
     this.changing = true;
     try {
       if (!enabled) {
-        if ((this.pending.get(id) ?? 0) > 0) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
-        await this.options.beforeDisable(id);
-        if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} deaktivieren?`, 'Seine Ansichten werden geschlossen; gespeicherte Daten bleiben erhalten.')) return;
         const eventSubscriptions = { ...this.config.eventSubscriptions }; delete eventSubscriptions[id];
         const next = { ...this.config, disabled: [...new Set([...this.config.disabled, id])], eventSubscriptions };
         await this.persist(next);
@@ -689,10 +709,6 @@ export class ModuleHost {
         this.notifyEventsChanged();
         await dropModuleEvents(id);
       } else {
-        const processModule = record.module.manifest?.runtime.type === 'process';
-        const needsApproval = processModule && this.config.approvals[id] !== record.fingerprint;
-        if (needsApproval && !await this.options.confirm(context, `${record.module.title} freigeben?`, `Dieses lokale Modul führt Programmcode mit deinen Benutzerrechten aus. Der eigene Prozess schützt OVD vor Abstürzen, ist aber keine Betriebssystem-Sandbox.\n\nDeklarierte Zugriffe: ${record.module.manifest!.permissions.join(', ') || 'keine'}\n\nQuelle: ${record.rootPath}\nVersion: ${record.module.version}`, { alwaysAsk: true })) return;
-        if (!needsApproval && context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} aktivieren?`, 'Das Modul und seine Funktionen werden in OVD verfügbar.')) return;
         if (record.module.status === 'disabled') this.registry.enable(id);
         try {
           if (processModule) await this.registry.activate(id, record.fingerprint);
@@ -708,6 +724,7 @@ export class ModuleHost {
         }
       }
       this.options.changed();
+      return true;
     } finally { this.changing = false; this.notifyEventsChanged(); }
   }
   /** Install metadata only. New or changed code still needs the ordinary explicit fingerprint approval. */

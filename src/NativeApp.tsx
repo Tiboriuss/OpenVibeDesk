@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Power } from 'lucide-react';
-import { BrandMark } from './BrandMark';
+import { X } from 'lucide-react';
+import { OvdBar } from './OvdBar';
 import { ChatView } from './ChatView';
 import { SessionsView } from './SessionsView';
 import { WindowChrome } from './WindowChrome';
 import { SettingsView } from './SettingsView';
-import { moduleIcon, moduleViews, useWorkspaceModules, workspaceNavigation } from './module-registry';
-import type { EmailReferenceSummary, ForkChatResult, Settings, WorkspaceState } from '../shared/model';
+import { moduleViews, useWorkspaceModules, workspaceNavigation } from './module-registry';
+import type { EmailReferenceSummary, ForkChatResult, Settings, RendererWorkspaceState } from '../shared/model';
 import type { UiAction } from '../shared/actions';
 import { MAX_MODULE_REFERENCES, moduleReferenceInput, moduleReferenceKey, moduleReferenceSummary, moduleReferenceSummarySchema, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
-import { ModuleAttentionDot, useModuleAttention } from './ModuleAttentionDot';
+import { useModuleAttention } from './ModuleAttentionDot';
 
 type View = 'dock' | 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions' | 'module';
 const query = new URLSearchParams(window.location.search);
@@ -68,7 +68,7 @@ function loadMailDrafts(): Record<string, EmailReferenceSummary> {
 
 
 export function NativeApp() {
-  const [state, setState] = useState<WorkspaceState | null>(null);
+  const [state, setState] = useState<RendererWorkspaceState | null>(null);
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention(view === 'dock');
   const contributedViews = moduleViews(moduleState.modules);
@@ -112,16 +112,18 @@ export function NativeApp() {
   useEffect(() => { try { localStorage.setItem('openvibedesk.mailDrafts', JSON.stringify(mailDrafts)); } catch { /* Keep the reference metadata in memory when storage is unavailable. */ } }, [mailDrafts]);
   useEffect(() => { try { localStorage.setItem('openvibedesk.referenceDrafts', JSON.stringify(referenceDrafts)); } catch { /* Keep reference selections in memory. */ } }, [referenceDrafts]);
   useEffect(() => {
-    const unsubscribe = window.workspace.onStateChanged(setState);
-    window.workspace.loadState().then(value => {
+    let receivedUpdate = false;
+    const unsubscribe = window.workspace.onStateChanged(value => { receivedUpdate = true; setState(value); });
+    window.workspace.loadState().then(async value => {
       if (view === 'chat' && value) {
-        const committed = new Set(value.sessions.flatMap(session => session.messages.map(message => message.clientRequestId).filter(Boolean)));
+        const pending = Object.values(inFlightDrafts.current).map(draft => draft.clientRequestId);
+        const committed = new Set(pending.length ? await window.workspace.committedChatRequests(pending) : []);
         for (const draft of Object.values(inFlightDrafts.current)) {
           if (committed.has(draft.clientRequestId)) clearInFlightDraft(draft.clientRequestId);
           else restoreInFlightDraft(draft);
         }
       }
-      setState(value);
+      if (!receivedUpdate) setState(value);
     }).catch(err => setError(String(err)));
     return unsubscribe;
   }, []);
@@ -289,34 +291,25 @@ export function NativeApp() {
   }
   if (view === 'dock') {
     const dockItems = workspaceNavigation(moduleState.modules, state?.settings.navigationOrder);
-    return <div className="dock-native"><div className="dock-grip" title="Dock verschieben">⋮⋮</div>{dockItems.map(item => {
-      const Icon = moduleIcon(item.icon);
-      // A module may contribute several entries. Its primary icon gets one hint.
-      const primary = dockItems.find(entry => entry.moduleId === item.moduleId)?.id === item.id;
-      const notices = primary ? moduleAttention.filter(notice => notice.moduleId === item.moduleId) : [];
-      const title = notices.length ? `${item.title} · ${notices.length} ${notices.length === 1 ? 'Hinweis' : 'Hinweise'}: ${notices.map(notice => notice.message).join(' · ')}` : item.title;
-      return <button className="dock-navigation" key={item.id} title={title} aria-label={title} onClick={() => {
-        const seen = notices.map(notice => notice.id);
-        void (async () => {
-          if (item.action) await window.workspace.dispatchAction(item.action);
-          else if (item.view) await window.workspace.openModuleView(item.moduleId, item.view);
-          if (seen.length) await window.workspace.acknowledgeModuleAttention(item.moduleId, seen);
-          setError('');
-        })().catch(reason => setError(String(reason)));
-      }}><span className="module-attention-icon">{item.id === 'assistant' ? <BrandMark variant="app" size={36} /> : <Icon />}{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span></button>;
-    })}<span className="dock-native-divider" /><button title="App beenden" aria-label="App beenden" onClick={() => void window.workspace.quit()}><Power /></button>{(error || moduleState.error) && <span className="dock-module-error" role="alert" title={error || moduleState.error}>!</span>}</div>;
+    return <OvdBar settings={state?.settings} entries={dockItems} attention={moduleAttention} error={error || moduleState.error} onError={setError} onNavigate={async (item, notices) => {
+      const seen = notices.map(notice => notice.id);
+      if (item.action) await window.workspace.dispatchAction(item.action);
+      else if (item.view) await window.workspace.openModuleView(item.moduleId, item.view);
+      if (seen.length) await window.workspace.acknowledgeModuleAttention(item.moduleId, seen);
+      setError('');
+    }} />;
   }
-  if (!state) return <div className="native-loading">Loading workspace…</div>;
+  if (!state) return <div className="native-loading">Arbeitsbereich wird geladen …</div>;
   const title = contributedView?.title ?? ({ mail: 'Mail', chat: 'Assistant', draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen', sessions: 'Chats', dock: '', module: 'Modul' }[view] ?? 'OpenVibeDesk');
   return <div className={`native-panel native-${view} ${state.settings.textSize === 'large' ? 'large-text' : ''}`}>
     <WindowChrome title={title} />
     <div className="native-view-body">
     {ModuleComponent && <ModuleComponent state={state} onAction={action} onError={setError} />}
     {['mail', 'draft', 'files', 'module'].includes(view) && !ModuleComponent && <div className="module-host-status" role="status">{moduleState.loading ? 'Modul wird geladen …' : moduleState.error || 'Dieses Modul ist nicht verfügbar. Prüfe seinen Status in den Einstellungen unter Module.'}</div>}
-    {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id)} onReformulate={id => void reformulateMessage(id)} onContinue={id => void continueMessage(id)} sending={sending || state.sessions.some(s => s.messages.some(m => m.status === 'streaming'))} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
-    {view === 'sessions' && <SessionsView state={state} onCreate={() => void createChat()} onOpen={id => void openChat(id)} onRename={(id, title) => void window.workspace.renameChatSession(id, title).catch(err => setError(String(err)))} onReference={id => void window.workspace.referenceChatSession(id).catch(err => setError(String(err)))} />}
+    {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id)} onReformulate={id => void reformulateMessage(id)} onContinue={id => void continueMessage(id)} sending={sending || !!state.presentation?.streamingSessionId} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
+    {view === 'sessions' && <SessionsView state={state} onCreate={() => void createChat()} onOpen={id => void openChat(id)} onRename={(id, title) => window.workspace.renameChatSession(id, title)} onReference={id => void window.workspace.referenceChatSession(id).catch(err => setError(String(err)))} />}
     {view === 'settings' && <SettingsView settings={state.settings} onUpdate={patch => void updateSettings(patch)} />}
     </div>
-    {error && <div className="native-error" onClick={() => setError('')}>{error}</div>}
+    {error && <div className="native-error" role="alert"><span>{error}</span><button type="button" aria-label="Fehlermeldung schließen" title="Schließen" onClick={() => setError('')}><X size={15}/></button></div>}
   </div>;
 }

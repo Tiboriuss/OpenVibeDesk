@@ -17,14 +17,14 @@ Repository catalogs and unused tool schemas stay out of normal chat requests. Th
 
 ## Configure a source
 
-Open **Settings → Modules** (**Einstellungen → Module**). The **Module sources** (**Modulquellen**) group manages repositories; the **Module catalog** (**Modulkatalog**) group shows their packages.
+Open **Settings → Modules** (**Einstellungen → Module**). Installed modules appear first. The collapsed **Module sources** (**Modulquellen**) group manages repositories; **Module catalog** (**Modulkatalog**) shows their packages. Expand the group you need. Settings search reveals these controls without discarding existing form edits.
 
-1. Expand **Repository hinzufügen**, enter a name and a supported URL, and optionally enter an access token for a private source.
+1. Expand **Modulquellen → Repository hinzufügen**, enter a name and a supported URL, and optionally enter an access token for a private source.
 2. Select **Quelle hinzufügen**. Saving configuration does not download or execute modules.
-3. In **Modulkatalog**, select **Katalog laden**. Use **Alle Quellen** to refresh all saved sources or select a single source. Each source shows its own status and last successful check.
+3. Expand **Modulkatalog** and select **Katalog laden**. Use **Alle Quellen** to refresh all saved sources or select a single source. Each source shows its own status and last successful check.
 4. Search by module title, ID or description and choose **Installieren** for the desired package.
 5. Select **Freigeben & aktivieren**, review the module's declared access and approve its local file fingerprint. Installation alone never runs its code. Changed code needs new approval, even when the Assistant's **Ohne Abfragen** mode is enabled.
-6. Open the module from its navigation entry, if it contributes one, or ask the Assistant to use its functions. The installed module also appears in the normal module list. Its navigation order can be changed under **Seitenleiste & Dock**.
+6. Open the module from its navigation entry, if it contributes one, or ask the Assistant to use its functions. The installed module also appears in the normal module list. Its navigation order can be changed under [**OVD-Bar → Einträge & Reihenfolge**](ovd-bar.md).
 
 Supported source addresses:
 
@@ -43,7 +43,15 @@ Add **OpenVibeDesk Modules** with this URL and leave the token empty:
 https://github.com/Tiboriuss/OpenVibeDesk-Modules
 ```
 
-The [catalog repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) provides installable examples and their editable source. [Notes](https://github.com/Tiboriuss/OpenVibeDesk-Modules/tree/main/modules/sample-notes) demonstrates a small module with a window, settings and shared read/write tools. [Skill Library](https://github.com/Tiboriuss/OpenVibeDesk-Modules/tree/main/modules/skill-library) demonstrates module-owned chat references and explicitly selected working instructions. Check each module's guide and the loaded catalog for its current version and host requirements. These modules are optional downloads, not bundled app features.
+The [catalog repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) provides installable modules and their editable source:
+
+| Module | Guide |
+| --- | --- |
+| Notes | [A small module with a window, settings and shared read/write tools](https://github.com/Tiboriuss/OpenVibeDesk-Modules/tree/main/modules/sample-notes). |
+| Skill Library | [Module-owned chat references and explicitly selected working instructions](https://github.com/Tiboriuss/OpenVibeDesk-Modules/tree/main/modules/skill-library). |
+| Memory | [Optional memory module and its configuration](https://github.com/Tiboriuss/OpenVibeDesk-Modules/blob/main/modules/memory/README.md). |
+
+Check each module's guide and the loaded catalog for its current version and host requirements. These are optional downloads, not bundled app features. The Host supplies generic [memory retrieval](module-memory.md) and [event subscription](module-events.md) contracts; the installed module owns its storage, behavior and settings.
 
 The source editor preserves unsaved inputs across category changes and settings search. Leaving a token field empty retains the saved token. Use the explicit remove control to clear it. Changing a protected source URL requires replacing or removing its token, preventing accidental reuse for a different destination.
 

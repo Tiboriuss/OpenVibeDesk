@@ -2,6 +2,8 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#install-or-update-the-app) · [Development](../CONTRIBUTING.md#development)
 
+The [changelog](../CHANGELOG.md) records v0.1.9's OVD-Bar, context/source-reading and performance changes, verification scope and remaining work. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
+
 The [release workflow](../.github/workflows/release.yml) builds macOS and Windows installer downloads when a GitHub release is published. It is an explicitly requested exception to the project's preference for local checks. Routine pushes and pull requests do not start this workflow.
 
 The initial release pipeline produces packages without trusted publisher certificates. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. Installing a newer version over the existing app is supported through the installer/application identity and stable local data path; an in-app automatic updater is not implemented.
@@ -64,9 +66,9 @@ Keep **Enable release immutability** disabled in the repository settings for thi
 5. After all builds succeed, the upload job verifies the expected assets and hashes, checks that the release/tag still identify the built source, and attaches the installers, `SHA256SUMS.txt` and `RELEASE.json` to that same release.
 6. Download and practically check the installers on their intended operating systems. Record the result in the release notes; successful packaging alone does not establish complete platform or upgrade support.
 
-This publish-after-creation flow requires GitHub release immutability to be disabled: immutable releases cannot receive new assets after publication. If the repository enables immutable releases later, the workflow must change to upload assets to a draft before publishing it.
-
 The release version comes from its tag. Tags must use `MAJOR.MINOR.PATCH`, optionally prefixed with `v` and optionally followed by a valid SemVer prerelease suffix. Both `0.2.0` and `v0.2.0` produce package version `0.2.0`; the exact original tag is retained for source and release checks. Numeric version components must fit the supported Windows version bounds (at most 65535). Build metadata (`+...`) is rejected. The version helper updates `package.json` only inside the CI checkout; it does not commit a version change to the branch.
+
+Consequently, the checkout's `package.json` version may differ from the newest published installer. Read the release tag and `RELEASE.json` for the packaged version and source commit; a local development build is not automatically stamped with the latest release number.
 
 Only the upload job has `contents: write`; platform builds use read access. The workflow uses GitHub's built-in token rather than a separate personal token or signing secret. It does not publish an additional release or enable in-app updates.
 
@@ -95,6 +97,8 @@ node scripts/verify-mac-signature.cjs --app /path/to/OpenVibeDesk.app --arch arm
 For an Intel package, use `--arch x64`. Also download the finished release through a browser and open it through Finder on the intended Mac, ideally in a fresh test environment. Browser downloads carry macOS quarantine information; directly launching a locally built executable does not exercise the same Gatekeeper path. Keep the download's quarantine information intact and record whether the expected app-specific approval works. [Apple's distribution diagnostics](https://developer.apple.com/forums/thread/706442) explain this distinction. A standard Gatekeeper trust rejection is expected without Developer ID signing and notarization; a damaged seal is a packaging failure.
 
 ## Upgrade validation
+
+For the v0.1.9 source on **11 November 2026**, the corrected Mac fixture passed with an isolated Apple Silicon package: launch and save through the real UI, then replacement with a temporary higher-version 0.1.10 package from the same source. Settings, chat identity, draft content, module data and local credentials survived. The ARM resource seal and all 14 nested Mach-O binaries also passed verification. That temporary higher version was not released. This is local replacement evidence, not a browser Gatekeeper test, physical Intel/Windows validation or proof of every historical profile migration.
 
 A release check should install one version with a synthetic profile, create recognisable settings/chat/draft/module data and a synthetic local credential, quit the app, then install a newer version over it. Verify that the visible version changes, the app still opens, the data is retained, and the local credential remains readable. Also check the installer from a fresh account/profile and the relevant architecture.
 

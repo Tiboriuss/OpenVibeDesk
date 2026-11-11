@@ -5,6 +5,8 @@ import { createChatEvidenceCollector, type ChatEvidence, type ChatEvidenceStatus
 import type { AgentRunLimit, AgentSettings, AiConfig, ChatOptions, ToolEvent } from '../shared/model';
 import type { ModuleListing, ModuleQuery, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { AgentDiagnosticEvent } from './diagnostics';
+import { AgentContext, RESULT_READER_NAME, resultReaderDefinition } from './agent-context';
+import { ContextBudgetError } from './provider-request';
 
 export type AgentDependencies = {
   settings?: AgentSettings;
@@ -41,6 +43,7 @@ export async function runAgent(
   const combined = AbortSignal.any([signal, timeout.signal]);
   const conversation = [...messages];
   const runtime = new ModuleToolRuntime(settings);
+  const context = new AgentContext();
   const evidence = createChatEvidenceCollector(deps.onEvidence);
   let evidenceStatus: Exclude<ChatEvidenceStatus, 'running'> = 'completed';
   let toolRounds = 0, callCount = 0, discoveryCalls = 0, actionCalls = 0, visibleText = '', turnPrefix = '';
@@ -54,16 +57,17 @@ export async function runAgent(
   const emit = (text: string) => { visibleText += text; onDelta(text); };
   const emitMessage = (text: string) => emit(`${visibleText ? '\n\n' : ''}${text}`);
   const replace = (text: string) => { deps.onReplaceText?.(text); visibleText = text; };
-  const stopAtLimit = (reason: AgentRunLimit['reason'], nextToolType: AgentRunLimit['nextToolType']) => {
+  const stopAtLimit = (reason: AgentRunLimit['reason'], nextToolType: AgentRunLimit['nextToolType'], budgetError?: ContextBudgetError) => {
     if (stoppedAtLimit) return;
     stoppedAtLimit = true;
     evidenceStatus = 'limited';
     finishReason = 'limit'; limitReason = reason;
-    const limit = reason === 'tool_rounds' ? settings.maxToolRounds : reason === 'tool_calls' ? settings.maxToolCalls : settings.timeoutSeconds;
-    const info: AgentRunLimit = { status: 'limit_reached', reason, toolRounds, toolCalls: callCount, discoveryCalls, actionCalls, elapsedMs: Math.max(0, Date.now() - startedAt), limit, nextToolType };
+    const limit = reason === 'context_budget' ? settings.contextTokenBudget : reason === 'tool_rounds' ? settings.maxToolRounds : reason === 'tool_calls' ? settings.maxToolCalls : settings.timeoutSeconds;
+    const info: AgentRunLimit = { status: 'limit_reached', reason, toolRounds, toolCalls: callCount, discoveryCalls, actionCalls, elapsedMs: Math.max(0, Date.now() - startedAt), limit, nextToolType, ...(budgetError ? { context: { requestBytes: budgetError.observedBytes, estimatedInputTokens: budgetError.estimatedInputTokens, inputTokenBudget: budgetError.inputTokenBudget, outputTokenReserve: budgetError.outputTokenReserve } } : {}) };
+    if (info.context) progress({ phase: 'context', limitReason: 'context_budget', ...info.context });
     const reached = reason === 'tool_rounds' ? `Das eingestellte Limit von ${limit} Werkzeugrunden ist erreicht.` : reason === 'tool_calls' ? `Das eingestellte Limit von ${limit} Werkzeugaufrufen ist erreicht.` : `Das eingestellte Zeitlimit von ${limit} Sekunden ist erreicht.`;
     const pending = nextToolType === 'discovery' ? 'Die nächste Modul- oder Werkzeugsuche wurde nicht gestartet.' : nextToolType === 'action' ? 'Die nächste Modulaktion wurde nicht gestartet.' : nextToolType === 'mixed' ? 'Die nächste Runde mit Suche und Modulaktionen wurde nicht gestartet.' : awaitingAction ? 'Der zuletzt gestartete Vorgang kann noch abgeschlossen werden; bitte seinen Status prüfen.' : 'Es wird kein weiterer Werkzeugaufruf gestartet.';
-    emitMessage(`${reached} Bisher: ${toolRounds} Werkzeugrunden, ${callCount} Aufrufe (${discoveryCalls} Modul-/Werkzeugsuchen, ${actionCalls} Modulaktionsaufrufe). ${pending} Bereits ausgeführte Änderungen und protokollierte Statusangaben bleiben erhalten. Es gibt keinen automatischen weiteren Versuch.`);
+    emitMessage(budgetError ? budgetError.message : `${reached} Bisher: ${toolRounds} Werkzeugrunden, ${callCount} Aufrufe (${discoveryCalls} Modul-/Werkzeugsuchen, ${actionCalls} Modulaktionsaufrufe). ${pending} Bereits ausgeführte Änderungen und protokollierte Statusangaben bleiben erhalten. Es gibt keinen automatischen weiteren Versuch.`);
     deps.onLimitReached?.(info);
   };
   const checkAbort = (): boolean => {
@@ -83,6 +87,8 @@ export async function runAgent(
   try {
     while (true) {
       if (checkAbort()) return;
+      const measurement = context.fit(conversation, config, options, settings, () => runtime.definitions, () => runtime.enableResultReader(resultReaderDefinition, context.read));
+      progress({ phase: 'context', ...measurement });
       // Keep the exact allowlist for this response. Loading a schema does not
       // authorize its speculative execution in the same response.
       const offer = runtime.captureOffer(), offeredTools = offer.definitions;
@@ -97,7 +103,7 @@ export async function runAgent(
       let turn: StreamTurn;
       try {
         progress({ phase: 'provider_turn' });
-        turn = await streamTurn(config, key, conversation, options, combined, emitTurnText, offeredTools, settings.requestTimeoutSeconds * 1000);
+        turn = await streamTurn(config, key, conversation, options, combined, emitTurnText, offeredTools, settings.requestTimeoutSeconds * 1000, settings);
       } catch (error) {
         if (!(error instanceof ToolStreamError) || combined.aborted || settings.transportRetries === 0) throw error;
         // Retry only rejected, effect-free protocol turns, using this same offer.
@@ -105,7 +111,7 @@ export async function runAgent(
         let retryError: unknown = error;
         let recovered: StreamTurn | undefined;
         for (let attempt = 0; attempt < settings.transportRetries; attempt++) {
-          try { recovered = await requestCompleteTurn(config, key, conversation, options, combined, offeredTools, settings.requestTimeoutSeconds * 1000); break; }
+          try { recovered = await requestCompleteTurn(config, key, conversation, options, combined, offeredTools, settings.requestTimeoutSeconds * 1000, settings); break; }
           catch (cause) { retryError = cause; if (!(cause instanceof ToolStreamError) || combined.aborted) throw cause; }
         }
         if (!recovered) throw retryError;
@@ -143,12 +149,12 @@ export async function runAgent(
       for (let index = 0; index < turn.toolCalls.length; index++) {
         if (checkAbort()) return;
         if (callCount >= settings.maxToolCalls) { stopAtLimit('tool_calls', callKind(turn.toolCalls.slice(index))); return; }
-        const call = turn.toolCalls[index], discovery = isDiscovery(call.function.name);
+        const call = turn.toolCalls[index], discovery = isDiscovery(call.function.name), contextRead = call.function.name === RESULT_READER_NAME;
         callCount++;
         if (discovery) discoveryCalls++; else actionCalls++;
-        awaitingAction = !discovery;
+        awaitingAction = !discovery && !contextRead;
         const moduleId = offer.active.get(call.function.name)?.moduleId;
-        inFlightCall = { name: call.function.name, label: runtime.label(call.function.name, offer.active), discovery, ...(moduleId ? { moduleId } : {}) };
+        inFlightCall = { name: call.function.name, label: runtime.label(call.function.name, offer.active), discovery: discovery || contextRead, ...(moduleId ? { moduleId } : {}) };
         if (!discovery) evidence.start();
         progress({ phase: 'tool_start', name: call.function.name, discovery, ...(moduleId ? { moduleId } : {}) });
         const result = await withinDeadline(runtime.execute(call.function.name, call.function.arguments, {
@@ -164,6 +170,8 @@ export async function runAgent(
         const interruptedAction = !discovery && timeout.signal.aborted && !outcome.explicit && outcome.status === 'failed';
         const event: ToolEvent = { name: call.function.name, status: interruptedAction ? 'uncertain' : outcome.status, label,
           ...(interruptedAction ? { detail: 'Das Zeitlimit wurde während des Aufrufs erreicht. Bitte den tatsächlichen Status prüfen; der Aufruf wird nicht wiederholt.' } : outcome.detail ? { detail: outcome.detail } : {}) };
+        // Cache pages can contain facts absent from the original bounded excerpt.
+        // Preserve them as read evidence, without adding/replaying a domain action.
         if (!discovery) evidence.record(event, result, offer.active.get(call.function.name)?.moduleId);
         deps.onToolEvent?.(event);
         const operation = parsed && typeof parsed === 'object' && 'hostOperation' in parsed && parsed.hostOperation && typeof parsed.hostOperation === 'object' ? parsed.hostOperation : undefined;
@@ -171,7 +179,9 @@ export async function runAgent(
         const effect = operation && 'effect' in operation && (operation.effect === 'none' || operation.effect === 'applied' || operation.effect === 'unknown') ? operation.effect : undefined;
         progress({ phase: 'tool_result', name: call.function.name, discovery, status: event.status, ...(moduleId ? { moduleId } : {}), ...(policy ? { policy } : {}), ...(effect ? { effect } : {}) });
         inFlightCall = undefined;
-        conversation.push({ role: 'tool', tool_call_id: call.id, content: result });
+        const resultMessage: ProviderMessage = { role: 'tool', tool_call_id: call.id, content: result };
+        context.remember(resultMessage, call, result, event.status, event.detail, moduleId);
+        conversation.push(resultMessage);
         if (!interruptedAction) awaitingAction = false;
         if (checkAbort()) return;
         if (outcome.status === 'cancelled') {
@@ -218,10 +228,12 @@ export async function runAgent(
       if (!awaitingAction && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
       stopAtLimit('timeout', 'none'); return;
     }
+    if (error instanceof ContextBudgetError) { stopAtLimit('context_budget', 'none', error); return; }
     if (error instanceof ToolStreamError && deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
     throw error;
   } finally {
     clearTimeout(timer);
+    context.clear();
     try { evidence.finish(evidenceStatus); }
     finally { progress({ phase: 'finished', reason: finishReason, ...(limitReason ? { limitReason } : {}) }); }
   }

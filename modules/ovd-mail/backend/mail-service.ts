@@ -1,9 +1,12 @@
 import { isIP } from 'node:net';
+import { createHash } from 'node:crypto';
 import { ImapFlow, type MessageAddressObject, type MessageStructureObject, type FetchMessageObject } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { localCredentialEntry } from '../../../electron/credential-store';
 import { z } from 'zod';
 import type { ImapPageCursor } from '../../../shared/mail';
+import { mailTextPageRequestSchema, type MailTextPage, type MailTextPageRequest } from '../../../shared/mail-content';
+import { MailContentError, MailTextCache, SharedMailReads, spoolMailText, type MailTextSpool } from './mail-content-store';
 import { DEFAULT_MAIL_POLL_INTERVAL, mailPreferenceFields } from '../../../shared/mail-preferences';
 
 /** Passwords are held in the local encrypted credential store, never in these account records. */
@@ -57,6 +60,17 @@ const OPERATION_TIMEOUT = 45_000;
 const accountGenerations = new Map<string, number>();
 const pausedAccounts = new Set<string>();
 const accountClients = new Map<string, Set<ImapFlow>>();
+const bodyReads = new SharedMailReads<ImapMessageBody>();
+const textReads = new SharedMailReads<MailTextSpool>(2);
+const textCache = new MailTextCache();
+const TEXT_WIRE_LIMIT = 32 * 1024 * 1024;
+let contentGeneration = 0;
+
+/** Release temporary content on module deactivation without pausing accounts. */
+export function clearMailContentCache(): void {
+  contentGeneration++;
+  bodyReads.cancel(''); textReads.cancel(''); textCache.clear('');
+}
 
 /** Endpoint and login identify the mailbox independently of editable display fields. */
 export function imapConnectionIdentity(config: Pick<MailAccountConfig, 'host' | 'port' | 'security' | 'username'>): string {
@@ -67,6 +81,7 @@ export function imapConnectionIdentity(config: Pick<MailAccountConfig, 'host' | 
 export function invalidateMailAccountConnections(id: string, pause = false): void {
   accountGenerations.set(id, (accountGenerations.get(id) ?? 0) + 1);
   if (pause) pausedAccounts.add(id);
+  bodyReads.cancel(`${id}/`); textReads.cancel(`${id}/`); textCache.clear(`${id}/`);
   for (const client of accountClients.get(id) ?? []) { try { client.close(); } catch { /* Already closed. */ } }
 }
 export function resumeMailAccountConnections(id: string): void { pausedAccounts.delete(id); }
@@ -427,7 +442,91 @@ export async function fetchImapMessagePreviews(config: MailAccountConfig, rawPat
   }, signal);
 }
 
-export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number): Promise<ImapMessageBody> {
+/** Read one immutable UID, without depending on a previously loaded folder list. */
+export async function fetchImapMessageMetadata(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number, signal?: AbortSignal): Promise<ImapMessage> {
+  const identity = validateMessageIdentity(rawPath, rawValidity, rawUid);
+  return withImap(config, undefined, async client => {
+    const mailbox = await client.mailboxOpen(identity.path, { readOnly: true });
+    if (mailbox.uidValidity.toString() !== identity.validity) throw new MailOperationError('Der Mailordner wurde geändert. Die gespeicherte Nachricht kann nicht mehr eindeutig gelesen werden.');
+    const message = await client.fetchOne(String(identity.uid), { uid: true, flags: true, internalDate: true, envelope: true, bodyStructure: true, headers: ['references'] }, { uid: true });
+    signal?.throwIfAborted();
+    if (!message || message.uid !== identity.uid) throw new MailOperationError('Die gespeicherte Nachricht ist in diesem Ordner nicht mehr verfügbar.');
+    const [mapped] = await mapImapMetadata([message], identity.validity);
+    signal?.throwIfAborted();
+    if (!mapped) throw new MailOperationError('Die gespeicherte Nachricht ist nicht mehr verfügbar.');
+    return mapped;
+  }, signal);
+}
+
+const textCursorSchema = z.object({ v: z.literal(1), version: z.string().regex(/^[a-f0-9]{64}$/), offset: z.number().int().min(0).max(8 * 1024 * 1024) }).strict();
+function textCursor(raw: string | undefined): z.infer<typeof textCursorSchema> | undefined {
+  if (raw === undefined) return;
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(raw) || Buffer.from(raw, 'base64url').toString('base64url') !== raw) throw new Error();
+    return textCursorSchema.parse(JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')));
+  } catch { throw new Error('Die Leseposition ist ungültig. Bitte den Mailtext erneut öffnen.'); }
+}
+
+/** Source text is independent of the bounded HTML/text preview and its UI cache. */
+export async function fetchImapMessageTextPage(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number, request: MailTextPageRequest = {}, signal?: AbortSignal): Promise<MailTextPage> {
+  const identity = validateMessageIdentity(rawPath, rawValidity, rawUid);
+  const generation = accountGenerations.get(config.id) ?? 0;
+  const contentEpoch = contentGeneration;
+  const assertReadCurrent = () => { if (contentEpoch !== contentGeneration || pausedAccounts.has(config.id) || generation !== (accountGenerations.get(config.id) ?? 0)) throw new MailOperationError('Der Mailabruf wurde beendet oder die Kontoeinstellungen wurden geändert. Bitte den Mailtext erneut öffnen.'); };
+  const parsed = mailTextPageRequestSchema.safeParse(request);
+  if (!parsed.success) throw new Error('Bitte eine gültige Leseposition und zwischen 2 und 6.000 Zeichen anfordern.');
+  const cursor = textCursor(parsed.data.cursor);
+  const inspect = async (client: ImapFlow): Promise<{ part: Part; version: string }> => {
+    const mailbox = await client.mailboxOpen(identity.path, { readOnly: true });
+    if (mailbox.uidValidity.toString() !== identity.validity) throw new MailOperationError('Der Mailordner wurde geändert. Die alte Leseposition ist nicht mehr gültig.');
+    const message = await client.fetchOne(String(identity.uid), { uid: true, bodyStructure: true }, { uid: true });
+    if (!message || message.uid !== identity.uid) throw new MailOperationError('Die Nachricht ist in diesem Ordner nicht mehr verfügbar.');
+    const parts = messageParts(message.bodyStructure).filter(part => part.disposition !== 'attachment' && !part.name);
+    const part = parts.find(part => part.type === 'text/plain') ?? parts.find(part => part.type === 'text/html');
+    if (!part) throw new MailOperationError('Für diese Nachricht ist kein lesbarer Textteil verfügbar.');
+    if (part.size > TEXT_WIRE_LIMIT) throw new MailOperationError('Der Textteil überschreitet die Übertragungsgrenze von 32 MiB. Die bisherige Vorschau bleibt verfügbar.');
+    const version = createHash('sha256').update(JSON.stringify([config.id, imapConnectionIdentity(config), identity.path, identity.validity, identity.uid, part.part, part.type, part.size])).digest('hex');
+    if (cursor && cursor.version !== version) throw new MailOperationError('Diese Leseposition gehört zu einer anderen oder geänderten Nachricht. Bitte den Text erneut öffnen.');
+    return { part, version };
+  };
+  // Even a cached page validates UIDVALIDITY and exact UID against the server.
+  const source = await withImap(config, undefined, inspect, signal);
+  signal?.throwIfAborted(); assertReadCurrent();
+  const key = `${config.id}/${source.version}`;
+  let spool = textCache.get(key);
+  if (!spool) spool = await textReads.run(key, signal, async sharedSignal => {
+    let loaded: MailTextSpool | undefined;
+    try {
+      assertReadCurrent();
+      loaded = await withImap(config, undefined, async client => {
+        const current = await inspect(client);
+        if (current.version !== source.version) throw new MailOperationError('Die Nachricht wurde während des Abrufs geändert. Bitte erneut laden.');
+        sharedSignal.throwIfAborted();
+        // The wire/decoder ceiling is above the selected part's declared size;
+        // spoolMailText independently enforces the smaller decoded-content bound.
+        const download = await client.download(String(identity.uid), current.part.part, { uid: true, maxBytes: TEXT_WIRE_LIMIT + 1, chunkSize: 64 * 1024 });
+        if (!download.content) throw new MailOperationError('Der Nachrichteninhalt ist nicht mehr verfügbar.');
+        try { loaded = await spoolMailText(download.content, current.part.type === 'text/html', source.version, sharedSignal); return loaded; }
+        catch (error) { if (error instanceof MailContentError) throw new MailOperationError(error.message); throw error; }
+      }, sharedSignal);
+      sharedSignal.throwIfAborted(); assertReadCurrent();
+      textCache.set(key, loaded);
+      return loaded;
+    } catch (error) { loaded?.dispose(); throw error; }
+  });
+  signal?.throwIfAborted();
+  const page = await spool.page(cursor?.offset ?? 0, parsed.data.limit, signal);
+  signal?.throwIfAborted(); assertReadCurrent();
+  return page;
+}
+
+export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number, signal?: AbortSignal): Promise<ImapMessageBody> {
+  const identity = validateMessageIdentity(rawPath, rawValidity, rawUid);
+  const key = `${config.id}/${JSON.stringify([imapConnectionIdentity(config), identity.path, identity.validity, identity.uid])}`;
+  return bodyReads.run(key, signal, sharedSignal => fetchMessageBody(config, rawPath, rawValidity, rawUid, sharedSignal));
+}
+
+async function fetchMessageBody(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number, signal: AbortSignal): Promise<ImapMessageBody> {
   const identity = validateMessageIdentity(rawPath, rawValidity, rawUid);
   return withImap(config, undefined, async client => {
     const mailbox = await client.mailboxOpen(identity.path, { readOnly: true });
@@ -463,12 +562,14 @@ export async function fetchImapMessageBody(config: MailAccountConfig, rawPath: s
       }
     }
     if (plainUnsupported || (!plainPart && bodyHtml === undefined)) text = 'Die Zeichenkodierung dieser Nachricht wird noch nicht unterstützt.';
+    signal.throwIfAborted();
     const inlineImages = bodyHtml ? await inlineMessageImages(client, identity.uid, parts, bodyHtml) : undefined;
+    signal.throwIfAborted();
     return { bodyText: text.slice(0, TEXT_CHAR_LIMIT), bodyLoaded: true,
       truncated: plainUnsupported || plainTruncated || (!plainPart && bodyHtml === undefined),
       ...(bodyHtml !== undefined ? { bodyHtml, htmlTruncated } : htmlPart ? { htmlTruncated: true } : {}),
       ...(inlineImages ? { inlineImages } : {}) };
-  });
+  }, signal);
 }
 
 export async function downloadImapAttachment(config: MailAccountConfig, rawPath: string, rawValidity: string, rawUid: number, rawPart: string): Promise<{ name: string; content: Buffer }> {

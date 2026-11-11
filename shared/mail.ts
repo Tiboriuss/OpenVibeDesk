@@ -54,6 +54,12 @@ export interface ImapMessage {
   truncated: boolean;
 }
 
+/** Lists and metadata events never retain reader HTML or embedded image data. */
+export function mailMessageMetadata(message: ImapMessage): ImapMessage {
+  const { bodyText: _text, bodyHtml: _html, htmlTruncated: _htmlTruncated, inlineImages: _images, bodyLoaded: _loaded, ...metadata } = message;
+  return { ...metadata, bodyText: '', bodyLoaded: false };
+}
+
 export interface MailSearchRequest { query: string; accountId?: string; folder?: string; limit?: number; }
 export interface MailSearchResults { query: string; messages: ImapMessage[]; total: number; hasMore: boolean; scope: string; foldersSearched: number; foldersRemaining: number; warnings?: string[]; }
 

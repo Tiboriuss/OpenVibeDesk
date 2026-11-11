@@ -2,10 +2,12 @@
 
 [Repository overview](../../README.md) · [Documentation](../../docs/README.md)
 
-Captured on **28 October 2026** from the application at commit `8d0b8b0`. These are captures of the running Electron interface, with fictional sample content supplied through isolated local profiles and fixtures. They are not interface mockups. The images retain the current German labels.
+The module gallery was captured on **28 October 2026** from the application at commit `8d0b8b0`; it predates subsequent layout and paging refinements. The **OVD-Bar images were captured on 11 November 2026** from the v0.1.9 source during practical verification. These are captures of the running Electron interface, with fictional sample content supplied through isolated local profiles and fixtures. They are not interface mockups. The images retain the German labels.
 
 | Image | Visible workflow |
 | --- | --- |
+| [OVD-Bar](ovd-bar.png) | Current horizontal bar with a saved custom module order and its overflow menu. |
+| [OVD-Bar settings](ovd-bar-settings.png) | Current orientation, position, size and opacity controls; behavior and entry ordering are separate groups. |
 | [Assistant](assistant.png) | A referenced email, lazy workspace-tool execution, a Markdown summary and a prepared reply. |
 | [Mail](mail.png) | Account/folder navigation, message list and the isolated HTML reader. |
 | [Files](files.png) | A synthetic local workspace, text preview and the action for referencing a file in Chat. |
@@ -20,7 +22,7 @@ The Atlas Studio mailbox, people, messages and documents are fictional. Email ad
 
 The normal application profile and stored credentials were not loaded. Mail submission, actual mailbox changes, unrelated network access and external application launches were blocked. No message was sent. The captures require no production demo mode or application-source changes.
 
-Images are PNG captures at logical window resolution. UI content was not repainted or edited after capture; retina output was resized for repository display. Names, paths, account metadata, messages, references, model identifiers and server fields were reviewed before inclusion.
+Images are PNG captures. The original module gallery was resized from Retina output for repository display; the newer OVD-Bar captures retain Retina resolution. UI content was not repainted or edited after capture. Names, paths, account metadata, messages, references, model identifiers and server fields were reviewed before inclusion.
 
 ## Refreshing the screenshots
 

@@ -63,7 +63,7 @@ describe('OpenAI-compatible endpoint', () => {
       if (req.url === '/redirect/chat/completions') { res.writeHead(302, { location: '/destination' }); res.end(); return; }
       if (req.url === '/destination') { redirected = true; res.end(); return; }
       authorization = req.headers.authorization;
-      const chunks: Buffer[] = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => { payload = JSON.parse(Buffer.concat(chunks).toString()); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: 'Hallo!' } }] })); });
+      const chunks: Buffer[] = []; req.on('data', chunk => chunks.push(chunk)); req.on('end', () => { payload = JSON.parse(Buffer.concat(chunks).toString()); res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: 'Hallo!' }, finish_reason: 'stop' }] })); });
     });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     const port = (server.address() as {port:number}).port;

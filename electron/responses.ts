@@ -2,6 +2,7 @@ import type { AiConfig, ChatOptions } from '../shared/model';
 import { providerEndpoint, providerHeaders, providerHttpError, providerReportedError } from './ai-provider';
 import { chatGptAuth } from './chatgpt-auth';
 import { beginProviderDiagnostics, type DiagnosticComparison, type ProviderDiagnosticsTrace } from './diagnostics';
+import { ContextBudgetError, serializeProviderRequest, type ProviderRequestBudget } from './provider-request';
 import { toolCallError, validateToolCalls, validateToolCallSize, type ProviderMessage, type ResponseInputItem, type StreamTurn, type ToolCall } from './stream';
 
 const MAX_WIRE_BYTES = 4_000_000;
@@ -17,35 +18,6 @@ function reasoningContinuation(item: Record<string, unknown>, diagnostics?: Prov
   const summary = item.summary ?? [];
   if (!Array.isArray(summary) || summary.some(part => !record(part) || part.type !== 'summary_text' || typeof part.text !== 'string')) return invalid('summary');
   return { type: 'reasoning', summary: summary.map(part => ({ type: 'summary_text', text: part.text as string })), ...(item.id ? { id: item.id as string } : {}), ...(item.encrypted_content ? { encrypted_content: item.encrypted_content as string } : {}) };
-}
-
-/** Replay only this run's validated output. No server-side conversation or tools. */
-function responseInput(messages: ProviderMessage[], directChatGpt = false): ResponseInputItem[] {
-  return messages.flatMap((message): ResponseInputItem[] => {
-    if (message.role === 'tool') return [{ type: 'function_call_output', call_id: message.tool_call_id, output: message.content }];
-    if (message.role === 'assistant' && message.responseItems) return message.responseItems;
-    const items: ResponseInputItem[] = message.content ? [{ role: directChatGpt && message.role === 'system' ? 'developer' : message.role, content: message.content }] : [];
-    if (message.role === 'assistant') for (const call of message.tool_calls ?? []) {
-      items.push({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments, ...(directChatGpt ? { namespace: 'ovd' } : {}) });
-    }
-    return items;
-  });
-}
-
-function responseBody(config: AiConfig, messages: ProviderMessage[], options: ChatOptions, stream: boolean, tools?: readonly unknown[]) {
-  const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
-  const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
-  const functions = tools?.map(raw => {
-    if (!record(raw) || raw.type !== 'function' || !record(raw.function) || typeof raw.function.name !== 'string') throw new Error('Der Endpunkt kann nur die angebotenen Funktionswerkzeuge verwenden.');
-    return { type: 'function', ...raw.function, strict: false };
-  });
-  return {
-    model, input: responseInput(messages, config.provider === 'chatgpt'), stream, store: false,
-    ...(config.provider === 'chatgpt' ? {} : { truncation: 'disabled' }),
-    include: ['reasoning.encrypted_content'],
-    ...(functions?.length ? { tools: config.provider === 'chatgpt' ? [{ type: 'namespace', name: 'ovd', description: 'OpenVibeDesk workspace functions selected for this request.', tools: functions }] : functions } : {}),
-    ...(thinking === 'off' ? {} : { reasoning: { effort: thinking } })
-  };
 }
 
 function parseOutput(value: unknown, tools: readonly unknown[] | undefined, transport: Transport, directChatGpt = false, diagnostics?: ProviderDiagnosticsTrace): StreamTurn {
@@ -104,17 +76,18 @@ function parseOutput(value: unknown, tools: readonly unknown[] | undefined, tran
 
 export async function requestResponsesTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, tools?: readonly unknown[], requestTimeoutMs = 60_000
+  signal: AbortSignal, tools?: readonly unknown[], requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
 ): Promise<StreamTurn> {
   // ChatGPT plan usage permits HTTP streaming only, including a retry of an
   // unexecuted malformed reply. It never switches billing or provider.
-  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, () => {}, tools, requestTimeoutMs);
+  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, () => {}, tools, requestTimeoutMs, budget);
   const timeout = new AbortController(), timer = setTimeout(() => timeout.abort(), requestTimeoutMs);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const diagnostics = beginProviderDiagnostics(config, options, 'responses', 'complete', messages.length, tools?.length ?? 0);
   try {
-    const body = responseBody(config, messages, options, false, tools);
-    const response = await fetch(providerEndpoint(config, 'responses', body.model), { method: 'POST', headers: providerHeaders(config, key, 'application/json'), body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]) });
+    const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
+    const body = serializeProviderRequest({ ...config, protocol: 'responses' }, messages, options, false, tools, budget);
+    const response = await fetch(providerEndpoint(config, 'responses', model), { method: 'POST', headers: providerHeaders(config, key, 'application/json'), body, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]) });
     diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response, 'auch ohne Streaming');
     if (Number(response.headers.get('content-length') ?? 0) > MAX_WIRE_BYTES) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
@@ -138,6 +111,7 @@ export async function requestResponsesTurn(
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat auch ohne Streaming nicht rechtzeitig geantwortet.');
+    if (error instanceof ContextBudgetError) throw error;
     if (error instanceof Error && /^(Der Endpunkt|Die Antwort|Die vollständige)/.test(error.message)) throw error;
     throw new Error('Die vollständige Antwort des Endpunkts konnte nicht geladen werden. Bitte Verbindung prüfen.');
   } finally { clearTimeout(timer); if (reader) await reader.cancel().catch(() => {}); }
@@ -145,7 +119,7 @@ export async function requestResponsesTurn(
 
 export async function streamResponsesTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, onDelta: (text: string) => void, tools?: readonly unknown[], requestTimeoutMs = 60_000
+  signal: AbortSignal, onDelta: (text: string) => void, tools?: readonly unknown[], requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
 ): Promise<StreamTurn> {
   const timeout = new AbortController(); let timer: ReturnType<typeof setTimeout>;
   const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(), requestTimeoutMs); };
@@ -153,10 +127,11 @@ export async function streamResponsesTurn(
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const diagnostics = beginProviderDiagnostics(config, options, 'responses', 'stream', messages.length, tools?.length ?? 0);
   try {
-    const body = responseBody(config, messages, options, true, tools);
+    const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
+    const body = serializeProviderRequest({ ...config, protocol: 'responses' }, messages, options, true, tools, budget);
     const requestSignal = AbortSignal.any([signal, timeout.signal]);
     const credential = config.provider === 'chatgpt' ? await chatGptAuth().accessToken(requestSignal) : key;
-    const response = await fetch(providerEndpoint(config, 'responses', body.model), { method: 'POST', headers: providerHeaders(config, credential, 'text/event-stream'), body: JSON.stringify(body), redirect: 'error', signal: requestSignal });
+    const response = await fetch(providerEndpoint(config, 'responses', model), { method: 'POST', headers: providerHeaders(config, credential, 'text/event-stream'), body, redirect: 'error', signal: requestSignal });
     diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response);
     if (!response.body) throw new Error('Der Endpunkt hat keine Antwort geliefert.');
@@ -335,6 +310,7 @@ export async function streamResponsesTurn(
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat nicht rechtzeitig geantwortet.');
+    if (error instanceof ContextBudgetError) throw error;
     if (error instanceof Error && (error.name === 'ChatGptAuthError' || /^(Der Endpunkt|Die Antwort|Die Streaming-Antwort)/.test(error.message))) throw error;
     throw new Error('Die Verbindung zum Endpunkt ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
   } finally { clearTimeout(timer!); if (reader) await reader.cancel().catch(() => {}); }

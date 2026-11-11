@@ -2,12 +2,14 @@ import type { AiConfig, ChatOptions } from '../shared/model';
 import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
 import { requestResponsesTurn, streamResponsesTurn } from './responses';
 import { beginProviderDiagnostics } from './diagnostics';
+import { ContextBudgetError, serializeProviderRequest, type ProviderRequestBudget } from './provider-request';
 
 export type ToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
-export type ProviderMessage =
+export type ProviderMessage = (
   | { role: 'system' | 'user'; content: string }
   | { role: 'assistant'; content: string | null; tool_calls?: ToolCall[]; responseItems?: ResponseInputItem[] }
-  | { role: 'tool'; tool_call_id: string; content: string };
+  | { role: 'tool'; tool_call_id: string; content: string }
+) & { contextPriority?: 'history' };
 /** Provider-owned opaque continuation items remain only in the current run. */
 export type ResponseInputItem = Record<string, unknown>;
 export type StreamTurn = { text: string; toolCalls: ToolCall[]; responseItems?: ResponseInputItem[] };
@@ -73,10 +75,10 @@ export function validateToolCalls(toolCalls: ToolCall[], finishReason: string | 
 /** Fetch one complete turn; this never executes a tool or retries another request. */
 export async function requestCompleteTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, tools?: readonly unknown[], requestTimeoutMs = 60_000
+  signal: AbortSignal, tools?: readonly unknown[], requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
 ): Promise<StreamTurn> {
-  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, () => {}, tools, requestTimeoutMs);
-  if (config.protocol === 'responses') return requestResponsesTurn(config, key, messages, options, signal, tools, requestTimeoutMs);
+  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, () => {}, tools, requestTimeoutMs, budget);
+  if (config.protocol === 'responses') return requestResponsesTurn(config, key, messages, options, signal, tools, requestTimeoutMs, budget);
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), requestTimeoutMs);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -84,10 +86,9 @@ export async function requestCompleteTurn(
   try {
     const headers = providerHeaders(config, key, 'application/json');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
-    const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
     const response = await fetch(providerEndpoint(config, 'chat-completions', model), {
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
-      body: JSON.stringify({ model, messages, stream: false, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
+      body: serializeProviderRequest(config, messages, options, false, tools, budget)
     });
     diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response, 'auch ohne Streaming');
@@ -141,6 +142,7 @@ export async function requestCompleteTurn(
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat auch ohne Streaming nicht rechtzeitig geantwortet.');
+    if (error instanceof ContextBudgetError) throw error;
     if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die vollständige'))) throw error;
     throw new Error('Die vollständige Antwort des Endpunkts konnte nicht geladen werden. Bitte Verbindung prüfen.');
   } finally {
@@ -152,18 +154,18 @@ export async function requestCompleteTurn(
 /** A text-only stream, retained for providers and callers that do not use tools. */
 export async function streamCompletion(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, onDelta: (text: string) => void, requestTimeoutMs = 60_000
+  signal: AbortSignal, onDelta: (text: string) => void, requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
 ): Promise<string> {
-  return (await streamTurn(config, key, messages, options, signal, onDelta, undefined, requestTimeoutMs)).text;
+  return (await streamTurn(config, key, messages, options, signal, onDelta, undefined, requestTimeoutMs, budget)).text;
 }
 
 /** Assemble a complete streaming turn before returning any tool calls for execution. */
 export async function streamTurn(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, onDelta: (text: string) => void, tools?: readonly unknown[], requestTimeoutMs = 60_000
+  signal: AbortSignal, onDelta: (text: string) => void, tools?: readonly unknown[], requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
 ): Promise<StreamTurn> {
-  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs);
-  if (config.protocol === 'responses') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs);
+  if (config.provider === 'chatgpt') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs, budget);
+  if (config.protocol === 'responses') return streamResponsesTurn(config, key, messages, options, signal, onDelta, tools, requestTimeoutMs, budget);
   const timeout = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
   const resetTimer = () => { clearTimeout(timer); timer = setTimeout(() => timeout.abort(), requestTimeoutMs); };
@@ -173,10 +175,9 @@ export async function streamTurn(
   try {
     const headers = providerHeaders(config, key, 'text/event-stream');
     const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
-    const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
     const response = await fetch(providerEndpoint(config, 'chat-completions', model), {
       method: 'POST', headers, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]),
-      body: JSON.stringify({ model, messages, stream: true, ...(tools?.length ? { tools } : {}), ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) })
+      body: serializeProviderRequest(config, messages, options, true, tools, budget)
     });
     diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response);
@@ -272,6 +273,7 @@ export async function streamTurn(
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
     if (timeout.signal.aborted) throw new Error('Der Endpunkt hat nicht rechtzeitig geantwortet.');
+    if (error instanceof ContextBudgetError) throw error;
     if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die Antwort') || error.message.startsWith('Die Streaming-Antwort'))) throw error;
     throw new Error('Die Verbindung zum Endpunkt ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
   } finally {

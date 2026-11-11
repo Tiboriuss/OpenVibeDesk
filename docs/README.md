@@ -19,12 +19,16 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | Guide | What it covers |
 | --- | --- |
 | [Getting started](getting-started.md) | Installer setup and manual updates, local startup, first-run configuration, data locations, and troubleshooting. |
+| [Changelog](../CHANGELOG.md) | Changes in v0.1.9, verification scope, update compatibility and remaining work. |
+| [OVD-Bar](ovd-bar.md) | Floating launcher, orientation, sizing, transparency, placement, idle collapse and Assistant control. |
 | [AI providers](ai-providers.md) | OpenAI Chat Completions/Responses, Azure endpoints and deployments, compatible local services and direct ChatGPT OAuth/plan usage. |
 | [Diagnostics](diagnostics.md) | Switchable local provider logs, privacy boundaries, cross-computer support reports and Assistant controls. |
 | [Releases and installers](releases.md) | macOS/Windows packages without trusted publisher certificates, versioning, integrity checks, manual upgrades, and remaining validation. |
 | [Contributing](../CONTRIBUTING.md) | Development, practical validation, and the contract for custom modules. |
 | [Architecture](architecture.md) | Process boundaries, persistence, assistant integration, references, and current technical limits. |
 | [Maturation plan](maturation-plan.md) | Prioritized work on existing modules, verified gaps, dependencies, current technical references and practical acceptance gates. |
+| [November product and host review](project-review-2026-11.md) | Verified UI/workflow corrections, compact-layout measurements, current primary guidance and remaining host/module priorities. |
+| [R04 performance measurements](performance-2026-11.md) | Before/after Mail cache, window IPC, Chat/Files paging and storage measurements with practical verification. |
 | [Repository working rules](../AGENTS.md) | Product principles and requirements that apply to changes. |
 | [ADR 0001: local desktop application](decisions/0001-local-desktop.md) | Why the app uses Electron and local storage without a dedicated backend server. |
 
@@ -49,7 +53,7 @@ Design guides include intended behavior that is not implemented yet. The [reposi
 | [Module repositories](module-repositories.md) | Public/private sources, catalog browsing, installation, updates, source conflicts, package publishing and Assistant control. |
 | [Memory modules](module-memory.md) | Automatic bounded recall, sources, explicit storage, callback examples and saved request snapshots. |
 | [Module events](module-events.md) | Opt-in subscriptions, bounded publications, durable delivery, acknowledgements and background processing contracts. |
-| [Downloadable module catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) | Separately published Notes and Skill Library modules, their source and package documentation. |
+| [Downloadable module catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) | Separately published Notes, Skill Library and Memory modules, their source and package documentation. |
 | [Notes module example](../examples/notes-module/README.md) | A standalone process module with its own HTML interface and settings. |
 | [MCP module](../modules/ovd-mcp/README.md) | Server setup, browser OAuth and endpoint overrides, tool approvals, credentials, and dynamic discovery. |
 | [MCP server example](../examples/mcp-server/README.md) | A local server for exercising the MCP integration. |

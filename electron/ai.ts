@@ -11,6 +11,7 @@ import { moduleReferenceInputsSchema, moduleReferenceSchema } from '../shared/re
 import { aiConnectionFields, aiProviderSchema, aiProtocolSchema, aiAuthModeSchema, aiApiVersionSchema, isAzureEndpoint } from '../shared/ai-providers';
 import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
 import { requestCompleteTurn } from './stream';
+import type { ProviderRequestBudget } from './provider-request';
 import { chatGptAuth } from './chatgpt-auth';
 
 export const defaultAiConfig: AiConfig = { baseUrl: 'https://api.openai.com/v1', smartModel: '', simpleModel: '', smartThinking: 'off', simpleThinking: 'off', historyStart: 0, workspaceTools: true, confirmationMode: 'ask' };
@@ -86,7 +87,7 @@ export async function getKey(connection: KeyIdentity): Promise<string | null> { 
 export async function setKey(connection: KeyIdentity, key: string): Promise<void> { try { await entry(connection).setPassword(key); } catch { throw new Error('Der API-Schlüssel konnte nicht lokal gespeichert werden.'); } }
 export async function deleteKey(connection: KeyIdentity): Promise<void> { if (typeof connection !== 'string' && (connection.authMode === 'none' || connection.provider === 'chatgpt')) return; try { await entry(connection).deletePassword(); } catch { throw new Error('Der API-Schlüssel konnte nicht gelöscht werden.'); } }
 
-type ProviderMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+type ProviderMessage = { role: 'system' | 'user' | 'assistant'; content: string; contextPriority?: 'history' };
 function moduleSummaryContext(modules: readonly ModuleSummary[]): string {
   const summaries: ModuleSummary[] = [];
   let size = 2;
@@ -129,7 +130,7 @@ export function makeMessages(history: ChatMessage[], mails: Mail[], user: ChatMe
   for (let index = formatted.length - 1; index >= 0; index--) {
     const message = formatted[index];
     if (historySize + message.content.length > agentSettings.historyCharBudget) break;
-    historyMessages.unshift(message); historySize += message.content.length;
+    historyMessages.unshift({ ...message, contextPriority: 'history' }); historySize += message.content.length;
   }
   const omitted = history.length - historyMessages.length;
   const historyNotice = omitted > 0 ? ` Älterer Chatverlauf ist begrenzt: ${omitted} frühere Nachrichten wurden für diese Anfrage ausgelassen. Behaupte nicht, ausgelassene Inhalte zu kennen; prüfe den tatsächlichen Workspace bei Bedarf. Die aktuelle Anfrage und die begrenzten Momentaufnahmen ihrer ausdrücklich gewählten Referenzen bleiben enthalten.` : '';
@@ -164,27 +165,8 @@ export async function listModels(config: AiConfig, key: string | null): Promise<
     throw new Error('Die Modellabfrage ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
   } finally { clearTimeout(timer); }
 }
-export async function requestCompletion(config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions): Promise<string> {
-  if (config.protocol === 'responses' || config.provider === 'chatgpt') {
-    const result = await requestCompleteTurn(config, key, messages, options, new AbortController().signal);
-    if (result.toolCalls.length || !result.text.trim()) throw new Error('Der Endpunkt hat keine reine Textantwort geliefert.');
-    return result.text;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  try {
-    const headers = providerHeaders(config, key);
-    const model = options.tier === 'smart' ? config.smartModel : config.simpleModel;
-    const thinking = options.tier === 'smart' ? config.smartThinking : config.simpleThinking;
-    const response = await fetch(providerEndpoint(config, 'chat-completions', model), { method: 'POST', headers, body: JSON.stringify({ model, messages, stream: false, ...(thinking === 'off' ? {} : { reasoning_effort: thinking }) }), redirect: 'error', signal: controller.signal });
-    if (!response.ok) throw await providerHttpError(config, response);
-    const body: any = await boundedJson(response);
-    const answer = body?.choices?.[0]?.message?.content;
-    if (typeof answer !== 'string' || !answer.trim() || answer.length > 200000) throw new Error('Der Endpunkt hat keine lesbare Textantwort geliefert.');
-    return answer;
-  } catch (error) {
-    if (error instanceof Error && (error.message.startsWith('Der Endpunkt') || error.message.startsWith('Die Antwort'))) throw error;
-    if (controller.signal.aborted) throw new Error('Der Endpunkt hat nicht rechtzeitig geantwortet.');
-    throw new Error('Die Verbindung zum Endpunkt ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
-  } finally { clearTimeout(timer); }
+export async function requestCompletion(config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions, budget?: ProviderRequestBudget): Promise<string> {
+  const result = await requestCompleteTurn(config, key, messages, options, new AbortController().signal, undefined, 60_000, budget);
+  if (result.toolCalls.length || !result.text.trim()) throw new Error('Der Endpunkt hat keine reine Textantwort geliefert.');
+  return result.text;
 }

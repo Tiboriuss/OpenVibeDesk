@@ -66,15 +66,13 @@ export function NavigationOrderSettings({ settings, modules, loading, searchQuer
   }
 
   return <details className="workspace-settings-group navigation-order-settings" hidden={!visible} open={searching ? searchOpen : open}>
-    <summary ref={summary} onClick={event => { event.preventDefault(); toggle(); }}><span><strong>Seitenleiste & Dock</strong><small>{loading ? 'Einträge werden geladen …' : `${entries.length} Einträge · ${customized ? 'Eigene Reihenfolge' : 'Standardreihenfolge'}`}</small></span><ChevronDown size={16} aria-hidden="true"/></summary>
+    <summary ref={summary} onClick={event => { event.preventDefault(); toggle(); }}><span><strong>Einträge & Reihenfolge</strong><small>{loading ? 'Einträge werden geladen …' : `${entries.length} Einträge · ${customized ? 'Eigene Reihenfolge' : 'Standardreihenfolge'}`}</small></span><ChevronDown size={16} aria-hidden="true"/></summary>
     <div className="workspace-settings-content navigation-order-content" aria-busy={busy}>
-      <p className="navigation-order-help">Verschiebe die Einträge mit den Pfeilen. Die Reihenfolge wird sofort gespeichert.</p>
-      <ol ref={list} className="navigation-order-list" aria-label="Reihenfolge der Seitenleiste und des Docks">{entries.map((entry, index) => {
+      <ol ref={list} className="navigation-order-list" aria-label="Reihenfolge der OVD-Bar">{entries.map((entry, index) => {
         const Icon = moduleIcon(entry.icon);
         return <li key={entry.id} data-entry-id={entry.id}><span className="navigation-order-position" aria-hidden="true">{index + 1}</span><Icon size={16} aria-hidden="true"/><span className="navigation-order-label"><strong>{entry.title}</strong><small>{entry.moduleTitle}</small></span><span className="navigation-order-actions"><button type="button" data-direction="up" disabled={busy || loading || index === 0} aria-label={`${entry.title} nach oben verschieben`} title={`${entry.title} nach oben verschieben`} onClick={() => move(entry.id, 'up')}><ArrowUp size={14} aria-hidden="true"/></button><button type="button" data-direction="down" disabled={busy || loading || index === entries.length - 1} aria-label={`${entry.title} nach unten verschieben`} title={`${entry.title} nach unten verschieben`} onClick={() => move(entry.id, 'down')}><ArrowDown size={14} aria-hidden="true"/></button></span></li>;
       })}</ol>
       <div className="navigation-order-footer"><button type="button" className="settings-reset" disabled={!customized || busy || loading} onClick={() => void save([], 'Die Standardreihenfolge ist wiederhergestellt.', {})}><RotateCcw size={13} aria-hidden="true"/>Auf Standard zurücksetzen</button><small>{busy ? 'Wird gespeichert …' : error ? 'Nicht gespeichert' : 'Änderungen sofort wirksam'}</small></div>
-      <p className="navigation-order-help navigation-order-extra">Bei eigener Reihenfolge werden neue Module am Ende ergänzt. Deaktivierte Einträge behalten ihren Platz für die erneute Aktivierung.</p>
       <div className="navigation-order-status" aria-live="polite">{status}</div>
       {error && <p className="navigation-order-error" role="alert">{error}</p>}
     </div>

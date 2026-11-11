@@ -1,3 +1,4 @@
+import { mailSourceLocatorSchema } from '../shared/mail-source';
 import { chatRequestEvent, chatFinishedEvent } from './chat-events';
 import type { ModuleEvent, ModuleEventPublication } from '../shared/module-events';
 import { savedMemory } from './memory-context';
@@ -7,7 +8,9 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { applyUiAction, initialState, uiActionSchema } from '../shared/actions';
 import { initializeStore, loadState, saveState } from './store';
-import { settingsPatchSchema, normalizeSettings } from '../shared/settings';
+import { chatSessionListRequestSchema } from '../shared/sessions';
+import { listChatSessions, WorkspaceViewProjector, type WorkspaceView } from './workspace-view';
+import { settingsPatchSchema, normalizeSettings, coreSettingsCategoryIds } from '../shared/settings';
 import { diagnosticsSettingsSchema } from '../shared/diagnostics';
 import { initializeDiagnostics, setDiagnosticsEnabled, getDiagnosticsStatus, exportDiagnostics, clearDiagnostics, beginAgentDiagnostics } from './diagnostics';
 import { initializeCredentialStore } from './credential-store';
@@ -40,6 +43,10 @@ import type { FilesModule } from '../modules/ovd-files/backend';
 import type { McpModule } from '../modules/ovd-mcp/backend';
 import { ModuleReferenceRegistry, sameModuleReference } from './module-references';
 import { WorkspaceCapabilityRegistry, type CapabilityContext } from './workspace-capabilities';
+import { fitWindowBounds } from './window-layout';
+import { OvdBarController } from './ovd-bar';
+import { AgentContext } from './agent-context';
+import { ContextBudgetError } from './provider-request';
 
 app.enableSandbox();
 protocol.registerSchemesAsPrivileged([{ scheme: 'ovd-module', privileges: { standard: true, secure: true } }]);
@@ -49,6 +56,7 @@ const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
 let currentState: WorkspaceState;
 let dock: BrowserWindow | null = null;
+let ovdBar: OvdBarController | undefined;
 const panels = new Map<WindowKind, BrowserWindow>();
 const confirmedDraftCloses = new WeakSet<BrowserWindow>();
 const panelModules: Partial<Record<WindowKind, string>> = { mail: 'ovd-mail', draft: 'ovd-mail', files: 'ovd-files' };
@@ -88,7 +96,8 @@ function verifyPanel(event: Electron.IpcMainInvokeEvent, kinds: WindowKind[]): v
   if (!kinds.some(kind => panels.get(kind)?.webContents === event.sender)) throw new Error('Untrusted IPC sender');
 }
 function boundedEmailReference(mail: Pick<Mail, 'id' | 'from' | 'to' | 'subject' | 'date' | 'bodyText' | 'attachments' | 'accountName'> & Partial<EmailReference>, truncated = false): EmailReference {
-  return { id: mail.id, from: mail.from.slice(0, 500), to: mail.to.slice(0, 500), subject: mail.subject.slice(0, 1000),
+  const source = mailSourceLocatorSchema.safeParse(mail.source);
+  return { ...(source.success ? { source: source.data } : {}), id: mail.id, from: mail.from.slice(0, 500), to: mail.to.slice(0, 500), subject: mail.subject.slice(0, 1000),
     date: mail.date.slice(0, 100), bodyText: mail.bodyText.slice(0, 12000),
     attachments: mail.attachments.slice(0, 20).map(item => ({ name: item.name.slice(0, 200), size: item.size })),
     ...(mail.accountName ? { accountName: mail.accountName.slice(0, 200) } : {}), ...(mail.accountId ? { accountId: mail.accountId } : {}), ...(mail.fromAddresses ? { fromAddresses: mail.fromAddresses.slice(0, 20).map(value => value.slice(0, 320)) } : {}), ...(mail.replyToAddresses ? { replyToAddresses: mail.replyToAddresses.slice(0, 20).map(value => value.slice(0, 320)) } : {}), ...(mail.messageId ? { messageId: mail.messageId.slice(0, 500) } : {}), ...(mail.references ? { references: mail.references.slice(-20).map(value => value.slice(0, 500)) } : {}), truncated: truncated || mail.bodyText.length > 12000 };
@@ -171,7 +180,28 @@ async function selectModuleReference(raw: ModuleReferenceSummary): Promise<void>
   await openPanel('chat');
   panels.get('chat')?.webContents.send('chat:reference-module', summary);
 }
-function broadcast(): void { for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('workspace:changed', currentState); }
+const viewProjectors = new WeakMap<BrowserWindow, WorkspaceViewProjector>();
+const sentViews = new WeakMap<BrowserWindow, ReturnType<WorkspaceViewProjector['project']>>();
+function windowView(win: BrowserWindow): WorkspaceView {
+  if (win === dock) return 'dock';
+  for (const [kind, panel] of panels) if (panel === win) return kind;
+  return 'module';
+}
+function windowProjector(win: BrowserWindow): WorkspaceViewProjector {
+  let projector = viewProjectors.get(win);
+  if (!projector) { projector = new WorkspaceViewProjector(); viewProjectors.set(win, projector); }
+  return projector;
+}
+function windowState(win: BrowserWindow) { return windowProjector(win).project(currentState, windowView(win)); }
+function broadcast(): void {
+  for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) {
+    if (!win || win.isDestroyed()) continue;
+    const projection = windowState(win);
+    if (sentViews.get(win) === projection) continue;
+    sentViews.set(win, projection);
+    win.webContents.send('workspace:changed', projection);
+  }
+}
 function commit(next: WorkspaceState): void {
   currentState = next;
   mailModule?.onStateChanged(next);
@@ -216,13 +246,11 @@ async function openPanel(kind: WindowKind): Promise<void> {
   const saved = currentState.windows.find(w => w.kind === kind);
   const sizes: Record<WindowKind, [number, number]> = { mail: [1070, 720], chat: [570, 610], draft: [640, 530], files: [740, 580], settings: [650, 540], sessions: [560, 520] };
   const [width, height] = sizes[kind];
-  const area = screen.getPrimaryDisplay().workArea;
-  const actualWidth = Math.max(450, Math.min(saved?.width ?? width, area.width));
-  const actualHeight = Math.max(360, Math.min(saved?.height ?? height, area.height));
-  const x = saved ? Math.max(area.x, Math.min(saved.x, area.x + area.width - actualWidth)) : area.x + 100 + panels.size * 70;
-  const y = saved ? Math.max(area.y, Math.min(saved.y, area.y + area.height - actualHeight)) : area.y + 80 + panels.size * 60;
-  const win = new BrowserWindow({ x, y, width: actualWidth, height: actualHeight, icon: appIconPath,
-    minWidth: 450, minHeight: 360, title: `OpenVibeDesk · ${panelTitle(kind)}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
+  const savedBounds = saved && [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite) && saved.width > 0 && saved.height > 0 ? saved : undefined;
+  const area = savedBounds ? screen.getDisplayMatching(savedBounds).workArea : screen.getPrimaryDisplay().workArea;
+  const bounds = fitWindowBounds(savedBounds ?? { x: area.x + 100 + panels.size * 70, y: area.y + 80 + panels.size * 60, width, height }, area);
+  const win = new BrowserWindow({ ...bounds, icon: appIconPath,
+    minWidth: Math.min(450, area.width), minHeight: Math.min(360, area.height), title: `OpenVibeDesk · ${panelTitle(kind)}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   panels.set(kind, win);
   setupWindow(win);
@@ -261,15 +289,19 @@ async function openPanel(kind: WindowKind): Promise<void> {
 }
 
 async function openDock(): Promise<void> {
-  const area = screen.getPrimaryDisplay().workArea;
-  const height = dockHeight();
-  dock = new BrowserWindow({ x: area.x + 12, y: Math.round(area.y + (area.height - height) / 2), icon: appIconPath,
-    width: 78, height, minWidth: 78, minHeight: 200, frame: false, transparent: true, resizable: false,
+  dock = new BrowserWindow({ icon: appIconPath, title: 'OVD-Bar', show: false,
+    width: 68, height: 380, minWidth: 1, minHeight: 1, frame: false, transparent: true, resizable: false,
     movable: true, alwaysOnTop: currentState.settings.dockAlwaysOnTop, skipTaskbar: true, hasShadow: false, backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   setupWindow(dock);
-  dock.on('closed', () => { dock = null; app.quit(); });
+  ovdBar = new OvdBarController(dock, { dataDirectory: app.getPath('userData'), settings: () => currentState.settings,
+    navigationCount: () => getNavigationEntries(moduleHost?.list() ?? []).length,
+    saveSettings: (patch, isCurrent) => changeSettings(patch, { origin: 'ui', owner: dock ?? undefined, signal: new AbortController().signal }, isCurrent),
+    openSettings: () => openSettingsCategory('dock'), quit: () => confirmQuit({ origin: 'ui', owner: dock ?? undefined, signal: new AbortController().signal }) });
+  await ovdBar.initialize();
+  dock.on('closed', () => { dock = null; ovdBar = undefined; app.quit(); });
   await dock.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: 'dock' } });
+  dock.showInactive();
 }
 
 async function dispatchAction(raw: unknown): Promise<void> {
@@ -354,11 +386,11 @@ async function persistSettingsPatch(input: unknown): Promise<void> {
   await saveState({ ...currentState, settings });
   if (patch.diagnosticsEnabled !== undefined) await setDiagnosticsEnabled(patch.diagnosticsEnabled);
   commit({ ...currentState, settings });
-  dock?.setAlwaysOnTop(settings.dockAlwaysOnTop);
+  ovdBar?.layout();
 }
-function changeSettings(input: unknown, _context: OperationContext): Promise<void> {
+function changeSettings(input: unknown, _context: OperationContext, isCurrent?: () => boolean): Promise<void> {
   const patch = settingsPatchSchema.parse(input);
-  return queueSettingsWrite(() => persistSettingsPatch(patch));
+  return queueSettingsWrite(async () => { if (!isCurrent || isCurrent()) await persistSettingsPatch(patch); });
 }
 async function updateDiagnosticSettings(input: unknown, context: OperationContext) {
   const { enabled } = diagnosticsSettingsSchema.parse(input);
@@ -471,7 +503,9 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('windows.list', () => [...currentState.windows.filter(item => !panelModules[item.kind] || moduleHost?.isReady(panelModules[item.kind]!)).map(item => ({ ...item, open: panels.has(item.kind), minimized: panels.get(item.kind)?.isMinimized() ?? true })), ...[...moduleWindows.values()].map(({ moduleId, viewId, window }) => ({ moduleId, viewId, open: true, minimized: window.isMinimized() }))]);
   workspaceCapabilities.register('windows.open', async ({ kind }) => { await dispatchAction({ type: 'open_window', kind }); return { kind, opened: true }; });
   workspaceCapabilities.register('windows.control', ({ kind, action }) => controlPanel(kind, action));
-  workspaceCapabilities.register('chats.list', ({ query, limit }) => currentState.sessions.filter(item => !query || `${item.title} ${item.messages.map(message => message.text).join(' ')}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).slice(0, limit ?? 20).map(({ id, title, updatedAt, messages }) => ({ id, title, updatedAt, messageCount: messages.length })));
+  workspaceCapabilities.register('bar.get', () => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); return ovdBar.status(); });
+  workspaceCapabilities.register('bar.move', async (args, context) => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); await context.validateOperation?.(); context.signal.throwIfAborted(); return ovdBar.move(args, context.signal); });
+  workspaceCapabilities.register('chats.list', ({ query, offset, limit, revision }) => { const page = listChatSessions(currentState, query, offset, limit ?? 20, revision); return { ...page, sessions: page.sessions.map(({ id, title, updatedAt, messageCount }) => ({ id, title, updatedAt, messageCount })) }; });
   workspaceCapabilities.register('chats.read', args => readChatHistory(currentState, args));
   workspaceCapabilities.register('chats.create', async ({ title }) => { const sessionId = newWorkspaceChat(title); await openPanel('chat'); return { sessionId, opened: true }; });
   workspaceCapabilities.register('chats.use_model', async ({ tier }) => { const config = currentState.ai; if (!config || !(tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Dieses Modell bitte zuerst in den KI-Einstellungen einrichten.'); await openPanel('chat'); panels.get('chat')?.webContents.send('chat:use-model', tier); return { tier, appliesTo: 'next_messages' }; });
@@ -559,7 +593,10 @@ function registerWorkspaceCapabilities(): void {
     const subscription = moduleHost!.getEventStatus().find(item => item.moduleId === moduleId);
     return { ok: applied, outcome: applied ? 'completed' : 'cancelled', moduleId, subscription };
   }, { deferDispatch: true });
-  workspaceCapabilities.register('modules.set_enabled', ({ moduleId, enabled }, context) => moduleHost!.setEnabled(moduleId, enabled, context).then(() => ({ moduleId, status: moduleHost!.registry.getModule(moduleId)?.status })));
+  workspaceCapabilities.register('modules.set_enabled', async ({ moduleId, enabled }, context) => {
+    const applied = await moduleHost!.setEnabled(moduleId, enabled, context);
+    return { outcome: applied ? 'completed' : 'cancelled', moduleId, status: moduleHost!.registry.getModule(moduleId)?.status };
+  }, { deferDispatch: true });
   workspaceCapabilities.register('modules.repositories_list', ({ offset = 0, limit = 20 }) => {
     const state = moduleRepositories!.list();
     if (state.error) throw new Error(state.error);
@@ -802,7 +839,8 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
         onToolEvent: event => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, toolEvents: [...(m.toolEvents ?? []), event] } : m))) }));
     }
     else {
-      await streamCompletion(config, key, providerMessages, options, controller.signal, onDelta, agentSettings.requestTimeoutSeconds * 1000);
+      new AgentContext().fit(providerMessages, config, options, agentSettings, () => undefined);
+      await streamCompletion(config, key, providerMessages, options, controller.signal, onDelta, agentSettings.requestTimeoutSeconds * 1000, agentSettings);
       updateAssistant({ evidence: textEvidence.finish('completed') });
     }
     flush(); updateAssistant({ status: runLimit ? 'limited' : 'completed' });
@@ -821,7 +859,8 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     flush();
     const cancelled = controller.signal.aborted;
     const saved = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
-    updateAssistant({ status: cancelled ? 'cancelled' : 'failed', ...(saved?.evidence?.status === 'running' ? { evidence: textEvidence.finish(cancelled ? 'cancelled' : 'failed') } : {}), ...(!cancelled ? { error: error instanceof Error ? error.message : 'Die Antwort wurde unterbrochen.' } : {}) });
+    if (!cancelled && error instanceof ContextBudgetError) runLimit = contextRunLimit(error);
+    updateAssistant({ status: cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed', ...(runLimit ? { agentRunLimit: runLimit } : {}), ...(saved?.evidence?.status === 'running' ? { evidence: textEvidence.finish(cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed') } : {}), ...(!cancelled ? { error: error instanceof Error ? error.message : 'Die Antwort wurde unterbrochen.' } : {}) });
     await persistFinished().catch(() => updateAssistant({ error: 'Die Antwort und Ergebnisbelege konnten nicht auf dem Datenträger gespeichert werden. Bitte vor dem Beenden den Speicherfehler beheben.' }));
   } finally {
     try { if (operationRun && operationJournal.getRun(operationRun.id)?.status === 'running') {
@@ -843,6 +882,11 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
       else if (prepared) updateAssistant({ error: 'Die vorgemerkte Fortsetzung wurde nach Stopp, Fehler oder Limit nicht gestartet.' });
     }
   }
+}
+
+/** Shared visible stop metadata for effect-free text/reformulation requests. */
+function contextRunLimit(error: ContextBudgetError): AgentRunLimit {
+  return { status: 'limit_reached', reason: 'context_budget', toolRounds: 0, toolCalls: 0, discoveryCalls: 0, actionCalls: 0, elapsedMs: 0, limit: error.contextTokenBudget, nextToolType: 'none', context: { requestBytes: error.observedBytes, estimatedInputTokens: error.estimatedInputTokens, inputTokenBudget: error.inputTokenBudget, outputTokenReserve: error.outputTokenReserve } };
 }
 
 /** Separate host entry: no module invocation, discovery, permission bypass or live reference reads. */
@@ -873,16 +917,17 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
     await saveState(currentState);
     await openPanel('chat');
     const messages = reformulationMessages(fork.source, settings.historyCharBudget, settings.historyMessageLimit);
+    new AgentContext().fit(messages, config, options, settings, () => undefined);
     const key = await getKey(config);
     controller.signal.throwIfAborted();
-    await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000);
+    await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000, settings);
     flush(); update({ status: 'completed' });
     await saveState(currentState);
   } catch (error) {
     flush();
     const cancelled = controller.signal.aborted && !timedOut;
     // Discard rejected partial prose; it may falsely describe an unsolicited action.
-    update({ text: '', status: cancelled ? 'cancelled' : 'failed', error: cancelled ? 'Neuformulieren gestoppt. Es wurde keine Aktion ausgeführt.' : timedOut ? 'Das Zeitlimit für die Neuformulierung ist erreicht. Es wurde keine Aktion ausgeführt.' : `${error instanceof Error ? error.message : 'Neuformulieren fehlgeschlagen.'} Es wurde keine Aktion ausgeführt.` });
+    update({ text: '', status: cancelled ? 'cancelled' : error instanceof ContextBudgetError ? 'limited' : 'failed', ...(error instanceof ContextBudgetError ? { agentRunLimit: contextRunLimit(error) } : {}), error: cancelled ? 'Neuformulieren gestoppt. Es wurde keine Aktion ausgeführt.' : timedOut ? 'Das Zeitlimit für die Neuformulierung ist erreicht. Es wurde keine Aktion ausgeführt.' : `${error instanceof Error ? error.message : 'Neuformulieren fehlgeschlagen.'} Es wurde keine Aktion ausgeführt.` });
     await saveState(currentState).catch(() => update({ error: 'Die Neuformulierung konnte nicht auf dem Datenträger gespeichert werden. Es wurde keine Aktion ausgeführt.' }));
   } finally { clearTimeout(timer); if (flushTimer) clearTimeout(flushTimer); activeStream = undefined; chatBusy = false; }
 }
@@ -894,7 +939,7 @@ function requireMailModule(): MailModule {
 async function initializeMailModule(): Promise<void> {
   if (mailModule) { mailModule.startPolling(); return; }
   const { createMailModule } = await import('../modules/ovd-mail/backend');
-  const module = createMailModule({ getState: () => currentState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles,
+  const module = createMailModule({ getState: () => currentState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles, isKnownLocalFile: selected => filesModule?.knowsPath(selected) ?? false,
     publishAttention: notice => moduleHost?.publishAttention('ovd-mail', notice), clearAttention: key => moduleHost?.clearAttention('ovd-mail', key) });
   await module.initialize();
   module.registerCapabilities(workspaceCapabilities);
@@ -952,20 +997,16 @@ function controlNativeWindow(win: BrowserWindow, action: 'minimize' | 'toggleMax
   else win.close();
   return { action, closed: win.isDestroyed() };
 }
-function dockHeight(): number {
-  const count = getNavigationEntries(moduleHost?.list() ?? []).length + 1;
-  return Math.min(screen.getPrimaryDisplay().workArea.height - 24, Math.max(340, 66 + count * 60));
-}
 function modulesChanged(): void {
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:changed');
-  if (dock && !dock.isDestroyed()) { const [width] = dock.getSize(); dock.setSize(width, dockHeight()); }
+  ovdBar?.layout();
 }
 function moduleAttentionChanged(): void {
   const notices = moduleHost?.listAttention() ?? [];
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:attention-changed', notices);
 }
 async function openSettingsCategory(category?: string, search?: string): Promise<void> {
-  if (category && !['ai', 'agent', 'display', 'dock', 'modules', ...(moduleHost?.settingsCategories() ?? [])].includes(category)) throw new Error('Diese Einstellungskategorie ist nicht verfügbar.');
+  if (category && ![...coreSettingsCategoryIds, ...(moduleHost?.settingsCategories() ?? [])].includes(category)) throw new Error('Diese Einstellungskategorie ist nicht verfügbar.');
   await openPanel('settings');
   panels.get('settings')?.webContents.send('settings:navigate', { category, search });
 }
@@ -976,7 +1017,8 @@ async function openNativeModuleView(moduleId: string, viewId: string): Promise<v
   const key = `${moduleId}:${viewId}`, existing = moduleWindows.get(key)?.window;
   if (existing && !existing.isDestroyed()) { if (existing.isMinimized()) existing.restore(); existing.show(); existing.focus(); return; }
   const area = screen.getPrimaryDisplay().workArea;
-  const win = new BrowserWindow({ x: area.x + 130, y: area.y + 100, width: Math.min(800, area.width), height: Math.min(620, area.height), minWidth: 450, minHeight: 360, icon: appIconPath,
+  const bounds = fitWindowBounds({ x: area.x + 130, y: area.y + 100, width: 800, height: 620 }, area);
+  const win = new BrowserWindow({ ...bounds, minWidth: Math.min(450, area.width), minHeight: Math.min(360, area.height), icon: appIconPath,
     title: `OpenVibeDesk · ${view.title}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   moduleWindows.set(key, { moduleId, viewId, window: win });
@@ -1021,10 +1063,10 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
-    const revision = action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
+    const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
     return { args, effect: 'write', resource: { id: `workspace:${action}:${typeof args.sessionId === 'string' ? args.sessionId : ''}`, version: createHash('sha256').update(JSON.stringify(revision ?? null)).digest('hex') } };
   } });
   if (moduleHost.isReady('ovd-mcp')) moduleHost.registerOperationAdapter('ovd-mcp', { prepare(action, args) { return { args, effect: ['mcp.servers', 'mcp.tools', 'mcp.audit'].includes(action) ? 'read' : 'unknown' }; } });
@@ -1061,8 +1103,9 @@ async function initializeModules(): Promise<void> {
 }
 
 if (hasInstanceLock) app.on('second-instance', () => {
-  if (dock && !dock.isDestroyed()) { if (dock.isMinimized()) dock.restore(); dock.show(); dock.focus(); }
+  if (dock && !dock.isDestroyed()) { if (dock.isMinimized()) dock.restore(); ovdBar?.reveal(true); }
 });
+if (hasInstanceLock) app.on('activate', () => { ovdBar?.reveal(true); });
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.setIcon(appIconPath);
@@ -1089,7 +1132,18 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   previousChatGptProfile = (await chatGptAuth().status().catch(() => undefined))?.activeProfileId;
   for (const item of currentState.sessions) if (item.messages.some(m => m.status === 'streaming')) currentState = updateSessionMessages(currentState, item.id, messages => messages.map(m => m.status === 'streaming' ? { ...m, status: 'cancelled' } : m));
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-  ipcMain.handle('workspace:load', event => { verifySender(event); return currentState; });
+  ipcMain.handle('workspace:load', event => { verifySender(event); return windowState(BrowserWindow.fromWebContents(event.sender)!); });
+  const verifyBar = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void => {
+    if (!dock || dock.isDestroyed() || event.sender !== dock.webContents || event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted OVD-Bar sender');
+  };
+  ipcMain.handle('ovd-bar:presentation', event => { verifyBar(event); return ovdBar?.presentation() ?? { collapsed: false }; });
+  ipcMain.handle('ovd-bar:reveal', event => { verifyBar(event); ovdBar?.reveal(true); });
+  ipcMain.handle('ovd-bar:menu', event => { verifyBar(event); return ovdBar?.showMenu(); });
+  ipcMain.on('ovd-bar:interaction', (event, raw: unknown) => {
+    if (!dock || dock.isDestroyed() || event.sender !== dock.webContents || event.senderFrame !== event.sender.mainFrame) return;
+    const parsed = z.object({ hovered: z.boolean(), focused: z.boolean() }).strict().safeParse(raw);
+    if (parsed.success) ovdBar?.interaction(parsed.data);
+  });
   ipcMain.handle('workspace:action', (event, action: unknown) => { verifySender(event); return dispatchAction(action); });
   ipcMain.handle('window:control', (event, action: unknown) => {
     verifySender(event);
@@ -1125,6 +1179,21 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('ai:settings:save', (event, input: unknown) => { verifySender(event); return saveAiSettings(input, uiOperationContext(event)); });
   ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)); });
   ipcMain.handle('ai:key:clear', async event => { verifySender(event); await deleteKey(currentState.ai ?? defaultAiConfig); });
+  ipcMain.handle('chat:sessions:list', (event, input: unknown) => {
+    verifyPanel(event, ['sessions', 'chat']);
+    const { query, offset, limit, revision } = chatSessionListRequestSchema.parse(input ?? {});
+    return listChatSessions(currentState, query, offset, limit, revision);
+  });
+  ipcMain.handle('chat:history:earlier', event => {
+    verifyPanel(event, ['chat']);
+    windowProjector(panels.get('chat')!).older(currentState);
+    broadcast();
+  });
+  ipcMain.handle('chat:requests:committed', (event, input: unknown) => {
+    verifyPanel(event, ['chat']);
+    const ids = new Set(z.array(z.string().max(200)).max(1000).parse(input));
+    return currentState.sessions.flatMap(session => session.messages.flatMap(message => message.clientRequestId && ids.has(message.clientRequestId) ? [message.clientRequestId] : []));
+  });
   ipcMain.handle('chat:session:create', event => { verifySender(event); return newWorkspaceChat(); });
   ipcMain.handle('chat:session:select', (event, id: unknown) => { verifySender(event); if (typeof id !== 'string') throw new Error('Ungültiger Chat.'); selectWorkspaceChat(id); });
   ipcMain.handle('chat:session:rename', (event, id: unknown, title: unknown) => { verifySender(event); if (typeof id !== 'string' || typeof title !== 'string') throw new Error('Ungültiger Titel.'); renameWorkspaceChat(id, title); });
@@ -1166,6 +1235,7 @@ app.on('before-quit', event => {
   if (saveTimer) clearTimeout(saveTimer);
   void (async () => {
     try {
+      await ovdBar?.flush();
       await mailModule?.flushDrafts();
       await saveState(currentState);
     } catch (error) {

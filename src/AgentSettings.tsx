@@ -17,6 +17,8 @@ const fields: Record<Group, FieldDefinition[]> = {
     { key: 'timeoutSeconds', label: 'Maximale Laufzeit', description: 'Zeitlimit für den gesamten Auftrag einschließlich Werkzeugaufrufen.', unit: 'Sekunden' }
   ],
   context: [
+    { key: 'contextTokenBudget', label: 'Gesamtkontext', description: 'Gemeinsame Obergrenze für Anfrage und Antwortreserve. Eingaben werden vorsichtig geschätzt.', unit: 'Tokens (geschätzt)' },
+    { key: 'outputTokenReserve', label: 'Antwortreserve', description: 'Wird innerhalb des Gesamtkontexts für die Antwort freigehalten.', unit: 'Tokens' },
     { key: 'maxActiveTools', label: 'Gleichzeitig geladene Werkzeuge', description: 'Wie viele gezielt geladene Modulwerkzeuge gleichzeitig für das Modell bereitstehen.' },
     { key: 'toolSchemaBudget', label: 'Budget für Werkzeugbeschreibungen', description: 'Obergrenze für das gesamte Werkzeugangebot inklusive Basiswerkzeugen, Beschreibungen und Eingabeschemas.', unit: 'Zeichen' },
     { key: 'historyMessageLimit', label: 'Ältere Nachrichten', description: 'Maximale Anzahl früherer Chatnachrichten im Kontext eines neuen Auftrags. 0 lässt den älteren Verlauf aus.' },
@@ -81,7 +83,7 @@ export function AgentSettings({ preparation, searchQuery = '', onClearSearch }: 
   function summary(group: Group): string {
     const value = (key: Field) => values[key] ? Number(values[key]).toLocaleString('de-DE') : '–';
     if (group === 'execution') return `${value('maxToolRounds')} Runden · ${value('maxToolCalls')} Aufrufe · ${value('timeoutSeconds')} s`;
-    if (group === 'context') return `${value('maxActiveTools')} Werkzeuge · ${value('historyMessageLimit')} ältere Nachrichten · ${value('historyCharBudget')} Zeichen`;
+    if (group === 'context') return `${value('contextTokenBudget')} Tokens geschätzt · ${value('outputTokenReserve')} Antwortreserve`;
     return `${value('requestTimeoutSeconds')} s Anbieterwartezeit · ${value('transportRetries')} ${Number(values.transportRetries) === 1 ? 'Wiederholung' : 'Wiederholungen'}`;
   }
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -97,7 +99,15 @@ export function AgentSettings({ preparation, searchQuery = '', onClearSearch }: 
       return;
     }
     const parsed = agentSettingsSchema.safeParse(Object.fromEntries(fieldKeys.map(key => [key, Number(values[key])])));
-    if (!parsed.success) { setError('Bitte gültige Agent-Einstellungen innerhalb der angegebenen Grenzen eingeben.'); return; }
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0], field = String(issue?.path[0] ?? '') as Field;
+      const group = groups.find(group => fields[group].some(item => item.key === field));
+      onClearSearch?.();
+      if (group) setOpenGroups(current => ({ ...current, [group]: true }));
+      setError(issue?.message || 'Bitte gültige Agent-Einstellungen innerhalb der angegebenen Grenzen eingeben.');
+      requestAnimationFrame(() => form.current?.querySelector<HTMLInputElement>(`#agent-${field}`)?.focus());
+      return;
+    }
     setBusy(true);
     try {
       await window.workspace.saveAgentSettings(parsed.data);
@@ -107,7 +117,6 @@ export function AgentSettings({ preparation, searchQuery = '', onClearSearch }: 
     finally { setBusy(false); }
   }
   return <section className="agent-settings" aria-label="Agent-Einstellungen">
-    <p className="agent-settings-intro">Diese Grenzen gelten für neue Aufträge. Eine Änderung setzt einen gestoppten Auftrag nicht automatisch fort.</p>
     {!saved && !error && <p className="agent-settings-note" role="status">Agent-Einstellungen werden geladen …</p>}
     {!saved && error && <button type="button" className="agent-secondary" onClick={() => { setError(''); setReload(value => value + 1); }}>Erneut laden</button>}
     <SettingsPreparationNotice suggestion={prepared.pending} blocked={dirty || busy} onApply={prepared.accept} onDismiss={prepared.dismiss} />
@@ -120,7 +129,7 @@ export function AgentSettings({ preparation, searchQuery = '', onClearSearch }: 
         })}</div>
       </details>)}
       <div className="agent-default-actions"><button type="button" className="agent-reset" disabled={!changedDefaults} onClick={defaults}><RotateCcw size={13} aria-hidden="true" />Auf Standard zurücksetzen</button>{dirty && <button type="button" className="agent-discard" onClick={discard}>Änderungen verwerfen</button>}</div>
-      <div className="agent-actions"><span className="agent-save-hint">{dirty ? 'Änderungen noch nicht gespeichert' : 'Änderungen werden mit Speichern übernommen.'}</span><button type="submit" className="agent-save" disabled={!dirty}>{busy ? 'Wird gespeichert …' : 'Agent-Einstellungen speichern'}</button></div>
+      <div className="agent-actions"><span className="agent-save-hint">{dirty ? 'Ungespeicherte Änderungen · gelten für neue Aufträge' : ''}</span><button type="submit" className="agent-save" disabled={!dirty}>{busy ? 'Wird gespeichert …' : 'Speichern'}</button></div>
     </fieldset></form>}
     {error && <p className="agent-feedback error" role="alert">{error}</p>}{notice && <p className="agent-feedback success" role="status">{notice}</p>}
   </section>;

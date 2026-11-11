@@ -1,5 +1,8 @@
+import { z } from 'zod';
 import type { ChatMessage, ChatSession, ForkChatResult, SessionReference, WorkspaceState } from './model';
 import type { ModuleReference } from './references';
+
+export const chatSessionListRequestSchema = z.object({ query: z.string().max(200).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(50).optional(), revision: z.string().regex(/^[a-f0-9]{24}$/).optional() }).strict();
 
 function copyReferences(references: ModuleReference[]): ModuleReference[] { return references.map(reference => ({ ...reference, ...(reference.metadata ? { metadata: { ...reference.metadata } } : {}) })); }
 

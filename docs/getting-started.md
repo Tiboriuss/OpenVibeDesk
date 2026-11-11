@@ -63,13 +63,21 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-`pnpm dev` compiles the main process and renderer, then launches Electron. You do not need to install a packaged application. It does not watch source files: close the app and run `pnpm dev` again to pick up changes. The dock opens the individual workspace windows.
+`pnpm dev` compiles the main process and renderer, then launches Electron. You do not need to install a packaged application. It does not watch source files: close the app and run `pnpm dev` again to pick up changes. The OVD-Bar opens the individual workspace windows.
 
 A second launch reuses the existing app instance, so close the previous process before checking a new build. Build outputs are written to `dist/` and `dist-electron/`; they are not source files to edit or commit.
 
 ## First run
 
 The interface currently uses primarily German labels. The names below pair the English explanation with the actual visible label.
+
+### Arrange the workspace
+
+Open module windows from the OVD-Bar. Its **…** menu provides common size, orientation and placement choices; **OVD-Bar anpassen …** opens the complete settings. Under **Settings → OVD-Bar**, choose a vertical or horizontal layout, size, background opacity, foreground behavior and optional idle collapse. Drag its grip for free placement. **Einträge & Reihenfolge** sets the order of available entries.
+
+The Assistant can make the same changes, for example “Make the OVD-Bar horizontal at the bottom” or “Move Files before Mail.” Position and preferences survive restart. See the [OVD-Bar guide](ovd-bar.md) for keyboard use and display behavior.
+
+Chat initially displays the latest 100 messages; **Frühere Nachrichten laden** reveals earlier messages without deleting or truncating saved history. The Chats manager searches the full saved conversation text and pages its results. Files also offers previous/next directory pages while retaining the selected preview.
 
 ### Connect an AI provider
 
@@ -120,14 +128,16 @@ External images start blocked. Select **Load external images** (currently **Exte
 
 The assistant can perform the same actions, for example: “Show this email as HTML,” “Switch to the text view,” or “Load the external images in this message.” Image loading follows your saved confirmation mode. Mail links open in the default external application after an intentional click. The reader removes active content and limits sender CSS, so complex layouts may differ from the sender's original. For details, see [HTML mail behavior](mail-design.md#html-email).
 
+For a truncated preview, select **Vollständigen Text lesen** to read the underlying message in pages with **Zurück** and **Weiter**. **Vorschau** returns to the preview. The Assistant uses the same source reading and can show its current page in the Mail window; it can also read long local drafts in pages. Newly saved Mail references can recover their exact source after restart. Removed or changed sources and size limits are reported explicitly rather than replaced by a different message. This requires the source account/server; it is not an offline archive.
+
 ### Configure optional modules and MCP
 
-Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. The Assistant is required; Mail, Files and MCP are included optional modules. Enable or disable them here. Arrange their available navigation entries under **Modules → Sidebar & dock** (**Module → Seitenleiste & Dock**).
+Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. The Assistant is required; Mail, Files and MCP are included optional modules. Enable or disable them here. Arrange their available navigation entries under **OVD-Bar → Entries & order** (**OVD-Bar → Einträge & Reihenfolge**). The [OVD-Bar guide](ovd-bar.md) covers orientation, size, placement, background opacity and optional idle collapse.
 
 #### Install from a module repository
 
 1. Expand **Modulquellen**, then **Repository hinzufügen**.
-2. Enter a name and repository URL. Start with the public [OpenVibeDesk-Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules), which currently offers Notes and Skill Library. You can add multiple sources, including private company repositories or direct HTTPS JSON catalogs.
+2. Enter a name and repository URL. Start with the public [OpenVibeDesk-Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules), which currently offers Notes, Skill Library and Memory. You can add multiple sources, including private company repositories or direct HTTPS JSON catalogs.
 3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the local encrypted credential store. Save the source with **Quelle hinzufügen**.
 4. Expand **Modulkatalog** and select **Katalog laden**. Search or filter by source, then choose **Installieren** beside a module.
 5. Select **Freigeben & aktivieren**, review its declared access and approve the downloaded code. Its views, settings and Assistant tools are registered without restarting the app.
@@ -150,6 +160,8 @@ MCP servers supply tools through the MCP module. Configure them in **Settings �
 
 Under **Settings → Agent** (**Einstellungen → Agent**), configure round and call limits, run and request timeouts, active tool and schema budgets, retained history, and transport retries. The current defaults and bounds are defined in [shared/agent-settings.ts](../shared/agent-settings.ts).
 
+The **Kontext** group also sets **Gesamtkontext** and **Antwortreserve**. Defaults are 128,000 estimated tokens total and an 8,192-token answer reserve. OVD conservatively counts the complete serialized request in UTF-8 bytes; this is not the provider's exact token count or automatic model-limit detection. Choose values suitable for your model. Older history and completed tool exchanges can be compacted; saved result pages remain readable without repeating their actions. If the current request cannot fit, shorten it or adjust the budget for a deliberately started task.
+
 When an agent reaches a limit, the UI retains its results and reports the reason. Changing a setting does not restart a completed run automatically. An uncertain send or external write must be checked before retrying.
 
 The separate **Without confirmations** option (**Ohne Abfragen**) is under **AI & connection → Workspace access**. It skips individual host confirmations for requested assistant actions when explicitly saved by the user. It does not grant new tool permissions or approve new or changed third-party modules.
@@ -167,6 +179,7 @@ Important entries include:
 | Path under `userData` | Purpose |
 | --- | --- |
 | `workspace.sqlite` | Workspace state and chat sessions; currently unencrypted. |
+| `ovd-bar-position.json` | Free OVD-Bar placement and its display identity; appearance preferences remain in workspace settings. |
 | `operation-journal/operations.json` | Durable agent run/action records, ordinary frozen arguments and bounded redacted results; currently unencrypted. Preserve it to retain recovery guards. |
 | `modules/<module-folder>/module.json` | Custom module discovery. |
 | `module-settings.json` | Module approvals and disabled module IDs. |
@@ -177,6 +190,8 @@ Important entries include:
 | `credentials/local.key` | Local encryption key; retain it with the vault when backing up the profile. |
 
 Other account and configuration files may also live here. Credentials are managed separately by the local encrypted credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
+
+Full Mail text reading also uses bounded, unencrypted temporary files under the operating system's temporary directory. They are removed on expiry/close and cleaned up after interrupted runs; they are not a persistent offline cache. See [source-reading limits](architecture.md#complete-mail-and-draft-text).
 
 ### Credential storage
 

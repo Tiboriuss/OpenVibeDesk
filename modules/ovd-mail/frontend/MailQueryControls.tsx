@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { ChevronDown, Filter, RotateCcw } from 'lucide-react';
 import type { ImapFolder, MailAccountSummary } from '../../../shared/mail';
 import type { MailCountRequest, MailCountResult, MailFilter, MailQueryRequest } from '../../../shared/mail-query';
@@ -29,10 +29,28 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
   const [sort, setSort] = useState<NonNullable<MailQueryRequest['sort']>>('received_desc');
   const [error, setError] = useState('');
   const allAccounts = account === '__all__';
+  const queryAccountId = allAccounts ? '' : account || accountId;
+  const usesActiveFolders = queryAccountId === accountId;
+  const [accountFolders, setAccountFolders] = useState<{ accountId: string; items: ImapFolder[]; loading: boolean; error?: string }>();
+  const availableFolders = usesActiveFolders ? folders : accountFolders?.accountId === queryAccountId ? accountFolders.items : [];
+  const foldersLoading = !usesActiveFolders && !!queryAccountId && (accountFolders?.accountId !== queryAccountId || accountFolders.loading);
   const activeFilters = [text.trim(), from.trim(), to.trim(), subject.trim(), read, period].filter(Boolean).length;
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const partial = !!summary && (!summary.complete || !summary.countExact);
   const resultLabel = summary ? `${summary.countExact ? '' : 'Mindestens '}${summary.count.toLocaleString('de-DE')} ${summary.count === 1 ? 'Nachricht' : 'Nachrichten'}${partial ? ' · Teilergebnis' : ''}` : '';
+
+  useEffect(() => { setSelectedFolder(''); }, [queryAccountId, usesActiveFolders]);
+  useEffect(() => {
+    if (!queryAccountId || usesActiveFolders) return;
+    let active = true;
+    setAccountFolders({ accountId: queryAccountId, items: [], loading: true });
+    void window.workspace.listMailFolders(queryAccountId).then(items => {
+      if (active) setAccountFolders({ accountId: queryAccountId, items, loading: false });
+    }).catch(reason => {
+      if (active) setAccountFolders({ accountId: queryAccountId, items: [], loading: false, error: reason instanceof Error ? reason.message : 'Ordner konnten nicht geladen werden.' });
+    });
+    return () => { active = false; };
+  }, [queryAccountId, usesActiveFolders]);
 
   function request(): MailQueryRequest {
     const filter: NonNullable<MailQueryRequest['filter']> = {
@@ -43,7 +61,7 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
     };
     return {
       ...(allAccounts ? { allAccounts: true } : account || accountId ? { accountId: account || accountId } : {}),
-      ...(selectedFolder === '__all__' ? { allFolders: true } : selectedFolder === '__current__' && folder ? { folders: [folder] } : selectedFolder && !allAccounts ? { folders: [selectedFolder] } : {}),
+      ...(selectedFolder === '__all__' ? { allFolders: true } : selectedFolder === '__current__' ? usesActiveFolders && folder ? { folders: [folder] } : {} : selectedFolder && !allAccounts ? { folders: [selectedFolder] } : {}),
       filter, sort, limit: 20
     };
   }
@@ -68,8 +86,8 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
       <form className="mail-query-form" onSubmit={event => { event.preventDefault(); void run(false); }}>
         <div className="mail-query-fields">
           <label htmlFor={`${id}-account`}>Konto<select id={`${id}-account`} value={account} disabled={busy} onChange={event => { setAccount(event.target.value); setSelectedFolder(''); }}><option value="">Aktives Konto{accounts.find(item => item.id === accountId)?.name ? ` · ${accounts.find(item => item.id === accountId)?.name}` : ''}</option><option value="__all__">Alle Konten</option>{accounts.map(item => <option key={item.id} value={item.id}>{item.name || item.email}</option>)}</select></label>
-          <label htmlFor={`${id}-folder`}>Ordner<select id={`${id}-folder`} value={selectedFolder} disabled={busy} onChange={event => setSelectedFolder(event.target.value)}><option value="">Posteingang</option><option value="__all__">Alle Ordner</option>{!allAccounts && folder && <option value="__current__">Aktueller Ordner · {folder}</option>}{!allAccounts && (account === '' || account === accountId) && folders.filter(item => item.selectable).map(item => <option key={item.path} value={item.path}>{item.name || item.path}</option>)}</select></label>
-          <label htmlFor={`${id}-text`}>Suchtext<input id={`${id}-text`} type="search" value={text} maxLength={200} placeholder="Zum Beispiel Calimoto" disabled={busy} onChange={event => setText(event.target.value)}/></label>
+          <label htmlFor={`${id}-folder`}>Ordner<select id={`${id}-folder`} value={selectedFolder} disabled={busy} aria-busy={foldersLoading} onChange={event => setSelectedFolder(event.target.value)}><option value="">Posteingang</option><option value="__all__">Alle Ordner</option>{!allAccounts && usesActiveFolders && folder && <option value="__current__">Aktueller Ordner · {folder}</option>}{!allAccounts && availableFolders.filter(item => item.selectable && item.path.toLowerCase() !== 'inbox').map(item => <option key={item.path} value={item.path}>{item.name || item.path}</option>)}{foldersLoading && <option disabled>Ordner werden geladen …</option>}</select></label>
+          <label htmlFor={`${id}-text`}>Suchtext<input id={`${id}-text`} type="search" value={text} maxLength={200} disabled={busy} onChange={event => setText(event.target.value)}/></label>
           <label htmlFor={`${id}-from`}>Absender<input id={`${id}-from`} value={from} maxLength={200} placeholder="Name oder Adresse" disabled={busy} onChange={event => setFrom(event.target.value)}/></label>
           <label htmlFor={`${id}-to`}>Empfänger<input id={`${id}-to`} value={to} maxLength={200} placeholder="Name oder Adresse" disabled={busy} onChange={event => setTo(event.target.value)}/></label>
           <label htmlFor={`${id}-subject`}>Betreff<input id={`${id}-subject`} value={subject} maxLength={200} disabled={busy} onChange={event => setSubject(event.target.value)}/></label>
@@ -78,6 +96,7 @@ export function MailQueryControls({ accounts, folders, accountId, folder, busy, 
           {period === 'custom' && <><label htmlFor={`${id}-start`}>Von<input id={`${id}-start`} type="date" value={startDate} required disabled={busy} onChange={event => setStartDate(event.target.value)}/></label><label htmlFor={`${id}-end`}>Bis (ausschließlich)<input id={`${id}-end`} type="date" value={endDate} required min={startDate || undefined} disabled={busy} onChange={event => setEndDate(event.target.value)}/></label></>}
           <label htmlFor={`${id}-sort`}>Sortierung<select id={`${id}-sort`} value={sort} disabled={busy} onChange={event => setSort(event.target.value as typeof sort)}><option value="received_desc">Neueste Eingänge zuerst</option><option value="received_asc">Älteste Eingänge zuerst</option><option value="sent_desc">Neuestes Absenderdatum zuerst</option><option value="sent_asc">Ältestes Absenderdatum zuerst</option><option value="uid_desc">Zuletzt im Ordner aufgenommen</option></select></label>
         </div>
+        {!usesActiveFolders && accountFolders?.accountId === queryAccountId && accountFolders.error && <p className="mail-query-error" role="alert">{accountFolders.error}</p>}
         <div className="mail-query-actions"><button type="submit" disabled={busy || !accounts.length}>{busy ? 'Wird abgefragt …' : 'Mails anzeigen'}</button><button type="button" disabled={busy || !accounts.length} onClick={() => void run(true)}>Nur Anzahl</button><button type="button" className="mail-query-reset" disabled={busy} onClick={reset}><RotateCcw size={12} aria-hidden="true"/>Zurücksetzen</button><small>Serverabfrage · Zeiträume in {timeZone}</small></div>
         {selectedFolder === '__all__' && <p className="mail-query-scope-note">Alle Ordner umfassen auch Gesendet, Spam und Papierkorb. Kopien derselben Mail in mehreren Ordnern zählen jeweils einzeln.</p>}
       </form>

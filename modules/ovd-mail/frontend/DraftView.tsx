@@ -15,6 +15,7 @@ export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, o
   const [loadingFoldersId, setLoadingFoldersId] = useState<string>();
   const [filingError, setFilingError] = useState<{ draftId: string; message: string }>();
   useEffect(() => { setShowCopies(!!(draft?.cc || draft?.bcc)); }, [draft?.id]);
+  useEffect(() => { if (draft?.cc || draft?.bcc) setShowCopies(true); }, [draft?.cc, draft?.bcc]);
   useEffect(() => { setSendError(''); setFilingError(undefined); }, [draft?.id]);
   useEffect(() => {
     if (!draft || !onSave) return;
@@ -69,7 +70,7 @@ export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, o
   const savedTime = savedDate && Number.isFinite(savedDate.getTime()) ? savedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : undefined;
   const saveLabel = saveState?.status === 'saved' ? `Lokal gespeichert${savedTime ? ` · ${savedTime}` : ''}` : saveState?.status === 'saving' ? 'Wird gespeichert …' : saveState?.status === 'error' ? 'Speicherung nicht bestätigt' : 'Speicherstatus wird geladen …';
   return <div className={`draft-layout${deliveryStatus === 'sent' ? ' has-sent-copy' : ''}`}>
-    <div className="draft-toolbar"><div><small>ENTWURF</small><h2>{draft.replyTo || draft.inReplyTo ? 'Antwort' : 'Neue Nachricht'}</h2></div><div className={`draft-save-controls ${saveState?.status ?? 'loading'}`}>
+    <div className="draft-toolbar"><div><h2>{deliveryStatus === 'sent' ? 'Gesendete Nachricht' : draft.replyTo || draft.inReplyTo ? 'Antwort' : 'Neue Nachricht'}</h2></div><div className={`draft-save-controls ${saveState?.status ?? 'loading'}`}>
       <span className="draft-save-status" role="status" aria-live="polite" title={savedDate && Number.isFinite(savedDate.getTime()) ? `Zuletzt lokal gespeichert: ${savedDate.toLocaleString()}` : undefined}>
         {saveState?.status === 'saved' ? <Check size={14} aria-hidden="true" /> : saveState?.status === 'error' ? <TriangleAlert size={14} aria-hidden="true" /> : <LoaderCircle size={14} className="draft-save-spinner" aria-hidden="true" />}
         <span>{saveLabel}</span>
@@ -96,7 +97,7 @@ export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, o
         {sentCopy ? filingLabel : 'Vom SMTP-Server angenommen'}
       </span>{sentCopy?.folder && <small title={sentCopy.folder}>{sentCopy.folder}</small>}</div>
       {!sentCopy ? <p>Für diese ältere Nachricht ist keine vorbereitete Kopie für die Ablage vorhanden.</p> : <>
-        {sentCopy.status === 'filed' ? <p>Die Kopie wurde im Gesendet-Ordner bestätigt.</p> : <p>Die Nachricht wurde angenommen. Eine erneute Ablage sendet sie nicht noch einmal.{sentCopy.status === 'uncertain' ? ' Der Ordner wird zuerst auf die vorhandene Kopie geprüft.' : ''}</p>}
+        {sentCopy.status !== 'filed' && <p>{sentCopy.status === 'uncertain' ? 'Beim erneuten Versuch wird zuerst nach einer vorhandenen Kopie gesucht.' : 'Nur die Ablage ist offen; die Nachricht wurde bereits gesendet.'}</p>}
         {copyError && sentCopy.status !== 'filed' && <p className="draft-sent-copy-error" role="alert">{copyError}</p>}
         {sentCopy.status !== 'filed' && !sentCopy.appendAttempted && onListSentFolders && <>
           <button type="button" className="draft-choose-sent-folder" onClick={() => void chooseSentFolder()} disabled={filing || loadingFoldersId === draft.id}>{loadingFoldersId === draft.id ? 'Ordner werden geladen …' : visibleFolders ? 'Ordnerliste aktualisieren' : 'Ablageordner wählen'}</button>
@@ -105,7 +106,7 @@ export function DraftView({ draft, accounts = [], saveState, onSave, onUpdate, o
         {sentCopy.status !== 'filed' && onFileSent && <button type="button" className="draft-file-sent-button" onClick={() => void fileSentCopy()} disabled={filing || sending}><RotateCw size={14} aria-hidden="true" />{filing ? 'Ablage wird geprüft …' : sentCopy.status === 'uncertain' ? 'Ablage erneut prüfen' : 'Nur Ablage erneut versuchen'}</button>}
       </>}
     </section>}
-    <div className="draft-footer"><button className="attach-button" type="button" onClick={onAttach} disabled={locked}><Paperclip size={16} /> Datei anhängen</button><button className="draft-send-button" type="button" disabled={!onSend || locked} onClick={() => void sendMessage()} aria-describedby="draft-send-note"><Send size={15} /> {sending || deliveryStatus === 'sending' ? 'Wird gesendet …' : deliveryStatus === 'sent' ? 'Gesendet' : 'Senden'}</button></div>
-    <p id="draft-send-note" className="draft-send-note">{deliveryStatus === 'uncertain' ? 'Der Versandstatus ist unklar. Die Nachricht könnte bereits angenommen worden sein. Bitte vor einem erneuten Versand prüfen.' : deliveryStatus === 'sent' ? 'Vom SMTP-Server angenommen. Der Versand kann nicht erneut gestartet werden.' : deliveryStatus === 'sending' || sending ? 'Die Nachricht wird an den SMTP-Server übergeben.' : onSend ? 'Die Nachricht wird erst nach deiner Bestätigung versendet.' : 'Versand ist noch nicht eingerichtet. Dein Entwurf bleibt lokal erhalten.'}</p>
+    <div className="draft-footer"><button className="attach-button" type="button" onClick={onAttach} disabled={locked}><Paperclip size={16} /> Datei anhängen</button><button className="draft-send-button" type="button" disabled={!onSend || locked} onClick={() => void sendMessage()} aria-describedby={deliveryStatus === 'uncertain' || !onSend ? 'draft-send-note' : undefined}><Send size={15} /> {sending || deliveryStatus === 'sending' ? 'Wird gesendet …' : deliveryStatus === 'sent' ? 'Gesendet' : 'Senden'}</button></div>
+    {(deliveryStatus === 'uncertain' || !onSend) && <p id="draft-send-note" className="draft-send-note">{deliveryStatus === 'uncertain' ? 'Der Versandstatus ist unklar. Die Nachricht könnte bereits angenommen worden sein. Bitte den Status prüfen.' : 'Versand ist noch nicht eingerichtet. Dein Entwurf bleibt lokal erhalten.'}</p>}
   </div>;
 }

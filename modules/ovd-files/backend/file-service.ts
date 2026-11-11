@@ -7,6 +7,8 @@ import { fileListRequestSchema, fileReadRequestSchema, type FileEntry, type File
 
 const PAGE_LIMIT = 28_000;
 const TEXT_LIMIT = 2 * 1024 * 1024;
+const IDENTITY_LIMIT = 2048;
+const VIEW_IDENTITY_LIMIT = 501;
 const pathSchema = z.string().min(1).max(4096);
 // Read the former grants file to retain existing resource IDs. These legacy
 // fields no longer constrain file access; only OS permissions apply.
@@ -33,6 +35,9 @@ export class FilesService {
   private root = '';
   private grants: z.infer<typeof grantsSchema> = { version: 1, files: [], directories: [], references: [] };
   private readonly paths = new Map<string, string>();
+  private readonly referencePaths = new Map<string, string>();
+  private viewPaths = new Map<string, string>();
+  private generation = 0;
   private writes: Promise<unknown> = Promise.resolve();
   private grantsReadable = true;
   constructor(private readonly options: { documents: string; dataRoot: string; selectedLocalFiles: Set<string> }) {}
@@ -42,11 +47,36 @@ export class FilesService {
     await fs.mkdir(this.options.dataRoot, { recursive: true });
     try { this.grants = grantsSchema.parse(JSON.parse(await fs.readFile(path.join(this.options.dataRoot, 'grants.json'), 'utf8'))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.grantsReadable = false; }
-    for (const known of [...this.grants.files, ...this.grants.references]) this.paths.set(this.id(known), known);
+    this.restoreReferencePaths();
     for (const known of this.grants.files) this.options.selectedLocalFiles.add(known);
   }
   documents(): string { return this.root; }
   id(canonicalPath: string): string { return digest(`ovd-files\0${canonicalPath}`); }
+  private restoreReferencePaths(): void {
+    this.referencePaths.clear();
+    for (const known of [...this.grants.files, ...this.grants.references]) this.referencePaths.set(this.id(known), known);
+  }
+  private knownPath(id: string): string | undefined { return this.viewPaths.get(id) ?? this.paths.get(id) ?? this.referencePaths.get(id); }
+  private remember(id: string, canonical: string): void {
+    this.paths.delete(id); this.paths.set(id, canonical);
+    while (this.paths.size > IDENTITY_LIMIT) this.paths.delete(this.paths.keys().next().value!);
+  }
+  /** Only the actual Files window can pin its bounded visible page and selection. */
+  setViewContext(ids: string[]): void {
+    const next = new Map<string, string>();
+    for (const id of ids.slice(0, VIEW_IDENTITY_LIMIT)) { const known = this.knownPath(id); if (known) next.set(id, known); }
+    this.viewPaths = next;
+  }
+  knowsPath(canonical: string): boolean { return this.knownPath(this.id(canonical)) === canonical; }
+  clearTransientState(): void { this.generation++; this.paths.clear(); this.viewPaths.clear(); }
+  getCacheStats() {
+    const bytes = (values: Map<string, string>) => [...values].reduce((sum, [id, source]) => sum + Buffer.byteLength(id) + Buffer.byteLength(source), 0);
+    return { identities: this.paths.size, identityLimit: IDENTITY_LIMIT, identityBytes: bytes(this.paths), visibleIdentities: this.viewPaths.size, visibleIdentityLimit: VIEW_IDENTITY_LIMIT, visibleIdentityBytes: bytes(this.viewPaths), referenceIdentities: this.referencePaths.size, referenceIdentityBytes: bytes(this.referencePaths) };
+  }
+  private assertGeneration(generation: number, signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    if (generation !== this.generation) throw new Error('Das Dateienmodul wurde zwischenzeitlich deaktiviert. Bitte erneut öffnen.');
+  }
   async resolve(requested?: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const expanded = requested === '~' ? homedir() : requested?.startsWith('~/') || requested?.startsWith('~\\') ? path.join(homedir(), requested.slice(2)) : requested;
@@ -55,19 +85,25 @@ export class FilesService {
     return canonical;
   }
   async pathForId(id: string, signal?: AbortSignal): Promise<string> {
-    const known = this.paths.get(id);
+    const generation = this.generation, known = this.knownPath(id);
     if (!known) throw new Error('Datei-ID nicht bekannt. Bitte den Ordner erneut anzeigen oder die Datei auswählen.');
     const canonical = await this.resolve(known, signal);
+    this.assertGeneration(generation, signal);
     if (this.id(canonical) !== id) throw new Error('Das Dateiziel hat sich geändert. Bitte erneut auswählen.');
+    this.remember(id, canonical);
     return canonical;
   }
   async entry(requested: string, signal?: AbortSignal): Promise<FileEntry> {
+    const generation = this.generation, entry = await this.describeEntry(requested, signal);
+    this.assertGeneration(generation, signal);
+    this.remember(entry.id, entry.path);
+    return entry;
+  }
+  private async describeEntry(requested: string, signal?: AbortSignal): Promise<FileEntry> {
     const canonical = await this.resolve(requested, signal), stat = await fs.stat(canonical);
     signal?.throwIfAborted();
     if (!stat.isFile() && !stat.isDirectory()) throw new Error('Dieser Eintrag ist keine reguläre Datei und kein Ordner.');
     const id = this.id(canonical);
-    this.paths.set(id, canonical);
-    if (stat.isFile()) this.options.selectedLocalFiles.add(canonical);
     return { id, name: path.basename(canonical), path: canonical, isDirectory: stat.isDirectory(), size: stat.isDirectory() ? 0 : stat.size, modifiedAt: stat.mtime.toISOString() };
   }
   private write(update: (current: z.infer<typeof grantsSchema>) => z.infer<typeof grantsSchema>): Promise<void> {
@@ -78,16 +114,20 @@ export class FilesService {
       await fs.writeFile(temporary, JSON.stringify(next), { mode: 0o600 });
       await fs.rename(temporary, target);
       this.grants = next;
+      this.restoreReferencePaths();
     });
     this.writes = work.catch(() => {});
     return work;
   }
   async selectPath(requested: string, kind: 'file' | 'directory', signal?: AbortSignal): Promise<FileEntry> {
+    const generation = this.generation;
     const canonical = await fs.realpath(requested), stat = await fs.stat(canonical);
-    signal?.throwIfAborted();
+    this.assertGeneration(generation, signal);
     if (kind === 'directory' ? !stat.isDirectory() : !stat.isFile()) throw new Error('Bitte den passenden Datei- oder Ordnertyp auswählen.');
+    const entry = await this.entry(canonical, signal);
+    this.assertGeneration(generation, signal);
     if (kind === 'file') this.options.selectedLocalFiles.add(canonical);
-    return this.entry(canonical, signal);
+    return entry;
   }
   async rememberReference(id: string, signal?: AbortSignal): Promise<FileEntry> {
     const canonical = await this.pathForId(id, signal), entry = await this.entry(canonical, signal);
@@ -96,6 +136,7 @@ export class FilesService {
     return entry;
   }
   async list(rawRequest: FileListRequest = {}, signal?: AbortSignal): Promise<FileListingPage> {
+    const generation = this.generation;
     const request = fileListRequestSchema.parse(rawRequest);
     signal?.throwIfAborted();
     const directory = await this.resolve(request.path, signal);
@@ -104,8 +145,8 @@ export class FilesService {
     let skipped = 0;
     // Avoid unbounded simultaneous stat calls for a large directory.
     for (let offset = 0; offset < names.length; offset += 32) {
-      signal?.throwIfAborted();
-      const batch = await Promise.all(names.slice(offset, offset + 32).map(name => this.entry(path.join(directory, name), signal).catch(error => { if (signal?.aborted) throw error; skipped++; return undefined; })));
+      this.assertGeneration(generation, signal);
+      const batch = await Promise.all(names.slice(offset, offset + 32).map(name => this.describeEntry(path.join(directory, name), signal).catch(error => { if (signal?.aborted) throw error; skipped++; return undefined; })));
       entries.push(...batch.filter((item): item is FileEntry => !!item));
     }
     const query = (request.query ?? '').toLocaleLowerCase(), sort = request.sort ?? 'name', direction = request.direction === 'desc' ? -1 : 1;
@@ -130,6 +171,10 @@ export class FilesService {
     result.complete = !result.hasMore;
     if (result.hasMore && !result.entries.length) throw new Error('Die Pfad- und Eintragsmetadaten sind für eine Dateiseite zu groß. Bitte einen kürzeren Ordnerpfad wählen.');
     if (result.hasMore) result.nextCursor = makeCursor([1, 'list', revision, next]);
+    this.assertGeneration(generation, signal);
+    // Enumerating a directory is not selecting every file. Retain only the page
+    // actually returned to a consumer; saved references have their own index.
+    for (const entry of result.entries) this.remember(entry.id, entry.path);
     return result;
   }
   async read(rawRequest: FileReadRequest, signal?: AbortSignal): Promise<FileReadResult> {

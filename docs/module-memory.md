@@ -6,6 +6,8 @@ OVD provides an optional host contract for automatically retrieving relevant mem
 
 This contract is available from **v0.1.4**. Older hosts, including **v0.1.3**, reject the new manifest contribution. The module catalog currently has no minimum-host-version negotiation; document the required host version when distributing a module.
 
+The separate [Memory module](https://github.com/Tiboriuss/OpenVibeDesk-Modules/tree/main/modules/memory) is an optional catalog download using this Host contract. Its retrieval, storage, observation-review policy and presentation preferences belong to that module; installing OVD alone does not enable a memory store or automatic learning.
+
 ## Retrieval and explicit storage
 
 An approved, enabled module opts in with `contributions.memory.retrieveTool`. The named tool must belong to that module and must not require action confirmation. The declaration is a contract that this function only retrieves existing data: it must not create memories, learn from the question, update business records or execute actions mentioned in stored text. Approved process modules run with normal user permissions, so this semantic contract is not an operating-system sandbox.

@@ -4,6 +4,7 @@ import { AiSettings } from './AiSettings';
 import { AgentSettings } from './AgentSettings';
 import { DiagnosticsSettings } from './DiagnosticsSettings';
 import { NavigationOrderSettings } from './NavigationOrderSettings';
+import { OvdBarSettings } from './OvdBarSettings';
 import { settingsCategories, settingsEntries, matchesSettingsEntry, type SettingsCategoryId, type SettingsCategory, type SettingsEntry } from './settings-registry';
 import { defaultSettings } from '../shared/settings';
 import type { Settings as WorkspaceSettings } from '../shared/model';
@@ -15,7 +16,7 @@ import { ModuleRepositories } from './ModuleRepositories';
 import { ModuleEventSettings } from './ModuleEventSettings';
 import type { ModuleEventStatus } from '../shared/modules';
 
-type GroupId = 'display' | 'dock';
+type GroupId = 'display' | 'installed';
 const groupStorageKey = 'openvibedesk.settings.groups';
 const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, diagnostics: Activity, modules: Package };
 
@@ -24,10 +25,10 @@ function initialGroups(): Record<GroupId, boolean> {
     const stored: unknown = JSON.parse(localStorage.getItem(groupStorageKey) ?? '{}');
     if (stored && typeof stored === 'object') {
       const values = stored as Partial<Record<GroupId, unknown>>;
-      return { display: values.display === true, dock: values.dock === true };
+      return { display: values.display === true, installed: values.installed !== false };
     }
   } catch { /* Use defaults when local storage is unavailable or invalid. */ }
-  return { display: false, dock: false };
+  return { display: false, installed: true };
 }
 
 export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettings; onUpdate(patch: Partial<WorkspaceSettings>): void }) {
@@ -36,7 +37,8 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const [search, setSearch] = useState('');
   const [active, setActive] = useState<SettingsCategoryId>('ai');
   const [groups, setGroups] = useState(initialGroups);
-  const [searchGroups, setSearchGroups] = useState<Record<GroupId, boolean>>({ display: true, dock: true });
+  const [searchGroups, setSearchGroups] = useState<Record<GroupId, boolean>>({ display: true, installed: true });
+  const content = useRef<HTMLElement>(null);
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention();
   const [moduleBusy, setModuleBusy] = useState<string>();
@@ -60,7 +62,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       if (!request || typeof request !== 'object') return;
       if (request.category && (categoryIds.current.has(request.category) || ['mail', 'modules'].includes(request.category))) setActive(request.category);
       const query = typeof request.search === 'string' ? request.search.slice(0, 200) : '';
-      if (query.trim()) setSearchGroups({ display: true, dock: true });
+      if (query.trim()) setSearchGroups({ display: true, installed: true });
       setSearch(query);
     });
     return () => { unsubscribeOpen(); unsubscribePrepare(); unsubscribeNavigate(); };
@@ -73,6 +75,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
     finally { setModuleBusy(undefined); }
   }
   const searching = search.trim().length > 0;
+  useEffect(() => { content.current?.scrollTo({ top: 0 }); }, [active, searching]);
   const visible = (id: SettingsCategoryId) => searching
     ? entries.some(entry => entry.category === id && matchesSettingsEntry(entry, search, categories))
     : active === id;
@@ -112,7 +115,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   }, [availableModuleSettings, visibleModuleSettings]);
 
   function updateSearch(value: string) {
-    if (value.trim()) setSearchGroups({ display: true, dock: true });
+    if (value.trim()) setSearchGroups({ display: true, installed: true });
     setSearch(value);
   }
 
@@ -146,7 +149,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-label={label} title={notices.length ? notices.map(notice => notice.message).join(' · ') : undefined} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><span className="module-attention-icon"><Icon size={16} aria-hidden="true" />{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span><span>{item.title}</span></button>;
       })}</nav>
     </aside>
-    <main className="settings-view-content">
+    <main className="settings-view-content" ref={content}>
       <header className="settings-content-heading"><h2>{searching ? 'Suchergebnisse' : category.title}</h2><p>{searching ? `Einstellungen für „${search.trim()}“` : category.description}</p></header>
       {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>Keine Einstellung gefunden</strong><span>Versuche einen anderen Suchbegriff.</span></div>}
       <section hidden={!visible('ai')} aria-label="KI & Verbindung">
@@ -161,15 +164,13 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         {searching && <h3 className="settings-result-category">Darstellung</h3>}
         <details className="workspace-settings-group" open={isOpen('display')}>
           <summary onClick={event => { event.preventDefault(); toggleGroup('display'); }}><span><strong>Textgröße</strong><small>Aktuell: {settings.textSize === 'large' ? 'Größer' : 'Standard'}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="text-size">Textgröße</label><p>Größerer Text für Mail, Chat und Entwürfe. Standard: Standard.</p></div><select id="text-size" value={settings.textSize} onChange={event => onUpdate({ textSize: event.target.value as WorkspaceSettings['textSize'] })}><option value="standard">Standard</option><option value="large">Größer</option></select></div>{settings.textSize !== defaultSettings.textSize && <button type="button" className="settings-reset" onClick={() => onUpdate({ textSize: defaultSettings.textSize })}><RotateCcw size={13} /> Auf Standard zurücksetzen</button>}</div>
+          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="text-size">Textgröße</label></div><select id="text-size" value={settings.textSize} onChange={event => onUpdate({ textSize: event.target.value as WorkspaceSettings['textSize'] })}><option value="standard">Standard</option><option value="large">Größer</option></select></div>{settings.textSize !== defaultSettings.textSize && <button type="button" className="settings-reset" onClick={() => onUpdate({ textSize: defaultSettings.textSize })}><RotateCcw size={13} /> Auf Standard zurücksetzen</button>}</div>
         </details>
       </section>
-      <section hidden={!visible('dock')} aria-label="Dock & Fenster">
-        {searching && <h3 className="settings-result-category">Dock & Fenster</h3>}
-        <details className="workspace-settings-group" open={isOpen('dock')}>
-          <summary onClick={event => { event.preventDefault(); toggleGroup('dock'); }}><span><strong>Dock im Vordergrund</strong><small>Aktuell: {settings.dockAlwaysOnTop ? 'Ein' : 'Aus'}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="dock-top">Dock im Vordergrund</label><p>Das Dock über anderen Fenstern anzeigen. Standard: Ein.</p></div><input id="dock-top" className="setting-toggle" type="checkbox" checked={settings.dockAlwaysOnTop} onChange={event => onUpdate({ dockAlwaysOnTop: event.target.checked })} /></div>{settings.dockAlwaysOnTop !== defaultSettings.dockAlwaysOnTop && <button type="button" className="settings-reset" onClick={() => onUpdate({ dockAlwaysOnTop: defaultSettings.dockAlwaysOnTop })}><RotateCcw size={13} /> Auf Standard zurücksetzen</button>}</div>
-        </details>
+      <section hidden={!visible('dock')} aria-label="OVD-Bar">
+        {searching && <h3 className="settings-result-category">OVD-Bar</h3>}
+        <OvdBarSettings settings={settings} searchQuery={search}/>
+        <NavigationOrderSettings settings={settings} modules={moduleState.modules} loading={moduleState.loading} searchQuery={search}/>
       </section>
       <section hidden={!visible('diagnostics')} aria-label="Diagnose">
         {searching && <h3 className="settings-result-category">Diagnose</h3>}
@@ -177,20 +178,26 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       </section>
       <section hidden={!visible('modules')} aria-label="Module" className="module-management">
         {searching && <h3 className="settings-result-category">Module</h3>}
-        {(moduleError || moduleState.error) && <p className="mail-account-feedback error" role="alert">{moduleError || moduleState.error}</p>}
-        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.repositories')!, search, categories)}><ModuleRepositories preparation={preparation?.kind === 'module-repository' ? preparation : undefined} installedModules={moduleState.modules} moduleBusy={!!moduleBusy} onActivate={id => toggleModule(id, true)} /></div>
-        <NavigationOrderSettings settings={settings} modules={moduleState.modules} loading={moduleState.loading || !!moduleBusy} searchQuery={search}/>
-        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
+        {(moduleError || moduleState.error) && <p className="settings-feedback error" role="alert">{moduleError || moduleState.error}</p>}
+        <details className="workspace-settings-group installed-module-settings" open={isOpen('installed')} hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
+        <summary onClick={event => { event.preventDefault(); toggleGroup('installed'); }}><span><strong>Installierte Module</strong><small>{moduleState.loading ? 'Wird geladen …' : `${moduleState.modules.filter(module => module.status === 'ready').length} aktiv · ${moduleState.modules.length} installiert`}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+        <div className="installed-module-list">
         {moduleState.loading && <p role="status">Module werden geladen …</p>}
         {eventStatusError && <p className="module-event-error" role="alert">{eventStatusError}</p>}
-        {moduleState.modules.map(module => <div className="module-management-row" key={module.id}><Package size={20} /><div><strong>{module.title}</strong><small>{module.id} · {module.version || 'Unbekannte Version'} · {module.source === 'builtin' ? 'Mitgeliefert' : 'Zusatzmodul'}{module.required ? ' · Pflichtmodul' : ''}</small><p>{module.description}</p>{module.reason && <p>{module.reason}</p>}<span className="module-status">{{ ready: 'Aktiv', disabled: 'Deaktiviert', incompatible: 'Nicht kompatibel', invalid: 'Ungültiges Modul', approval_required: 'Freigabe erforderlich', unsupported: 'Nicht unterstützt' }[module.status]}</span>{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && ['ready', 'disabled', 'approval_required'].includes(module.status) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, module.status !== 'ready')}>{moduleBusy === module.id ? 'Wird geändert …' : module.status === 'ready' ? 'Deaktivieren' : 'Aktivieren'}</button>}</div>)}
+        {moduleState.modules.map(module => {
+          const runtimeError = module.status === 'invalid' && !!module.manifest;
+          const canDisable = module.status === 'ready' || runtimeError;
+          const statusLabel = runtimeError ? 'Modulfehler' : { ready: 'Aktiv', disabled: 'Deaktiviert', incompatible: 'Nicht kompatibel', invalid: 'Ungültiges Modul', approval_required: 'Freigabe erforderlich', unsupported: 'Nicht unterstützt' }[module.status];
+          return <div className="module-management-row" key={module.id}><Package size={17} aria-hidden="true" /><div><div className="installed-module-heading"><strong>{module.title}</strong><span className="module-status">{statusLabel}{module.required ? ' · Pflichtmodul' : ''}</span></div><details className="installed-module-details" open={searching || undefined}><summary>Details</summary><small>{module.id} · {module.version || 'Unbekannte Version'} · {module.source === 'builtin' ? 'Mitgeliefert' : 'Zusatzmodul'}</small><p>{module.description}</p></details>{module.reason && <p className="installed-module-reason">{module.reason}</p>}{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && (['ready', 'disabled', 'approval_required'].includes(module.status) || runtimeError) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, !canDisable)}>{moduleBusy === module.id ? 'Wird geändert …' : canDisable ? 'Deaktivieren' : module.status === 'approval_required' ? 'Freigeben & aktivieren' : 'Aktivieren'}</button>}</div>;
+        })}
         </div>
+        </details>
+        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.repositories')!, search, categories)}><ModuleRepositories preparation={preparation?.kind === 'module-repository' ? preparation : undefined} searchQuery={search} installedModules={moduleState.modules} moduleBusy={!!moduleBusy} onActivate={id => toggleModule(id, true)} /></div>
       </section>
       {contributedSettings.filter(item => visitedModuleSettings.has(item.categoryId)).map(item => <section key={`${item.moduleId}:${item.id}`} hidden={!visible(item.categoryId)} aria-label={item.title}>
         {searching && <h3 className="settings-result-category">{item.title}</h3>}
         <item.Component preparation={preparation} searchQuery={search} />
       </section>)}
-      {(!searching || anyResults) && <p className="settings-save-note">Darstellung, Diagnose, Dock und Navigationsreihenfolge werden sofort gespeichert. KI-, Agent- und Verbindungseinstellungen speicherst du im jeweiligen Bereich.</p>}
     </main>
   </div>;
 }

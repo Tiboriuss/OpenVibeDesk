@@ -1,5 +1,4 @@
 .mail-accounts{display:flex;flex-direction:column;gap:12px;min-width:0}
-.mail-account-intro p{margin:0;color:var(--muted);font-size:11px;line-height:1.5}
 .mail-account-list{display:flex;flex-direction:column;gap:10px;min-width:0}
 .mail-account-group,.mail-account-form-group{min-width:0;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}
 .mail-account-group[hidden]{display:none}
@@ -54,8 +53,6 @@
 .mail-account-save{border:1px solid var(--accent-dark);background:var(--accent-dark);color:#fff}
 .mail-account-actions button:disabled{opacity:.55}
 .mail-account-form>.mail-account-feedback,.smtp-form>.mail-account-feedback{margin-top:10px}
-.mail-account-note{display:flex;align-items:flex-start;gap:8px;padding:10px 11px;border-radius:8px;background:#f3f5fa;color:#53657d;font-size:11px;line-height:1.5}
-.mail-account-note svg{flex:none;color:#397962;margin-top:1px}
 .mail-account-feedback{margin:0;border-radius:8px;padding:9px 10px;font-size:11px;line-height:1.5}
 .mail-account-feedback.error{color:#952c3d;background:#fff0f2}
 .mail-account-feedback.success{color:#246b55;background:#eaf7f1}

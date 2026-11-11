@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Bot, BookOpen, Brain, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
-import type { ChatMessage, EmailReferenceSummary, WorkspaceState } from '../shared/model';
+import type { ChatMessage, EmailReferenceSummary, RendererWorkspaceState } from '../shared/model';
 import type { OperationRunSummary } from '../shared/operations';
 import type { ChatGptStatus } from '../shared/chatgpt';
 import { deriveMemoryPresentation, normalizeMemoryRecallSnapshot, type MemoryRecallSnapshot } from '../shared/module-memory';
@@ -18,7 +18,7 @@ function toolDetail(value?: string): string {
   const detail = (value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\bBearer\s+[^\s,;]+/gi, 'Bearer [entfernt]').replace(/\b(api[-_ ]?key|password|passwort|secret|token|authorization)\s*[:=]\s*[^\s,;]+/gi, '$1=[entfernt]').replace(/\s+/g, ' ').trim();
   return detail.length > 240 ? `${detail.slice(0, 237)}…` : detail;
 }
-function ToolActivity({ events }: { events: NonNullable<ChatMessage['toolEvents']> }) {
+function ToolActivity({ events, children }: { events: NonNullable<ChatMessage['toolEvents']>; children?: ReactNode }) {
   const failed = events.filter(event => event.status === 'failed').length;
   const cancelled = events.filter(event => event.status === 'cancelled').length;
   const uncertain = events.filter(event => event.status === 'uncertain').length;
@@ -31,6 +31,7 @@ function ToolActivity({ events }: { events: NonNullable<ChatMessage['toolEvents'
       const detail = event.status !== 'completed' ? toolDetail(event.detail) : '';
       return <div key={index} className={event.status}>{event.status === 'failed' ? <CircleAlert size={12} aria-hidden="true"/> : event.status === 'uncertain' ? <CircleHelp size={12} aria-hidden="true"/> : event.status === 'cancelled' ? <Square size={11} aria-hidden="true"/> : <Check size={12} aria-hidden="true"/>}<span className="tool-event-description"><span>{event.label ?? legacyToolLabels[event.name] ?? 'Workspace-Aktion'}</span>{detail && <span className="tool-event-detail">{detail}</span>}</span><small>{statusLabel[event.status]}</small></div>;
     })}</div>
+    {children}
   </details>;
 }
 
@@ -66,9 +67,9 @@ function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapsh
 }
 
 function AgentLimitNotice({ limit, onOpen }: { limit?: ChatMessage['agentRunLimit']; onOpen(): void }) {
-  const explanation = limit?.reason === 'tool_rounds' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugrunden eingestellt.` : limit?.reason === 'tool_calls' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugaufrufe eingestellt.` : limit?.reason === 'timeout' ? `Das Zeitlimit von ${limit.limit} Sekunden wurde erreicht.` : 'Die eingestellte Grenze für diesen Auftrag wurde erreicht.';
+  const explanation = limit?.reason === 'context_budget' ? 'Die nächste Anfrage passt nicht in das Kontextbudget. Der Auftrag wurde angehalten; vorhandene Ergebnisse bleiben erhalten.' : limit?.reason === 'tool_rounds' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugrunden eingestellt.` : limit?.reason === 'tool_calls' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugaufrufe eingestellt.` : limit?.reason === 'timeout' ? `Das Zeitlimit von ${limit.limit} Sekunden wurde erreicht.` : 'Die eingestellte Grenze für diesen Auftrag wurde erreicht.';
   const next = limit?.nextToolType === 'discovery' ? 'Weitere Werkzeugsuche stand aus.' : limit?.nextToolType === 'action' ? 'Ein weiterer Fachaufruf stand aus.' : limit?.nextToolType === 'mixed' ? 'Weitere Such- und Aktionsschritte standen aus.' : '';
-  return <div className="message-limit-status" role="status"><strong><CircleAlert size={14} aria-hidden="true"/>Agent-Limit erreicht</strong><p>{explanation}{next ? ` ${next}` : ''}</p>{limit && <small>{limit.toolRounds} Runden · {limit.toolCalls} Aufrufe · {limit.discoveryCalls} Werkzeugsuche · {limit.actionCalls} Fachaufrufe · {Math.max(0, Math.round(limit.elapsedMs / 1000))} s</small>}<button type="button" onClick={onOpen}>Agent-Einstellungen</button></div>;
+  return <div className="message-limit-status" role="status"><strong><CircleAlert size={14} aria-hidden="true"/>{limit?.reason === 'context_budget' ? 'Kontextbudget erreicht' : 'Agent-Limit erreicht'}</strong><p>{explanation}{next ? ` ${next}` : ''}</p>{limit?.context && <small>{limit.context.estimatedInputTokens.toLocaleString('de-DE')} geschätzte Eingabetokens · Budget {limit.context.inputTokenBudget.toLocaleString('de-DE')} · Antwortreserve {limit.context.outputTokenReserve.toLocaleString('de-DE')}</small>}{limit && limit.toolCalls > 0 && <small>{limit.toolRounds} Runden · {limit.toolCalls} Aufrufe · {limit.discoveryCalls} Werkzeugsuche · {limit.actionCalls} Fachaufrufe · {Math.max(0, Math.round(limit.elapsedMs / 1000))} s</small>}<button type="button" onClick={onOpen}>Agent-Einstellungen</button></div>;
 }
 
 function OperationStatus({ message, sessionId, sending }: { message: ChatMessage; sessionId: string; sending: boolean }) {
@@ -122,8 +123,12 @@ function canContinue(message: ChatMessage): boolean {
   return !!message.operationRunId && !message.reformulationOf && message.status !== 'streaming' && (message.status === 'cancelled' || message.status === 'failed' || message.status === 'limited' || message.evidence?.status === 'cancelled' || message.evidence?.status === 'failed' || message.evidence?.status === 'limited' || !!message.toolEvents?.some(event => event.status === 'uncertain'));
 }
 
+function hasOperationDetails(message: ChatMessage): boolean {
+  return !!message.operationRunId && !message.reformulationOf && (canContinue(message) || message.evidence?.toolsUsed === true || !!message.toolEvents?.some(event => !['find_modules', 'get_module_tools'].includes(event.name)));
+}
+
 export function ChatView({ state, prompt, setPrompt, emailReference, emailLoading, emailError, onEmailDrop, onRemoveEmail, references, referencesLoading, referenceError, onModuleReferenceDrop, onRemoveModuleReference, onCancelModuleReferences, sessionRef, setSessionRef, sending, error, tier, setTier, thinking, onSend, onStop, onNew, onSessions, onForkEdit, onReformulate, onContinue, onAgentSettings }: {
-  state: WorkspaceState; prompt: string; setPrompt(value: string): void; emailReference?: EmailReferenceSummary; emailLoading: boolean; emailError?: string; onEmailDrop(id: string): void; onRemoveEmail(): void;
+  state: RendererWorkspaceState; prompt: string; setPrompt(value: string): void; emailReference?: EmailReferenceSummary; emailLoading: boolean; emailError?: string; onEmailDrop(id: string): void; onRemoveEmail(): void;
   references: ModuleReferenceSummary[]; referencesLoading: boolean; referenceError?: string; onModuleReferenceDrop(reference: ModuleReferenceInput): void; onRemoveModuleReference(reference: ModuleReferenceInput): void; onCancelModuleReferences(): void;
   sessionRef?: string; setSessionRef(value?: string): void; sending: boolean; error?: string; tier: Tier; setTier(value: Tier): void; thinking: Thinking;
   onSend(): void; onStop(): void; onNew(): void; onSessions(): void; onForkEdit(messageId: string): void; onReformulate(messageId: string): void; onContinue(messageId: string): void; onAgentSettings(): void;
@@ -136,6 +141,17 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
   const [dragging, setDragging] = useState(false);
   const [chatGptStatus, setChatGptStatus] = useState<ChatGptStatus | null>(null);
   const [usageError, setUsageError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const historyAnchor = useRef<{ sessionId: string; start: number; top: number; height: number } | undefined>(undefined);
+  async function loadEarlier() {
+    if (historyLoading || !list.current) return;
+    historyAnchor.current = { sessionId: state.activeSessionId, start: state.presentation?.chatStart ?? 0, top: list.current.scrollTop, height: list.current.scrollHeight };
+    stick.current = false; setHistoryLoading(true); setHistoryError('');
+    try { await window.workspace.loadEarlierChat(); }
+    catch (reason) { historyAnchor.current = undefined; setHistoryError(String(reason)); }
+    finally { setHistoryLoading(false); }
+  }
   useEffect(() => {
     if (state.ai?.provider !== 'chatgpt') { setChatGptStatus(null); return; }
     let current = true;
@@ -152,7 +168,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
   const active = state.sessions.find(session => session.id === state.activeSessionId);
   const linked = state.sessions.find(session => session.id === sessionRef && session.id !== state.activeSessionId);
   const mail = emailReference;
-  const messages = state.chat.filter((message, index) => message.id !== 'welcome' && index >= (active?.historyStart ?? 0));
+  const messages = state.chat.filter((message, index) => message.id !== 'welcome' && index + (state.presentation?.chatStart ?? 0) >= (active?.historyStart ?? 0));
   const model = tier === 'smart' ? state.ai?.smartModel : state.ai?.simpleModel;
   const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Strg+';
 
@@ -178,8 +194,14 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
     window.addEventListener('resize', resizeInput);
     return () => { observer.disconnect(); window.removeEventListener('resize', resizeInput); };
   }, []);
-  useLayoutEffect(() => { if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight; }, [state.chat, sending]);
-  useLayoutEffect(() => { scrollToLatest(); dragDepth.current = 0; setDragging(false); setCopied(undefined); setCopyError(''); input.current?.focus({ preventScroll: true }); }, [state.activeSessionId]);
+  useLayoutEffect(() => {
+    const anchor = historyAnchor.current;
+    if (anchor && anchor.sessionId === state.activeSessionId && (state.presentation?.chatStart ?? 0) < anchor.start && list.current) {
+      list.current.scrollTop = anchor.top + list.current.scrollHeight - anchor.height;
+      historyAnchor.current = undefined;
+    } else if (stick.current && list.current) list.current.scrollTop = list.current.scrollHeight;
+  }, [state.chat, sending]);
+  useLayoutEffect(() => { historyAnchor.current = undefined; setHistoryError(''); scrollToLatest(); dragDepth.current = 0; setDragging(false); setCopied(undefined); setCopyError(''); input.current?.focus({ preventScroll: true }); }, [state.activeSessionId]);
   useEffect(() => {
     const observer = new ResizeObserver(() => {
       const element = list.current;
@@ -227,15 +249,18 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       copyTimer.current = setTimeout(() => setCopied(undefined), 1800);
     } catch { setCopyError('Kopieren war nicht möglich. Du kannst den Text markieren und selbst kopieren.'); }
   }
-  function hasPreviousUser(id: string): boolean { const index = state.chat.findIndex(message => message.id === id); return index > 0 && state.chat.slice(active?.historyStart ?? 0, index).some(message => message.role === 'user'); }
+  function hasPreviousUser(id: string): boolean { const index = state.chat.findIndex(message => message.id === id); return index >= 0 && (!!state.presentation?.chatHasEarlierUser || state.chat.slice(Math.max(0, (active?.historyStart ?? 0) - (state.presentation?.chatStart ?? 0)), index).some(message => message.role === 'user')); }
   function send() { if (!sending && !emailLoading && !referencesLoading && prompt.trim()) { scrollToLatest(); onSend(); } }
 
   return <div className={`modern-chat${dragging ? ' is-dragging' : ''}`} onDragEnter={event => { if (isReferenceDrag(event.dataTransfer)) { event.preventDefault(); dragDepth.current++; setDragging(true); } }} onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }} onDragOver={event => { if (acceptsDrop(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }} onDrop={drop}>
     <div className="modern-chat-head"><div className="assistant-avatar"><Bot size={17}/></div><div className="modern-chat-title"><strong title={active?.title}>{active?.title ?? 'Neuer Chat'}</strong><small title={model}>{model || 'Modell in den Einstellungen auswählen'}</small></div><button type="button" title={`Neuer Chat (${shortcut}N)`} aria-label="Neuer Chat" onClick={onNew}><Plus size={18}/></button><button type="button" title={`Chats verwalten (${shortcut}F)`} aria-label="Chats verwalten" onClick={onSessions}><FolderClock size={18}/></button></div>
-    <div className="sr-only" aria-live="polite">{active?.messages.at(-1)?.status === 'completed' ? 'Antwort vollständig.' : active?.messages.at(-1)?.status === 'failed' ? 'Antwort unterbrochen.' : active?.messages.at(-1)?.status === 'cancelled' ? 'Antwort gestoppt.' : active?.messages.at(-1)?.status === 'limited' ? 'Agent-Limit erreicht.' : ''}{copied ? ' Text kopiert.' : ''}</div>
+    <div className="sr-only" aria-live="polite">{state.chat.at(-1)?.status === 'completed' ? 'Antwort vollständig.' : state.chat.at(-1)?.status === 'failed' ? 'Antwort unterbrochen.' : state.chat.at(-1)?.status === 'cancelled' ? 'Antwort gestoppt.' : state.chat.at(-1)?.status === 'limited' ? 'Agent-Limit erreicht.' : ''}{copied ? ' Text kopiert.' : ''}</div>
     <div className="message-log-area">
       <div ref={list} className="modern-messages" role="log" aria-label="Chatverlauf" aria-live="off" onScroll={event => { const element = event.currentTarget; const near = element.scrollHeight - element.scrollTop - element.clientHeight < 64; stick.current = near; setAwayFromBottom(!near); }}>
-        <div ref={thread} className="message-thread">{messages.map((message, index) => <article key={message.id} className={`modern-message ${message.role}${index === messages.length - 1 ? ' is-latest' : ''}`} aria-label={message.role === 'user' ? 'Deine Nachricht' : 'Antwort des Assistenten'} aria-busy={message.status === 'streaming'}>
+        <div ref={thread} className="message-thread">
+          {(state.presentation?.chatStart ?? 0) > (active?.historyStart ?? 0) && <button type="button" className="chat-load-earlier" aria-disabled={historyLoading} onClick={() => void loadEarlier()}>{historyLoading ? 'Lädt …' : 'Frühere Nachrichten laden'}</button>}
+          {historyError && <p className="chat-error" role="alert">{historyError}</p>}
+          {messages.map((message, index) => <article key={message.id} className={`modern-message ${message.role}${index === messages.length - 1 ? ' is-latest' : ''}`} aria-label={message.role === 'user' ? 'Deine Nachricht' : 'Antwort des Assistenten'} aria-busy={message.status === 'streaming'}>
           {message.role === 'assistant' && <div className="message-avatar" aria-hidden="true"><Bot size={15}/></div>}
           <div className="message-content">
             <div className="modern-message-body">
@@ -243,11 +268,11 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
               {message.sessionRef && <span className="message-ref" title={message.sessionRef.title}><Link2 size={12} aria-hidden="true"/><span>{message.sessionRef.title}</span></span>}
               {message.references?.map(reference => <span key={moduleReferenceKey(reference)} className="message-ref" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={12} aria-hidden="true"/> : <Link2 size={12} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Anweisung: ' : ''}{reference.title}</span></span>)}
               {message.role === 'assistant' && message.memory && <MemoryContext snapshot={message.memory}/>}
-              {!!message.toolEvents?.length && <ToolActivity events={message.toolEvents}/>}
-              {message.operationRunId && !message.reformulationOf && <OperationStatus message={message} sessionId={state.activeSessionId} sending={sending}/>}
+              {!!message.toolEvents?.length && <ToolActivity events={message.toolEvents}>{hasOperationDetails(message) && <OperationStatus message={message} sessionId={state.activeSessionId} sending={sending}/>}</ToolActivity>}
+              {!message.toolEvents?.length && hasOperationDetails(message) && <OperationStatus message={message} sessionId={state.activeSessionId} sending={sending}/>}
               {message.reformulationOf && <small className="message-status" title="Verwendet ausschließlich gespeicherte Ergebnisse und Momentaufnahmen. Es werden keine Werkzeuge ausgeführt.">{message.status === 'completed' ? 'Neu formuliert' : 'Neuformulierung'} · keine Aktionen</small>}
               {message.continuationOf && <small className="message-status" title="Setzt den gespeicherten Auftrag fort. Erledigte Aktionen werden nicht wiederholt; unklare Änderungen bleiben bis zur Klärung gesperrt.">Fortsetzung des Auftrags</small>}
-              <ChatMarkdown text={message.text || (message.status === 'streaming' ? 'Antwort wird vorbereitet …' : '')} messageId={message.id} copied={copied} onCopy={copy}/>
+              <ChatMarkdown text={message.text} messageId={message.id} copied={copied} onCopy={copy}/>
               {message.status === 'streaming' && <small className="message-status streaming" role="status"><span aria-hidden="true"/>{message.reformulationOf ? 'Antwort wird neu formuliert …' : 'Antwort wird erstellt …'}</small>}
               {message.status === 'cancelled' && <small className="message-status">Gestoppt</small>}
               {message.status === 'failed' && <small className="message-status failed">{message.error || 'Antwort unterbrochen'}</small>}
@@ -259,7 +284,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
             {message.role === 'assistant' && message.status !== 'streaming' && (message.text || hasPreviousUser(message.id)) && <div className="message-actions" role="group" aria-label="Antwortaktionen">{message.text && <button type="button" title="Antwort kopieren" aria-label="Antwort kopieren" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14}/> : <Copy size={14}/>}</button>}{hasPreviousUser(message.id) && <button type="button" title={message.evidence ? 'Antwort aus gespeicherten Ergebnissen neu formulieren, ohne Aktionen auszuführen' : 'Neu formulieren benötigt gespeicherte Ergebnisbelege. Für diese ältere Antwort sind noch keine verfügbar.'} aria-label="Antwort neu formulieren" disabled={sending} onClick={() => onReformulate(message.id)}><RefreshCw size={14}/></button>}{canContinue(message) && <button type="button" title="Gespeicherten Auftrag fortsetzen; erledigte Aktionen werden nicht wiederholt" aria-label="Auftrag fortsetzen" disabled={sending} onClick={() => onContinue(message.id)}><Play size={14}/></button>}</div>}
           </div>
         </article>)}
-        {!messages.length && <div className="chat-empty"><div className="chat-empty-icon"><Bot size={22}/></div><strong>Wobei kann ich helfen?</strong><span>Dein Chat wird lokal gespeichert.</span></div>}</div>
+        {!messages.length && <div className="chat-empty"><div className="chat-empty-icon"><Bot size={22}/></div><strong>Wobei kann ich helfen?</strong></div>}</div>
       </div>
       {awayFromBottom && <button type="button" className="jump-to-latest" onClick={scrollToLatest} title="Zur neuesten Nachricht" aria-label="Zur neuesten Nachricht"><ArrowDown size={14} aria-hidden="true"/>Neueste Nachricht</button>}
     </div>
@@ -270,14 +295,14 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       {emailError && <div className="chat-error" role="alert">{emailError}</div>}
       {referencesLoading && <div className="chat-notice" role="status">Referenzen werden geladen … <button type="button" onClick={onCancelModuleReferences}>Abbrechen</button></div>}
       {referenceError && <div className="chat-error" role="alert">{referenceError}</div>}
-      {sending && !active?.messages.some(message => message.status === 'streaming') && <div className="chat-notice">{state.sessions.some(session => session.id !== state.activeSessionId && session.messages.some(message => message.status === 'streaming')) ? 'Eine Antwort läuft in einem anderen Chat. Du kannst sie hier stoppen.' : 'Nachricht wird vorbereitet …'}</div>}
+      {sending && state.presentation?.streamingSessionId !== state.activeSessionId && <div className="chat-notice">{!!state.presentation?.streamingSessionId ? 'Eine Antwort läuft in einem anderen Chat. Du kannst sie hier stoppen.' : 'Nachricht wird vorbereitet …'}</div>}
       {(error || copyError || usageError) && <div className="chat-error" role="alert">{error || copyError || usageError}</div>}
       {state.ai?.provider === 'chatgpt' && chatGptStatus?.authenticated && chatGptStatus.planAccess && <div className="chatgpt-plan-status"><span>Verwendet ChatGPT-Tarif</span><button type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button></div>}
       <div className="modern-composer">
-        <textarea ref={input} rows={1} aria-label="Nachricht" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
-        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title="In den KI-Einstellungen je Modell festgelegt">Thinking: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" aria-label="Nachricht senden" disabled={emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
+        <textarea ref={input} rows={1} aria-label="Nachricht" aria-describedby="composer-help" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
+        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title={`Denktiefe: ${{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}`}><Brain size={13} aria-hidden="true"/><span>Denktiefe: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span></span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" title="Senden (Enter)" aria-label="Nachricht senden" disabled={emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
       </div>
-      <p className="composer-hint">Referenzen hierher ziehen · Enter senden · Umschalt + Enter neue Zeile</p>
+      <p id="composer-help" className="sr-only">Referenzen hierher ziehen. Enter sendet, Umschalt + Enter fügt eine neue Zeile ein.</p>
     </div>
   </div>;
 }
