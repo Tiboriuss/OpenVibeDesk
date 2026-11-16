@@ -16,6 +16,10 @@ function normalizedConfiguration(value: SavedAiSettings): AiConfiguration {
 }
 type AiGroups = { connection: boolean; models: boolean; workspace: boolean };
 const groupStorageKey = 'openvibedesk.settings.aiGroups';
+const chatGroupStorageKey = 'openvibedesk.settings.chatOpen';
+function loadChatGroup(): boolean {
+  try { return localStorage.getItem(chatGroupStorageKey) === 'true'; } catch { return false; }
+}
 function loadGroups(): AiGroups {
   const defaults = { connection: false, models: false, workspace: false };
   try {
@@ -68,6 +72,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [chatOpen, setChatOpen] = useState(loadChatGroup);
   const [openGroups, setOpenGroups] = useState<AiGroups>(loadGroups);
   const urlInput = useRef<HTMLInputElement>(null);
   const discoveryId = useRef(0);
@@ -79,7 +84,8 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const legacyAzure = provider === 'azure' && /\/openai\/deployments\//i.test(baseUrl);
   const dirty = !!configuration && (connectionChanged || smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking || workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode);
   const prepared = useSettingsPreparation(preparation, !!configuration, !dirty && !busy && !chatGptBusy, applyPreparation);
-  useEffect(() => { if (preparation) setOpenGroups({ connection: true, models: true, workspace: true }); }, [preparation]);
+  useEffect(() => { if (preparation) { setChatOpen(true); setOpenGroups({ connection: true, models: true, workspace: true }); } }, [preparation]);
+  useEffect(() => { if (error) setChatOpen(true); }, [error]);
   function applyPreparation(suggestion: SettingsSuggestion) {
     const values = preparationValues(suggestion);
     if (['provider', 'protocol', 'authMode', 'apiVersion', 'baseUrl'].some(key => key in values)) invalidateDiscovery();
@@ -185,6 +191,10 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     try { localStorage.setItem(groupStorageKey, JSON.stringify(openGroups)); } catch { /* Keep the in-memory selection. */ }
   }, [openGroups]);
 
+  useEffect(() => {
+    try { localStorage.setItem(chatGroupStorageKey, String(chatOpen)); } catch { /* Keep the current window usable. */ }
+  }, [chatOpen]);
+
   useLayoutEffect(() => {
     const preventLoss = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
     window.workspace.setAiSettingsStatus(busy || chatGptBusy ? 'busy' : dirty ? 'dirty' : 'clean');
@@ -209,6 +219,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     window.workspace.getAiSettings().then(value => {
       if (!active) return;
       applyConfiguration(value);
+      if (!value.configured) setChatOpen(true);
       if (value.configured && value.provider !== 'chatgpt') void discover();
     }).catch(reason => { if (active) setError(`Einstellungen konnten nicht geladen werden: ${String(reason)}`); });
     return () => { active = false; discoveryId.current++; };
@@ -242,7 +253,11 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     finally { setBusy(false); }
   }
 
-  return <section className="ai-settings" aria-label="KI-Einstellungen">
+  const chatSummary = configuration ? `${providerLabels[provider]}${!configuration.configured ? ' · Nicht eingerichtet' : ''}${dirty ? ' · Änderungen offen' : ''}${error ? ' · Fehler' : ''}` : error ? 'Nicht verfügbar' : 'Wird geladen …';
+  return <section className="ai-settings" aria-label="Chat-Einstellungen">
+    <details className="workspace-settings-group ai-chat-group" open={searching || chatOpen}>
+      <summary onClick={event => { event.preventDefault(); setChatOpen(current => !current); }}><span><strong>Chat</strong><small>{chatSummary}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="workspace-settings-content">
     {!configuration && !error && <p className="ai-loading">Einstellungen werden geladen …</p>}
     <SettingsPreparationNotice suggestion={prepared.pending} blocked={dirty || busy || chatGptBusy} onApply={prepared.accept} onDismiss={prepared.dismiss} />
     {prepared.pending && dirty && <button className="ai-inline-button" type="button" disabled={busy || chatGptBusy} onClick={resetCurrentChanges}>Eigene Änderungen verwerfen</button>}
@@ -287,10 +302,12 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Assistent kann für deine Aufträge selbstständig in verfügbaren Modulen suchen, Inhalte lesen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
       <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Suchen und Lesen laufen bereits selbstständig. Dieser Schalter überspringt auch Bestätigungen für angeforderte Aktionen wie Senden und Löschen. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
       </details>
-      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Ungespeicherte Änderungen' : ''}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy || !dirty && configuration.configured}>{busy ? 'Wird gespeichert …' : 'Speichern'}</button></div>
+      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Ungespeicherte Änderungen' : ''}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy || !dirty && configuration.configured}>{busy ? 'Wird gespeichert …' : 'Chat-Einstellungen speichern'}</button></div>
     </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}
     {notice && <p className="ai-feedback ai-success" role="status">{notice}</p>}
+      </div>
+    </details>
     <dialog ref={planWelcome} className="ai-chatgpt-welcome" aria-labelledby="ai-chatgpt-welcome-title" onCancel={event => { event.preventDefault(); dismissPlanWelcome(); }}>
       <h2 id="ai-chatgpt-welcome-title">Du verwendest deinen ChatGPT-Plan</h2><p>Berechtigte KI-Anfragen in OVD nutzen deinen ChatGPT-Plan. Du kannst die Nutzung und Limits in deinen ChatGPT-Einstellungen verwalten.</p>{chatGptError && <p className="ai-error" role="alert">{chatGptError}</p>}<div><button className="ai-refresh" type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button><button id="ai-chatgpt-welcome-close" className="ai-save" type="button" autoFocus onClick={dismissPlanWelcome}>Verstanden</button></div>
     </dialog>

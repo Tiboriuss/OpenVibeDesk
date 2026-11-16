@@ -56,7 +56,7 @@ Place the OVD-Bar vertically or horizontally, resize it, adjust its background o
 | Area | Current scope |
 | --- | --- |
 | **OVD-Bar** | Vertical or horizontal floating launcher; adjustable size, background opacity and placement, optional idle collapse, keyboard navigation and module ordering. |
-| **Assistant** | Streaming, Markdown, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
+| **Assistant** | Streaming, Markdown, separately configurable live/recorded speech input, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
 | **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML previews and paged full-text reading, attachments, local drafts with paged Assistant access, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local Stdio and remote Streamable HTTP servers, browser OAuth or Bearer authentication, individual tool approvals, and a compact activity log. |
@@ -123,6 +123,8 @@ pnpm dev
 `pnpm dev` builds the project and launches Electron without installing the app. It does not start a hot-reload server; restart it after source changes. If `pnpm` is missing, see [setup and troubleshooting](docs/getting-started.md#install-the-development-tools).
 
 Choose a provider in **Settings → AI & connection** (currently **Einstellungen → KI & Verbindung**): OpenAI, Azure AI Foundry, an OpenAI-compatible endpoint, or **ChatGPT** with direct browser sign-in. API connections can use Chat Completions or Responses; Azure uses deployment names and its matching authentication method. Eligible ChatGPT accounts can authorize plan usage directly through OAuth and the public Responses API. This connection runs inside OVD without an external agent runtime. See [AI provider setup](docs/ai-providers.md) for endpoints, authentication and preview requirements. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
+
+Optional [speech input](docs/speech-input.md) has its own provider, endpoint and API key under **KI & Verbindung → Spracheingabe**. Dictate live or transcribe after recording, then review the text before sending. The chat provider can be different; ChatGPT sign-in does not currently grant access to audio transcription.
 
 | Command | Purpose |
 | --- | --- |

@@ -82,13 +82,19 @@ Chat initially displays the latest 100 messages; **Frühere Nachrichten laden** 
 ### Connect an AI provider
 
 1. Open **Settings → AI & connection** (**Einstellungen → KI & Verbindung**).
-2. Expand **Connection** (**Verbindung**) and choose your provider: OpenAI, Azure AI Foundry, an OpenAI-compatible service or **ChatGPT**. For API-key connections, select the supported interface and authentication, enter the endpoint/key and save. ChatGPT uses **Continue with ChatGPT** to authorize eligible plan usage in your system browser.
+2. Expand **Chat → Connection** (**Chat → Verbindung**) and choose your provider: OpenAI, Azure AI Foundry, an OpenAI-compatible service or **ChatGPT**. For API-key connections, select the supported interface and authentication, enter the endpoint/key and save. ChatGPT uses **Continue with ChatGPT** to authorize eligible plan usage in your system browser.
 3. Select the intelligent and simple model tiers under **Models** (**Modelle**). Azure uses your deployment names; manual entry remains available if no suitable model list is returned. Configure the Thinking level supported by your provider.
 4. Enable workspace tools under **Workspace access** (**Workspace-Zugriff**) if your endpoint supports tool calling.
 
 See [AI providers](ai-providers.md) for complete setup, Azure v1/classic endpoint examples and direct ChatGPT sign-in. ChatGPT needs no additional program or API key. Streaming is required for chat. Workspace control additionally requires complete tool calls. Local loopback HTTP is permitted; remote HTTP providers require HTTPS. If a model does not support tools, disable workspace tools to use ordinary chat.
 
 API keys and ChatGPT OAuth credentials use the local encrypted credential store. For ChatGPT, an identity-only sign-in is distinct from permission to use the plan; OVD shows the actual grant and provides account selection and usage controls. The same Workspace permissions and operation safeguards apply to every connection.
+
+### Enable speech input
+
+Expand **Spracheingabe** under **KI & Verbindung**, enable it, and select a provider and **Live** or **Nach Aufnahme** mode. Save its own transcription URL, model/deployment and API key. Speech and chat providers are independent; a ChatGPT sign-in does not configure an audio API connection.
+
+Use the microphone in Chat, speak, and click Stop. The final transcript is inserted into the message draft for review and editing. Nothing is sent automatically. See [Speech input](speech-input.md) for provider compatibility, microphone permissions and cancellation.
 
 ### Reformulate an answer
 

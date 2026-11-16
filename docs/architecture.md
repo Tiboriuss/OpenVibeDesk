@@ -4,7 +4,7 @@ For the prioritized implementation backlog and acceptance gates, see the [matura
 
 [Documentation](README.md) · [Contributing](../CONTRIBUTING.md#building-modules) · [Desktop app decision](decisions/0001-local-desktop.md)
 
-The current Host includes whole-request context budgets (R02), complete bounded Mail/draft reads (R03), measured window/cache retention changes (R04), and the configurable OVD-Bar. Workspace-wide visible save recovery remains the next reliability package, R05; the existing store still exports the complete database.
+The current Host includes whole-request context budgets (R02), complete bounded Mail/draft reads (R03), measured window/cache retention changes (R04), the configurable OVD-Bar, and separately configured speech input. Workspace-wide visible save recovery remains the next reliability package, R05; the existing store still exports the complete database.
 
 ## Processes and trust boundaries
 
@@ -18,6 +18,7 @@ flowchart LR
   M --> I[IMAP]
   M --> O[SMTP]
   M --> L[OpenAI-compatible endpoint]
+  M --> ST[Separate speech provider]
   M --> MR[Module registry]
   M --> RS[Repository service]
   RS --> RC[GitHub or HTTPS catalogs]
@@ -333,6 +334,16 @@ Assistant listings and searches run without a separate consent dialog in either 
 The legacy `mail.search` service searches at most 10 selectable folders per task and displays at most 50 matches. Its model result includes at most 20 match metadata records. `scope`, `foldersSearched`, `foldersRemaining`, `hasMore` and warnings describe actual coverage. Unsearched or inaccessible folders must not be described as fully searched. Results appear in the existing mail window with account/folder context; reading, read-status changes, replies, attachments and drag references retain their shared domain behavior. The unified view has a search header, compact action bar, folder navigation and reading pane.
 
 The Mail UI and assistant use the same search services. The assistant chooses a bounded query scope for the task and follows returned IDs or continuation cursors as needed; a prior drag reference or mailbox approval is not a prerequisite. Newer `mail.query` and `mail.count` use the separate filter/scope contracts and limits described above.
+
+## Speech input pipeline
+
+The mandatory Assistant uses a host speech service for microphone dictation. [`shared/speech.ts`](../shared/speech.ts) defines independent, validated settings and provider capabilities. [`electron/speech-ipc.ts`](../electron/speech-ipc.ts) permits only audio from the trusted Chat main frame during an explicit recording session; camera, screen capture and optional module frames remain denied. No provider credentials cross into the renderer.
+
+An AudioWorklet produces bounded 24 kHz mono PCM chunks through the typed preload. [`electron/speech.ts`](../electron/speech.ts) owns session identity, cancellation, limits, persisted settings and the credential reference. Microphone capture starts after local validation, in parallel with provider setup. A bounded queue holds up to 20 seconds of audio while a live connection is pending and drains in order once it is ready. Stop freezes capture even during connection setup; Cancel invalidates the session and prevents a late connection from sending its audio. [`electron/speech-adapters.ts`](../electron/speech-adapters.ts) connects a Realtime WebSocket or buffers one WAV upload after Stop. Remote transports require TLS and reject redirects.
+
+After a provider failure, the host may retain the accepted recording in memory for an explicit retry, within the same 120-second recording limit. Retry creates a new transcription session, replays the retained audio and finishes without reopening the microphone. There is no automatic reconnect or replay. Dismissal, a new recording, settings changes, chat/session closure and application exit discard retained audio. Provider deltas are assembled into transcript snapshots; the composer only inserts a final or explicitly accepted partial transcript, never automatically sending it.
+
+The lazy `settings.speech_get` and `settings.speech_save` capabilities use the same public configuration contract. The latter prepares the Settings form for explicit saving and cannot obtain keys or initiate a microphone recording. Speech adapters are separate from chat providers and optional business modules; a third-party speech-provider manifest contribution is not implemented. See [Speech input](speech-input.md).
 
 ## LLM and MCP pipeline
 

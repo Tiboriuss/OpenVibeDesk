@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#connect-an-ai-provider) · [Architecture](architecture.md#llm-and-mcp-pipeline)
 
-Configure the Assistant under **Settings → AI & connection** (**Einstellungen → KI & Verbindung**). OVD keeps one active connection with two model slots: **Intelligent** and **Simple**. Each slot has its own Thinking setting. Provider selection configures the connection; modules and their tools remain part of the same OVD workspace.
+Configure the Assistant under **Settings → AI & connection** (**Einstellungen → KI & Verbindung**). The **Chat** group contains the connection, models and workspace access, with its own **Chat-Einstellungen speichern** button. The peer **Spracheingabe** group saves independently. OVD keeps one active chat connection with two model slots: **Intelligent** and **Simple**. Each slot has its own Thinking setting. Provider selection configures the connection; modules and their tools remain part of the same OVD workspace.
 
 This guide describes the current checkout. An older installed release may not yet contain these provider controls.
 
@@ -12,6 +12,10 @@ This guide describes the current checkout. An older installed release may not ye
 | **Azure AI Foundry / Azure OpenAI** | Azure resource endpoint and key; v1 supports the selected protocol, subject to the deployed model. | Your actual Azure deployment names. |
 | **OpenAI-compatible / local provider** | A compatible gateway or local server, with selectable authentication. | The IDs accepted by that service. |
 | **ChatGPT** | Direct browser sign-in and authorized ChatGPT plan usage through the public Responses API. | Models available to the selected ChatGPT account. See [ChatGPT setup](#sign-in-with-chatgpt). |
+
+## Speech input
+
+Chat and speech use separate configurations. **Spracheingabe** under **KI & Verbindung** supports Realtime transcription or a recorded-audio upload, depending on the speech service. It has its own endpoint, authentication and model, with no automatic reuse of chat keys or ChatGPT tokens. A service supporting chat completions does not necessarily support audio. See [Speech input](speech-input.md) for the implemented protocols and provider setup.
 
 ## OpenAI API
 

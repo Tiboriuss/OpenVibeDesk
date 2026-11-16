@@ -2,7 +2,7 @@ import { mailSourceLocatorSchema } from '../shared/mail-source';
 import { chatRequestEvent, chatFinishedEvent } from './chat-events';
 import type { ModuleEvent, ModuleEventPublication } from '../shared/module-events';
 import { savedMemory } from './memory-context';
-import { app, BrowserWindow, dialog, ipcMain, protocol, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, screen, shell } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -46,6 +46,7 @@ import { WorkspaceCapabilityRegistry, type CapabilityContext } from './workspace
 import { fitWindowBounds } from './window-layout';
 import { OvdBarController } from './ovd-bar';
 import { AgentContext } from './agent-context';
+import { SpeechController } from './speech-ipc';
 import { ContextBudgetError } from './provider-request';
 
 app.enableSandbox();
@@ -68,6 +69,8 @@ let saveTimer: NodeJS.Timeout | undefined;
 let settingsWrites: Promise<unknown> = Promise.resolve();
 let quitting = false;
 let readyToQuit = false;
+let speech: SpeechController | undefined;
+let speechSettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
 let aiSettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
 let agentSettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
 let mcpSettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
@@ -203,6 +206,7 @@ function broadcast(): void {
   }
 }
 function commit(next: WorkspaceState): void {
+  if (currentState && next.activeSessionId !== currentState.activeSessionId) { const chat = panels.get('chat'); if (chat) speech?.cancelOwner(chat.webContents.id); }
   currentState = next;
   mailModule?.onStateChanged(next);
   broadcast();
@@ -220,10 +224,10 @@ function setupWindow(win: BrowserWindow): void {
 function panelTitle(kind: WindowKind): string { return { mail: 'Mail', chat: 'Assistant', draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen', sessions: 'Chats' }[kind]; }
 
 function confirmSettingsClose(force = false): boolean {
-  if (!force && !moduleRepositories?.list().busy && repositorySettingsStatus === 'clean' && aiSettingsStatus === 'clean' && agentSettingsStatus === 'clean' && mcpSettingsStatus === 'clean' && (mailModule?.getSettingsStatus() ?? 'clean') === 'clean') return true;
+  if (!force && !moduleRepositories?.list().busy && repositorySettingsStatus === 'clean' && speechSettingsStatus === 'clean' && aiSettingsStatus === 'clean' && agentSettingsStatus === 'clean' && mcpSettingsStatus === 'clean' && (mailModule?.getSettingsStatus() ?? 'clean') === 'clean') return true;
   const owner = panels.get('settings');
   if (!owner || owner.isDestroyed()) return true;
-  if (moduleRepositories?.list().busy || repositorySettingsStatus === 'busy' || aiSettingsStatus === 'busy' || agentSettingsStatus === 'busy' || mcpSettingsStatus === 'busy' || mailModule?.getSettingsStatus() === 'busy') {
+  if (moduleRepositories?.list().busy || repositorySettingsStatus === 'busy' || speechSettingsStatus === 'busy' || aiSettingsStatus === 'busy' || agentSettingsStatus === 'busy' || mcpSettingsStatus === 'busy' || mailModule?.getSettingsStatus() === 'busy') {
     dialog.showMessageBoxSync(owner, { type: 'info', title: 'Vorgang läuft', message: 'Bitte warte, bis der aktuelle Vorgang abgeschlossen ist.', buttons: ['OK'] });
     return false;
   }
@@ -284,7 +288,7 @@ async function openPanel(kind: WindowKind): Promise<void> {
   }
   win.on('move', rememberBounds);
   win.on('resize', rememberBounds);
-  win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
+  win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { speechSettingsStatus = 'clean'; aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
   await win.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: kind } });
 }
 
@@ -458,9 +462,9 @@ async function referenceWorkspaceChat(id: string) {
   panels.get('chat')?.webContents.send('chat:reference-session', id);
   return { sessionId: id, selectedAsContext: true };
 }
-async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent' | 'module-repository', values: Record<string, unknown>, accountId?: string) {
+async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent' | 'speech' | 'module-repository', values: Record<string, unknown>, accountId?: string) {
   await dispatchAction({ type: 'open_window', kind: 'settings' });
-  panels.get('settings')?.webContents.send('settings:prepare', { category: kind === 'module-repository' ? 'modules' : kind === 'ai' ? 'ai' : kind === 'agent' ? 'agent' : 'mail', kind, values, ...(accountId ? { accountId } : {}) });
+  panels.get('settings')?.webContents.send('settings:prepare', { category: kind === 'module-repository' ? 'modules' : (kind === 'ai' || kind === 'speech') ? 'ai' : kind === 'agent' ? 'agent' : 'mail', kind, values, ...(accountId ? { accountId } : {}) });
   return { status: 'requires_user_input', opened: 'settings', note: 'Die Angaben sind im Formular vorbereitet. Der Nutzer prüft sie, ergänzt gegebenenfalls Zugangsdaten und speichert.' };
 }
 async function confirmCapability(context: OperationContext, message: string, detail: string, options: { alwaysAsk?: boolean } = {}): Promise<boolean> {
@@ -649,6 +653,8 @@ function registerWorkspaceCapabilities(): void {
     return { untrusted: true, notices: notices.slice(offset, offset + limit), total: notices.length, hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   });
   workspaceCapabilities.register('modules.acknowledge_attention', ({ moduleId, ids }) => moduleHost!.acknowledgeAttention(moduleId, ids));
+  workspaceCapabilities.register('settings.speech_get', () => speech!.service.getSettings());
+  workspaceCapabilities.register('settings.speech_save', args => prepareSettings('speech', args));
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
   workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
   workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)); });
@@ -1063,7 +1069,7 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.speech_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
     const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
@@ -1131,7 +1137,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   } });
   previousChatGptProfile = (await chatGptAuth().status().catch(() => undefined))?.activeProfileId;
   for (const item of currentState.sessions) if (item.messages.some(m => m.status === 'streaming')) currentState = updateSessionMessages(currentState, item.id, messages => messages.map(m => m.status === 'streaming' ? { ...m, status: 'cancelled' } : m));
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  speech = new SpeechController({ dataDirectory: app.getPath('userData'), panels, verifyPanel, openSettings: () => openSettingsCategory('ai', 'Spracheingabe'), settingsStatus: status => { speechSettingsStatus = status; } });
+  await speech.initialize();
   ipcMain.handle('workspace:load', event => { verifySender(event); return windowState(BrowserWindow.fromWebContents(event.sender)!); });
   const verifyBar = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void => {
     if (!dock || dock.isDestroyed() || event.sender !== dock.webContents || event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted OVD-Bar sender');
@@ -1228,9 +1235,10 @@ app.on('before-quit', event => {
   if (mailModule?.getSendingCount()) { dialog.showErrorBox('Mailvorgang läuft', 'Bitte warte, bis der laufende Versand oder die Gesendet-Ablage abgeschlossen ist, bevor du OpenVibeDesk beendest.'); return; }
   if (moduleRepositories?.list().busy) { dialog.showErrorBox('Modulvorgang läuft', 'Bitte warte, bis die aktuelle Installation oder Katalogaktualisierung abgeschlossen ist.'); return; }
   if (!confirmSettingsClose()) return;
-  allowSettingsUnload = repositorySettingsStatus === 'dirty' || aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
+  allowSettingsUnload = repositorySettingsStatus === 'dirty' || speechSettingsStatus === 'dirty' || aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
   quitting = true;
   mailModule?.stopPolling();
+  const chatOwner = panels.get('chat'); if (chatOwner) speech?.cancelOwner(chatOwner.webContents.id);
   if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; currentState = updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m)); }
   if (saveTimer) clearTimeout(saveTimer);
   void (async () => {
@@ -1262,7 +1270,7 @@ app.on('before-quit', event => {
       dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Die letzten Änderungen konnten nicht gespeichert werden. Bitte die Speicherung erneut versuchen.');
       return;
     }
-    chatGptAuth().dispose(); moduleHost?.dispose(); readyToQuit = true; app.quit();
+    speech?.dispose(); chatGptAuth().dispose(); moduleHost?.dispose(); readyToQuit = true; app.quit();
   })();
 });
 app.on('window-all-closed', () => app.quit());

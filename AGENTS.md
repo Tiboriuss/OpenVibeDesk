@@ -13,6 +13,7 @@
 - Keep permanent interface copy focused on the current task and actual controls. Put background implementation details and migration notes in documentation instead of adding unrelated informational panels.
 - Group mail settings by account. Allow prefilled editing of general/IMAP and SMTP configuration, check and save reception and sending separately, and preserve account IDs, drafts, and other unsaved account edits.
 - Preserve unsaved inputs when switching categories, searching, or expanding and collapsing groups. Integrate new settings into the existing structure and search.
+- Keep each independently saved configuration and its save/status/error controls inside a visibly bounded group. Do not place a page-level-looking Save button between independent forms.
 - Optional modules own their behavior and presentation preferences through their settings contributions and shared assistant-accessible services; keep host configuration limited to generic workspace concerns.
 
 # Product principles

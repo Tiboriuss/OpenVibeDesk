@@ -25,6 +25,8 @@ Each Mail account contains a coherent **Konto & Posteingang · IMAP** group, an 
 
 Module-contributed category icons can show a small attention dot, shared with the OVD-Bar. A new hint breathes briefly, then remains static; reduced motion disables breathing. Visiting a concrete module category acknowledges its currently captured hints, while later arrivals remain. See the [module attention contract](../CONTRIBUTING.md#module-attention-indicators).
 
+Under **KI & Verbindung**, **Chat** and **Spracheingabe** are peer expandable groups with independent forms. Chat contains the connection, models and workspace-access sections, followed by **Chat-Einstellungen speichern** inside its border. Speech settings have their own save action inside their group. Saving one preserves pending changes in the other. Search and Assistant preparation reveal the relevant group; ordinary category navigation and collapse keep unsaved inputs intact.
+
 ## Search and extensibility
 
 - Search across categories, including closed groups. Use labels, descriptions, IDs and common synonyms.
@@ -61,7 +63,7 @@ The same allocation covers history, reference and memory snapshots, tool schemas
 ## Saving, recovery and security
 
 - Apply simple preferences immediately, with errors shown and the actual saved state restored on failure.
-- Save credentials and related connection settings explicitly as a coherent operation.
+- Save credentials and related connection settings explicitly as a coherent operation. Keep each independent form’s save controls and feedback inside its visible group boundary; never place a category-wide-looking Save button between independent groups.
 - Preserve unsaved input across category navigation, search and group collapse. Do not silently lose it when closing the window. Make dirty, busy, saved and failed states understandable.
 - Where useful, let users reset an individual changed value or group to its default.
 - Keep secrets in the local encrypted credential store. Do not include them in summaries, search data or model context, and do not read stored values back into ordinary forms.

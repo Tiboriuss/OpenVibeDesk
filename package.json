@@ -31,6 +31,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "sql.js": "^1.15.2",
+    "ws": "^8.23.0",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -40,6 +41,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/sql.js": "^1.4.9",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^5.1.0",
     "electron": "^45.1.0",
     "electron-builder": "^26.18.0",
@@ -80,7 +82,10 @@
       "icon": "assets/brand/app-icon.icns",
       "identity": "-",
       "hardenedRuntime": false,
-      "notarize": false
+      "notarize": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "OpenVibeDesk verwendet das Mikrofon für deine Spracheingabe im Chat."
+      }
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "forceCodeSigning": false,

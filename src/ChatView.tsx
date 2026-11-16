@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Bot, BookOpen, Brain, Check, ChevronRight, CircleAlert, CircleHelp, Copy, FolderClock, Link2, Mail, Pencil, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
+import { SpeechInput, SpeechPreview, type SpeechPreviewState } from './SpeechInput';
 import type { ChatMessage, EmailReferenceSummary, RendererWorkspaceState } from '../shared/model';
 import type { OperationRunSummary } from '../shared/operations';
 import type { ChatGptStatus } from '../shared/chatgpt';
@@ -143,6 +144,35 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
   const [usageError, setUsageError] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [speechBusy, setSpeechBusy] = useState(false);
+  const [speechPreview, setSpeechPreview] = useState<SpeechPreviewState>({ status: 'idle', mode: 'live', text: '', elapsed: 0 });
+  const speechAnchor = useRef<{ position: number; text: string } | undefined>(undefined);
+  const currentPrompt = useRef(prompt); currentPrompt.current = prompt;
+  // Keep the dictation insertion point beside the user's edits, without
+  // replacing a selection or allowing partial transcripts to rewrite the draft.
+  function adjustSpeechAnchor(next: string) {
+    const anchor = speechAnchor.current;
+    if (!anchor || anchor.text === next) return;
+    const previous = anchor.text;
+    let start = 0;
+    while (start < previous.length && start < next.length && previous[start] === next[start]) start++;
+    let oldEnd = previous.length, newEnd = next.length;
+    while (oldEnd > start && newEnd > start && previous[oldEnd - 1] === next[newEnd - 1]) { oldEnd--; newEnd--; }
+    if (anchor.position >= start) anchor.position = anchor.position > oldEnd ? anchor.position + next.length - previous.length : newEnd;
+    anchor.text = next;
+  }
+  function startDictation() { speechAnchor.current = { position: input.current?.selectionStart ?? currentPrompt.current.length, text: currentPrompt.current }; }
+  function insertDictation(text: string) {
+    const draft = currentPrompt.current;
+    adjustSpeechAnchor(draft);
+    const position = Math.min(draft.length, speechAnchor.current?.position ?? input.current?.selectionStart ?? draft.length);
+    const before = draft.slice(0, position), after = draft.slice(position);
+    const insertion = `${before && !/\s$/.test(before) ? ' ' : ''}${text}${after && !/^\s/.test(after) ? ' ' : ''}`;
+    const next = `${before}${insertion}${after}`;
+    speechAnchor.current = undefined;
+    currentPrompt.current = next; setPrompt(next);
+    requestAnimationFrame(() => { input.current?.focus({ preventScroll: true }); input.current?.setSelectionRange(position + insertion.length, position + insertion.length); });
+  }
   const historyAnchor = useRef<{ sessionId: string; start: number; top: number; height: number } | undefined>(undefined);
   async function loadEarlier() {
     if (historyLoading || !list.current) return;
@@ -250,7 +280,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
     } catch { setCopyError('Kopieren war nicht möglich. Du kannst den Text markieren und selbst kopieren.'); }
   }
   function hasPreviousUser(id: string): boolean { const index = state.chat.findIndex(message => message.id === id); return index >= 0 && (!!state.presentation?.chatHasEarlierUser || state.chat.slice(Math.max(0, (active?.historyStart ?? 0) - (state.presentation?.chatStart ?? 0)), index).some(message => message.role === 'user')); }
-  function send() { if (!sending && !emailLoading && !referencesLoading && prompt.trim()) { scrollToLatest(); onSend(); } }
+  function send() { if (!sending && !speechBusy && !emailLoading && !referencesLoading && prompt.trim()) { scrollToLatest(); onSend(); } }
 
   return <div className={`modern-chat${dragging ? ' is-dragging' : ''}`} onDragEnter={event => { if (isReferenceDrag(event.dataTransfer)) { event.preventDefault(); dragDepth.current++; setDragging(true); } }} onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }} onDragOver={event => { if (acceptsDrop(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }} onDrop={drop}>
     <div className="modern-chat-head"><div className="assistant-avatar"><Bot size={17}/></div><div className="modern-chat-title"><strong title={active?.title}>{active?.title ?? 'Neuer Chat'}</strong><small title={model}>{model || 'Modell in den Einstellungen auswählen'}</small></div><button type="button" title={`Neuer Chat (${shortcut}N)`} aria-label="Neuer Chat" onClick={onNew}><Plus size={18}/></button><button type="button" title={`Chats verwalten (${shortcut}F)`} aria-label="Chats verwalten" onClick={onSessions}><FolderClock size={18}/></button></div>
@@ -299,8 +329,9 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       {(error || copyError || usageError) && <div className="chat-error" role="alert">{error || copyError || usageError}</div>}
       {state.ai?.provider === 'chatgpt' && chatGptStatus?.authenticated && chatGptStatus.planAccess && <div className="chatgpt-plan-status"><span>Verwendet ChatGPT-Tarif</span><button type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button></div>}
       <div className="modern-composer">
-        <textarea ref={input} rows={1} aria-label="Nachricht" aria-describedby="composer-help" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
-        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title={`Denktiefe: ${{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}`}><Brain size={13} aria-hidden="true"/><span>Denktiefe: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span></span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" title="Senden (Enter)" aria-label="Nachricht senden" disabled={emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
+        <SpeechPreview value={speechPreview}/>
+        <textarea ref={input} rows={1} aria-label="Nachricht" aria-describedby="composer-help" value={prompt} onChange={event => { adjustSpeechAnchor(event.target.value); setPrompt(event.target.value); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
+        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title={`Denktiefe: ${{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}`}><Brain size={13} aria-hidden="true"/><span>Denktiefe: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span></span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><SpeechInput key={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} scope={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} disabled={sending} onStart={startDictation} onTranscript={insertDictation} onBusyChange={setSpeechBusy} onPreview={setSpeechPreview}/><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" title="Senden (Enter)" aria-label="Nachricht senden" disabled={speechBusy || emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
       </div>
       <p id="composer-help" className="sr-only">Referenzen hierher ziehen. Enter sendet, Umschalt + Enter fügt eine neue Zeile ein.</p>
     </div>

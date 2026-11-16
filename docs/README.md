@@ -8,6 +8,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 
 - **Use OVD:** [Install and set up the app](getting-started.md), then connect your AI provider and mail account.
 - **Connect AI:** Follow [AI providers](ai-providers.md) for Azure Foundry, OpenAI, compatible endpoints or direct ChatGPT sign-in.
+- **Dictate into Chat:** Configure [speech input](speech-input.md) separately for Live or After-recording transcription.
 - **Report a connection problem:** Enable and export a local [diagnostic report](diagnostics.md) on the affected computer.
 - **Add functionality:** [Install modules from repositories](module-repositories.md), including private company sources. The separate [OpenVibeDesk-Modules repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) publishes the downloadable catalog.
 - **Build a company integration:** Follow the [module contract](../CONTRIBUTING.md#building-modules), adapt the [Notes example](../examples/notes-module/README.md), and [publish a module package](module-repositories.md#publish-a-module).
@@ -22,6 +23,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | [Changelog](../CHANGELOG.md) | Changes in v0.1.9, verification scope, update compatibility and remaining work. |
 | [OVD-Bar](ovd-bar.md) | Floating launcher, orientation, sizing, transparency, placement, idle collapse and Assistant control. |
 | [AI providers](ai-providers.md) | OpenAI Chat Completions/Responses, Azure endpoints and deployments, compatible local services and direct ChatGPT OAuth/plan usage. |
+| [Speech input](speech-input.md) | Separate speech providers and credentials, Live or After-recording transcription, microphone controls, limits and Assistant configuration. |
 | [Diagnostics](diagnostics.md) | Switchable local provider logs, privacy boundaries, cross-computer support reports and Assistant controls. |
 | [Releases and installers](releases.md) | macOS/Windows packages without trusted publisher certificates, versioning, integrity checks, manual upgrades, and remaining validation. |
 | [Contributing](../CONTRIBUTING.md) | Development, practical validation, and the contract for custom modules. |

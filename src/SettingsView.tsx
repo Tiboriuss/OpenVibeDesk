@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X } from 'lucide-react';
+import { SpeechSettings } from './SpeechSettings';
 import { AiSettings } from './AiSettings';
 import { AgentSettings } from './AgentSettings';
 import { DiagnosticsSettings } from './DiagnosticsSettings';
@@ -55,7 +56,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   useEffect(() => {
     const unsubscribeOpen = window.workspace.onShowMailSettings(() => { setActive('mail'); setSearch(''); });
     const unsubscribePrepare = window.workspace.onPrepareSettings(request => {
-      if (!request || !['mail', 'ai', 'agent', 'modules'].includes(request.category) || !['account', 'smtp', 'ai', 'agent', 'module-repository'].includes(request.kind) || !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return;
+      if (!request || !['mail', 'ai', 'agent', 'modules'].includes(request.category) || !['account', 'smtp', 'ai', 'agent', 'speech', 'module-repository'].includes(request.kind) || !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return;
       setActive(request.category); setSearch(''); setPreparation({ ...request, token: ++preparationToken.current });
     });
     const unsubscribeNavigate = window.workspace.onNavigateSettings(request => {
@@ -154,7 +155,8 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>Keine Einstellung gefunden</strong><span>Versuche einen anderen Suchbegriff.</span></div>}
       <section hidden={!visible('ai')} aria-label="KI & Verbindung">
         {searching && <h3 className="settings-result-category">KI & Verbindung</h3>}
-        <AiSettings preparation={preparation?.kind === 'ai' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('ai'); setSearch(''); }} />
+        <div hidden={searching && !settingsEntries.some(entry => entry.category === 'ai' && entry.id !== 'ai.speech' && matchesSettingsEntry(entry, search))}><AiSettings preparation={preparation?.kind === 'ai' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('ai'); setSearch(''); }} /></div>
+        <SpeechSettings preparation={preparation?.kind === 'speech' ? preparation : undefined} searchQuery={search} />
       </section>
       <section hidden={!visible('agent')} aria-label="Agent">
         {searching && <h3 className="settings-result-category">Agent</h3>}

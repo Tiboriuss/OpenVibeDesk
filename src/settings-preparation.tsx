@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { agentSettingsPatchSchema, defaultAgentSettings } from '../shared/agent-settings';
 import { MAIL_POLL_INTERVALS } from '../shared/mail-preferences';
+import { speechSettingsPatchSchema } from '../shared/speech';
 import { aiConnectionFields } from '../shared/ai-providers';
 import type { SettingsPreparation } from '../shared/model';
 import './settings-preparation.css';
@@ -8,10 +9,14 @@ import './settings-preparation.css';
 export type SettingsSuggestion = SettingsPreparation & { token: number };
 type SafeValue = string | number | boolean;
 const stringLimits: Record<string, number> = { name: 120, senderName: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
-const labels: Record<string, string> = { title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', provider: 'KI-Anbieter', protocol: 'Schnittstelle', authMode: 'Anmeldeart', apiVersion: 'Azure API-Version', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell / Deployment', simpleModel: 'Einfaches Modell / Deployment', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', contextTokenBudget: 'Gesamtkontext (Tokens, geschätzt)', outputTokenReserve: 'Antwortreserve (Tokens)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
+const labels: Record<string, string> = { enabled: 'Aktiviert', mode: 'Transkription', endpoint: 'Transkriptions-URL', model: 'Modell / Deployment', language: 'Sprache', microphoneId: 'Mikrofon', realtimeProtocol: 'Realtime-Protokoll', title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', provider: 'KI-Anbieter', protocol: 'Schnittstelle', authMode: 'Anmeldeart', apiVersion: 'Azure API-Version', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell / Deployment', simpleModel: 'Einfaches Modell / Deployment', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', contextTokenBudget: 'Gesamtkontext (Tokens, geschätzt)', outputTokenReserve: 'Antwortreserve (Tokens)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
 
 /** Only ordinary configuration fields reach the forms; secret fields are never copied. */
 export function preparationValues(suggestion: SettingsSuggestion): Record<string, SafeValue> {
+  if (suggestion.kind === 'speech') {
+    const parsed = speechSettingsPatchSchema.safeParse(suggestion.values);
+    return parsed.success ? parsed.data : {};
+  }
   if (suggestion.kind === 'module-repository') {
     const result: Record<string, SafeValue> = {};
     for (const [key, max] of Object.entries({ sourceId: 36, title: 120, url: 2048 })) {

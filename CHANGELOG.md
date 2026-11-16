@@ -2,6 +2,29 @@
 
 [Repository overview](README.md) · [Documentation](docs/README.md) · [Installer and update guide](docs/releases.md)
 
+## v0.1.10 — 16 November 2026
+
+This alpha update adds separately configured speech input to the existing Assistant and groups Chat and speech settings into independently saved sections.
+
+### Speech input
+
+- Dictate live through a Realtime transcription endpoint or upload one recorded WAV after Stop. Speech has its own provider, endpoint, model/deployment, authentication, language and microphone settings. OpenAI, OpenAI-compatible, Azure and DeepSeek presets describe their supported transports; a chat-compatible API alone does not provide transcription. ChatGPT sign-in does not currently include transcription API access.
+- Recording begins as soon as microphone access is available, while the live provider connection is prepared. A bounded queue preserves the beginning and sends it in order once the provider is ready. Stop works while connecting, and Cancel discards queued audio.
+- A failed recording can be retained in memory for an explicit transcription retry without reopening the microphone. Audio is never replayed automatically. New recordings, dismissal, settings/session changes and window closure discard retained audio.
+- Transcription appears as a preview and is inserted at the tracked position in the editable composer. Existing text and references remain available; dictation never automatically sends a message.
+- Capture is limited to two minutes, with a 20-second pending connection buffer. Microphone access is restricted to the trusted Chat window during a user-initiated recording. The Assistant can inspect speech settings and prepare changes through the existing lazy tool-discovery flow; credentials remain in the local vault.
+
+### Settings and documentation
+
+- **KI & Verbindung** now contains peer **Chat** and **Spracheingabe** groups. Each owns its Save button, status and errors; edits survive category changes, search and collapsing a group.
+- Added the [speech input guide](docs/speech-input.md) and updated setup, provider, architecture and settings documentation.
+
+### Verification and compatibility
+
+TypeScript and the production build passed. Practical checks used an isolated Electron app, synthetic microphone audio and local HTTP/WebSocket providers. They covered the interface and Assistant configuration path, independent saves, narrow layouts, permissions and restart. Ten focused connection-buffer checks verified byte-for-byte audio order, Stop/Cancel before readiness, settings/session/window cancellation, explicit retry without a new microphone, timeout handling and a single WAV upload after Stop. Temporary service checks also covered the recording/queue limits and delayed microphone permission.
+
+Actual remote-provider accounts and physical Windows/Intel Mac speech workflows were not exercised. Installer builds run on the release workflow's native runners. App identity and profile paths remain stable; install over the existing version. Mac apps remain ad-hoc signed without Developer ID/notarization, and Windows installers remain unsigned. See the [release](https://github.com/Tiboriuss/OpenVibeDesk/releases/tag/v0.1.10) for build results and downloads.
+
 ## v0.1.9 — 11 November 2026
 
 This alpha update matures the existing workspace and introduces the configurable OVD-Bar. It adds no bundled product modules. Earlier release notes remain on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases).

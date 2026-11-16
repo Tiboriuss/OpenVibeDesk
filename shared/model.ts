@@ -38,11 +38,25 @@ export interface FileListing { path: string; entries: FileEntry[]; }
 export interface SelectedFile { path: string; name: string; size: number; }
 export type WindowControl = 'minimize' | 'toggleMaximize' | 'close';
 export interface SettingsNavigation { category?: string; search?: string; }
-export interface SettingsPreparation { category: 'mail' | 'ai' | 'agent' | 'modules'; values: Record<string, unknown>; accountId?: string; kind: 'account' | 'smtp' | 'ai' | 'agent' | 'module-repository'; }
+export interface SettingsPreparation { category: 'mail' | 'ai' | 'agent' | 'modules'; values: Record<string, unknown>; accountId?: string; kind: 'account' | 'smtp' | 'ai' | 'agent' | 'speech' | 'module-repository'; }
 export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachmentsOnly?: boolean; }
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  reportSpeechMicrophones(devices: { id: string; label: string }[]): Promise<void>;
+  getSpeechMicrophones(): Promise<{ id: string; label: string }[]>;
+  onSpeechMicrophones(callback: (devices: { id: string; label: string }[]) => void): () => void;
+  getSpeechSettings(): Promise<import('./speech').SpeechPublicSettings>;
+  saveSpeechSettings(input: import('./speech').SpeechSettingsInput): Promise<import('./speech').SpeechPublicSettings>;
+  setSpeechSettingsStatus(status: 'clean' | 'dirty' | 'busy'): void;
+  onSpeechSettings(callback: (settings: import('./speech').SpeechPublicSettings) => void): () => void;
+  openSpeechSettings(): Promise<void>;
+  startSpeech(): Promise<import('./speech').SpeechSessionStart>;
+  appendSpeech(id: string, pcm: ArrayBuffer): Promise<void>;
+  stopSpeech(id: string): Promise<void>;
+  retrySpeech(id: string): Promise<import('./speech').SpeechSessionStart>;
+  cancelSpeech(id?: string): Promise<void>;
+  onSpeechEvent(callback: (event: import('./speech').SpeechSessionEvent) => void): () => void;
   showBarMenu(): Promise<void>;
   revealBar(): Promise<void>;
   setBarInteraction(value: { hovered: boolean; focused: boolean }): void;

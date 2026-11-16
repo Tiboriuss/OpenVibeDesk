@@ -1,6 +1,7 @@
 import { chatSessionListRequestSchema } from '../shared/sessions';
 import type { BrowserWindow } from 'electron';
 import { z } from 'zod';
+import { speechSettingsPatchSchema } from '../shared/speech';
 import { agentSettingsPatchSchema } from '../shared/agent-settings';
 import { timeZoneSchema, timeRangeSchema, timeDifferenceSchema } from '../shared/time';
 import { calculationSchema } from '../shared/calculation';
@@ -69,6 +70,8 @@ export const capabilitySchemas = {
   'modules.repository_install': repositoryInstallInputSchema,
   'settings.agent_get': z.object({}).strict(),
   'settings.agent_save': agentSettingsPatchSchema,
+  'settings.speech_get': z.object({}).strict(),
+  'settings.speech_save': speechSettingsPatchSchema,
   'settings.ai_get': z.object({}).strict(),
   'settings.ai_save': z.object({ ...aiConnectionFields, baseUrl: z.string().trim().min(1).max(2048).optional(), smartModel: z.string().max(200).optional(), simpleModel: z.string().max(200).optional(), smartThinking: thinking.optional(), simpleThinking: thinking.optional(), workspaceTools: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional() }).strict(),
   'settings.ai_models': z.object({}).strict(),
@@ -133,6 +136,8 @@ const metadata: Record<CoreCapabilityName, CapabilityMetadata> = {
   'modules.repository_install': { label: 'Modul installieren oder aktualisieren', description: 'Lade die konkrete sourceId, moduleId und version aus dem Katalog und installiere nach Bestätigung. Geprüfte Dateien ersetzen nur eine unveränderte Installation derselben Quelle; Modul-Daten bleiben erhalten. Anschließend separate ausdrückliche Freigabe des Programmcodes über modules.set_enabled nötig, auch bei Ohne Abfragen. Kein automatischer Modulstart.', needsUserInteraction: true },
   'settings.agent_get': { label: 'Agent-Einstellungen anzeigen', description: 'Lies die gespeicherten Grenzen für Werkzeugrunden, Aufrufe, Laufzeit, Anbieterwartezeit, aktive Werkzeuge, Schemas und Chatverlauf sowie Transportwiederholungen. Enthält das lokal geschätzte Gesamtkontextbudget und die Antwortreserve; keine exakte Anbieter-Tokenzählung.', needsUserInteraction: false },
   'settings.agent_save': { label: 'Agent-Einstellungen vorbereiten', description: 'Bereite Änderungen an Agentengrenzen und Kontextbudget im Einstellungsformular vor. Der Nutzer prüft und speichert; der Assistent erhöht seine eigenen Laufzeitgrenzen nicht selbst. Neue Werte gelten für folgende Aufträge.', needsUserInteraction: true },
+  'settings.speech_get': { label: 'Spracheingabe anzeigen', description: 'Lies die getrennte Transkriptionskonfiguration: Anbieter, Live oder nach der Aufnahme, Endpunkt, Modell, Sprache und Mikrofon. Keine Schlüssel oder Aufnahmen. Die ChatGPT-Anmeldung ist keine Audio-API-Anmeldung.', needsUserInteraction: false },
+  'settings.speech_save': { label: 'Spracheingabe vorbereiten', description: 'Bereite die separate Spracheingabe im Einstellungsformular vor. Der Nutzer ergänzt den Schlüssel und speichert. OpenAI-kompatible und Azure-Endpunkte können Live oder nach der Aufnahme anbieten; DeepSeek ASR nur nach der Aufnahme. Endpunkt vollständig angeben (wss für Live, https für Audio-Upload). Startet keine Mikrofonaufnahme.', needsUserInteraction: true },
   'settings.ai_get': { label: 'KI-Konfiguration anzeigen', description: 'Lies öffentliche KI-Konfiguration, Modelle und Zugriffsstatus. API-Schlüssel werden niemals ausgegeben.', needsUserInteraction: false },
   'settings.ai_save': { label: 'KI-Konfiguration ändern', description: 'Bereite öffentliche KI-Einstellungen vor. Änderungen an Anbieter oder Berechtigungen erfordern sichtbare Nutzerbestätigung. Schlüssel werden ausschließlich in der geschützten Oberfläche eingegeben.', needsUserInteraction: true },
   'settings.ai_models': { label: 'KI-Modelle laden', description: 'Lade die Modellliste des konfigurierten KI-Anbieters.', needsUserInteraction: false },

@@ -19,7 +19,9 @@ export const settingsCategories = [
   { id: 'modules', title: 'Module', description: 'Zusatzmodule und ihre verfügbaren Funktionen', order: 1000 }
 ] as const satisfies readonly (SettingsCategory & { id: CoreSettingsCategoryId })[];
 
+export const speechSettingsEntry: SettingsEntry = { id: 'ai.speech', category: 'ai', title: 'Spracheingabe', description: 'Mikrofon, Transkription und separate Audio-Verbindung', keywords: 'sprache spracheingabe diktat diktieren mikrofon microphone audio voice speech transcription transkription live realtime aufnahme nach aufnahme openai kompatibel azure foundry deepseek asr whisper', apply: 'save' };
 export const settingsEntries = [
+  speechSettingsEntry,
   { id: 'ai.connection', category: 'ai', title: 'Verbindung', description: 'Anbieter, Schnittstelle und Anmeldung', keywords: 'ki ai verbindung anbieter provider endpoint endpunkt url basis api schlüssel key zugang passwort openai azure foundry microsoft lokal gateway ollama lm studio auth authentifizierung bearer api-key schnittstelle responses chat completions version deployment chatgpt abo subscription oauth browser pkce anmelden abmelden konto account nutzung usage plan', apply: 'save' },
   { id: 'ai.models', category: 'ai', title: 'Modelle', description: 'Modell- und Deployment-Auswahl mit Thinking', keywords: 'ki ai modell modelle intelligent einfach smart simple thinking reasoning denken stufe laden aktualisieren deployment azure foundry responses chatgpt', apply: 'save' },
   { id: 'ai.workspace', category: 'ai', title: 'Workspace-Zugriff', description: 'Selbstständige Recherche und Bestätigungen für Aktionen', keywords: 'ki ai werkzeuge tools tool calling workspace zugriff assistent suchen lesen öffnen recherchieren selbstständig autonom ohne abfragen nachfragen bestätigung bestätigungen dialog automatisch senden versand kontoentfernung rückfragen confirmation', defaultValue: true, apply: 'save' },
