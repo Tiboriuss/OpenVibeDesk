@@ -3,6 +3,7 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
+import { filesText } from '../files-locale';
 import { fileListRequestSchema, fileReadRequestSchema, type FileEntry, type FileListingPage, type FileListRequest, type FileReadRequest, type FileReadResult } from '../../../shared/files';
 
 const PAGE_LIMIT = 28_000;
@@ -160,7 +161,7 @@ export class FilesService {
       if (offset >= filtered.length) throw new Error('Ungültige Ordnerposition. Bitte ohne Cursor neu beginnen.');
     }
     const root = path.parse(directory).root, parent = path.dirname(directory);
-    const result: FileListingPage = { path: directory, root, ...(parent !== directory ? { parentPath: parent } : {}), entries: [], total: filtered.length, hasMore: false, complete: false, revision, observedAt: new Date().toISOString(), ...(skipped ? { warning: `${skipped} nicht zugängliche Einträge wurden ausgelassen.` } : {}) };
+    const result: FileListingPage = { path: directory, root, ...(parent !== directory ? { parentPath: parent } : {}), entries: [], total: filtered.length, hasMore: false, complete: false, revision, observedAt: new Date().toISOString(), ...(skipped ? { warning: filesText.de.skippedEntries(skipped), skippedEntries: skipped } : {}) };
     let next = offset;
     for (; next < filtered.length && result.entries.length < (request.limit ?? 50); next++) {
       const candidate = { ...result, entries: [...result.entries, filtered[next]], hasMore: true, nextCursor: makeCursor([1, 'list', revision, next + 1]) };
@@ -187,9 +188,9 @@ export class FilesService {
       const currentPath = await this.resolve(canonical, signal), currentStat = await fs.stat(currentPath);
       if (currentPath !== canonical || stamp(currentStat) !== stamp(stat)) throw new Error('Die Datei wurde während des Öffnens geändert. Bitte erneut versuchen.');
       const name = path.basename(canonical), permittedText = textExtensions.has(path.extname(name).toLocaleLowerCase()) || textNames.has(name.toLocaleLowerCase());
-      let reason = !permittedText ? 'Für dieses Dateiformat ist noch kein Textleser verfügbar; nur Metadaten werden bereitgestellt.' : stat.size > TEXT_LIMIT ? 'Diese Textdatei ist größer als 2 MiB; nur Metadaten werden bereitgestellt.' : '';
+      let reasonCode: FileReadResult['reasonCode'] = !permittedText ? 'unsupportedFormat' : stat.size > TEXT_LIMIT ? 'tooLarge' : undefined;
       let text: string | undefined, bytes: Buffer | undefined;
-      if (!reason) {
+      if (!reasonCode) {
         const buffer = Buffer.alloc(TEXT_LIMIT + 1);
         let length = 0;
         while (length < buffer.length) {
@@ -202,13 +203,13 @@ export class FilesService {
         signal?.throwIfAborted();
         if (bytes.length > TEXT_LIMIT || stamp(await handle.stat()) !== stamp(stat)) throw new Error('Die Datei wurde beim Lesen geändert. Bitte erneut versuchen.');
         try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (text.includes('\0')) throw new Error('binary'); }
-        catch { reason = 'Die Datei enthält kein unterstütztes UTF-8-Textformat; nur Metadaten werden bereitgestellt.'; }
+        catch { reasonCode = 'unsupportedEncoding'; }
       }
       const revision = digest(`${canonical}\0${stamp(stat)}\0${bytes ? digest(bytes) : ''}`);
-      const base: FileReadResult = { id: request.id, name, path: canonical, size: stat.size, modifiedAt: stat.mtime.toISOString(), readable: text !== undefined && !reason, format: text !== undefined && !reason ? 'text' : 'metadata_only', textOffset: 0, textEnd: 0, textLength: text?.length ?? 0, revision, hasMore: false, complete: true, observedAt: new Date().toISOString() };
-      if (reason || text === undefined) {
+      const base: FileReadResult = { id: request.id, name, path: canonical, size: stat.size, modifiedAt: stat.mtime.toISOString(), readable: text !== undefined && !reasonCode, format: text !== undefined && !reasonCode ? 'text' : 'metadata_only', textOffset: 0, textEnd: 0, textLength: text?.length ?? 0, revision, hasMore: false, complete: true, observedAt: new Date().toISOString() };
+      if (reasonCode || text === undefined) {
         if (request.cursor) throw new Error('Die Datei ist nicht mehr als Text lesbar. Bitte ohne Cursor erneut beginnen.');
-        return { ...base, reason };
+        return { ...base, ...(reasonCode ? { reasonCode, reason: filesText.de[reasonCode] } : {}) };
       }
       let offset = 0;
       if (request.cursor) {

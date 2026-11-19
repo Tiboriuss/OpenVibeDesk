@@ -1,3 +1,5 @@
+import { ProviderDisplayError, providerErrorText } from './provider-errors';
+import { chatHostText } from '../shared/chat-host-text';
 import { mailSourceLocatorSchema } from '../shared/mail-source';
 import { chatRequestEvent, chatFinishedEvent } from './chat-events';
 import type { ModuleEvent, ModuleEventPublication } from '../shared/module-events';
@@ -8,7 +10,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { applyUiAction, initialState, uiActionSchema } from '../shared/actions';
 import { getWorkspaceStoreFault, saveState } from './store';
-import { resolveUiLocale, type UiLocale } from '../shared/locale';
+import { defaultUiLocale, resolveUiLocale, type UiLocale } from '../shared/locale';
 import { workspaceSaveFailureText, type WorkspaceSaveErrorCode, type WorkspaceSaveStatus } from '../shared/workspace-save';
 import { nativeText } from './native-locale';
 import { openStartupWorkspace } from './workspace-startup';
@@ -63,11 +65,16 @@ const appIconPath = path.join(app.getAppPath(), 'assets', 'brand', 'app-icon.png
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
 let currentState: WorkspaceState;
-let systemLocale: UiLocale = 'de';
+let systemLocale: UiLocale = defaultUiLocale;
 function uiLocale(): UiLocale {
   const preferred = currentState?.settings.language;
-  return preferred === 'en' || preferred === 'de' ? preferred : systemLocale;
+  return preferred === 'system' ? systemLocale : preferred ?? defaultUiLocale;
 }
+function localizeModelListError(error: unknown): never {
+  if (error instanceof ProviderDisplayError) throw new Error(error.display(uiLocale()));
+  throw error;
+}
+function chatText() { return chatHostText[uiLocale()]; }
 function native() { return nativeText[uiLocale()]; }
 function presentSaveStatus(status: WorkspaceSaveStatus): WorkspaceSaveStatus {
   return status.errorCode ? { ...status, error: workspaceSaveFailureText(uiLocale(), status.errorCode) } : status;
@@ -147,7 +154,7 @@ async function prepareChatClose(win = panels.get('chat')): Promise<boolean> {
       if (receipt === token && event.sender === owner && event.senderFrame === owner.mainFrame) finish(value === true && !chatComposerBlocked);
     };
     const onDestroyed = () => finish(true);
-    const timer = setTimeout(() => finish(false, new Error('Der Chat hat die ausstehenden Entwurfsänderungen noch nicht bestätigt.')), 10_000);
+    const timer = setTimeout(() => finish(false, new Error(chatText().draftAck)), 10_000);
     ipcMain.on('chat:composer:close-ready', onReady);
     owner.once('destroyed', onDestroyed);
     owner.send('chat:composer:prepare-close', token);
@@ -168,7 +175,7 @@ function forkedMessage(sessionId: string): ChatMessage | undefined {
 }
 function getChatComposer(rawId: unknown): ChatComposerSnapshot {
   const sessionId = composerSessionId.parse(rawId);
-  if (!currentState.sessions.some(session => session.id === sessionId)) throw new Error('Chat nicht gefunden.');
+  if (!currentState.sessions.some(session => session.id === sessionId)) throw new Error(chatText().chatMissing);
   const stored = storedChatComposer(currentState, sessionId);
   return { sessionId, revision: stored?.revision ?? 0, content: stored?.content ?? { text: '' }, ...(stored?.legacyReceipt ? { legacyReceipt: stored.legacyReceipt } : {}) };
 }
@@ -211,10 +218,10 @@ function changeSelectedContext(sessionId: string, change: (content: ChatComposer
   const content = change(snapshot.content);
   if (content === snapshot.content) return;
   const result = setChatComposer({ sessionId, expectedRevision: snapshot.revision, content });
-  if (!result.applied) throw new Error('Der Chatentwurf wird gerade gesendet. Bitte erneut versuchen.');
+  if (!result.applied) throw new Error(chatText().draftSending);
 }
 const moduleReferences = new ModuleReferenceRegistry((id, type) => !!moduleHost?.isReady(id) && !!moduleHost.registry.getModule(id)?.manifest?.contributions.referenceTypes?.some(item => item.id === type),
-  (input, context) => { if (!moduleHost) throw new Error('Die Modulverwaltung ist noch nicht bereit.'); return moduleHost.resolveReference(input, context); });
+  (input, context) => { if (!moduleHost) throw new Error(chatText().moduleHostStarting); return moduleHost.resolveReference(input, context); });
 let activeStream: { controller: AbortController; flush(): void; sessionId: string; assistantId: string; provider?: AiConfig['provider'] } | undefined;
 
 function verifySender(event: Electron.IpcMainInvokeEvent): void {
@@ -243,14 +250,14 @@ function savedEmailReference(id: string, sessionId = currentState.activeSessionI
   return undefined;
 }
 function validateEmailReferenceId(id: unknown): string {
-  if (typeof id !== 'string' || !id || id.length > 128) throw new Error('Ungültige Mailreferenz.');
+  if (typeof id !== 'string' || !id || id.length > 128) throw new Error(chatText().mailReferenceInvalid);
   return id;
 }
 function emailReferenceSummary(rawId: unknown): EmailReferenceSummary {
   const id = validateEmailReferenceId(rawId);
   const live = moduleHost?.isReady('ovd-mail') ? mailModule?.getLiveMail(id) : undefined;
   const mail = live ? mailModule!.externalMail(live) : savedEmailReference(id) ?? currentState.mails.find(item => item.id === id);
-  if (!mail) throw new Error('Diese Mail ist nicht mehr geladen. Bitte im Postfach aktualisieren und erneut in den Chat ziehen.');
+  if (!mail) throw new Error(chatText().mailReferenceUnloaded);
   return { id, subject: mail.subject.slice(0, 1000), from: mail.from.slice(0, 500), ...(mail.accountName ? { accountName: mail.accountName.slice(0, 200) } : {}) };
 }
 /** Capture the selected mail as bounded context for this message. */
@@ -266,7 +273,7 @@ async function snapshotEmailReference(rawId: unknown, sessionId: string, signal:
   if (saved) return saved;
   const legacy = currentState.mails.find(item => item.id === id);
   if (legacy) return boundedEmailReference(legacy);
-  throw new Error('Diese Mail ist nicht mehr geladen. Bitte im Postfach aktualisieren und erneut in den Chat ziehen.');
+  throw new Error(chatText().mailReferenceUnloaded);
 }
 function savedModuleReference(input: ModuleReferenceInput, sessionId = currentState.activeSessionId): ModuleReference | undefined {
   const candidates = [
@@ -314,7 +321,7 @@ async function selectModuleReference(raw: ModuleReferenceSummary): Promise<void>
   changeSelectedContext(sessionId, content => {
     const references = content.references ?? [];
     if (references.some(item => sameModuleReference(item, summary))) return content;
-    if (references.length >= MAX_MODULE_REFERENCES) throw new Error('Bitte zuerst eine Referenz aus dem Chatentwurf entfernen.');
+    if (references.length >= MAX_MODULE_REFERENCES) throw new Error(chatText().removeReference);
     return { ...content, references: [...references, summary] };
   });
 }
@@ -588,12 +595,12 @@ async function controlPanel(kind: WindowKind, action: 'minimize' | 'toggleMaximi
   if (action === 'minimize') win.minimize();
   else if (action === 'toggleMaximize') { if (win.isMaximized()) win.unmaximize(); else win.maximize(); }
   else {
-    if (kind === 'chat' && !await prepareChatClose(win)) throw new Error('Bitte die ungesicherten Änderungen im Chat klären.');
+    if (kind === 'chat' && !await prepareChatClose(win)) throw new Error(chatText().composerUnsaved);
     if (kind === 'draft') await mailModule?.flushDrafts();
     await checkpoints.flush();
     if (kind === 'draft') confirmedDraftCloses.add(win);
     if (kind === 'chat') {
-      if (chatComposerBlocked) throw new Error('Bitte die ungesicherten Änderungen im Chat klären.');
+      if (chatComposerBlocked) throw new Error(chatText().composerUnsaved);
       confirmedChatCloses.add(win);
     }
     if (!win.isDestroyed()) win.close();
@@ -601,16 +608,16 @@ async function controlPanel(kind: WindowKind, action: 'minimize' | 'toggleMaximi
   return { kind, action, closed: win.isDestroyed() };
 }
 function newWorkspaceChat(title?: string) {
-  const result = createSession(currentState);
-  commit(title ? renameSession(result.state, result.session.id, title) : result.state);
+  const result = createSession(currentState, undefined, uiLocale());
+  commit(title ? renameSession(result.state, result.session.id, title, uiLocale()) : result.state);
   return result.session.id;
 }
-function selectWorkspaceChat(id: string) { commit(selectSession(currentState, id)); }
-function renameWorkspaceChat(id: string, title: string) { commit(renameSession(currentState, id, title)); }
+function selectWorkspaceChat(id: string) { commit(selectSession(currentState, id, uiLocale())); }
+function renameWorkspaceChat(id: string, title: string) { commit(renameSession(currentState, id, title, uiLocale())); }
 function forkWorkspaceChat(id: string, replacementText?: string, fromAgent = false) {
-  if (chatBusy && !fromAgent) throw new Error('Bitte warte, bis die laufende Antwort beendet ist.');
+  if (chatBusy && !fromAgent) throw new Error(chatText().streaming);
   const state = fromAgent ? { ...currentState, sessions: currentState.sessions.map(item => item.id === currentState.activeSessionId ? { ...item, messages: item.messages.map(message => message.status === 'streaming' ? { ...message, status: 'cancelled' as const } : message) } : item) } : currentState;
-  const result = forkSession(state, id, replacementText);
+  const result = forkSession(state, id, replacementText, undefined, uiLocale());
   const next = fromAgent ? { ...currentState, sessions: [result.state.sessions[0], ...currentState.sessions], activeSessionId: result.result.sessionId, chat: result.state.sessions[0].messages } : result.state;
   const fork = result.result;
   const email = fork.emailReference ?? (fork.emailRef ? emailReferenceSummary(fork.emailRef) : undefined);
@@ -624,7 +631,7 @@ function forkWorkspaceChat(id: string, replacementText?: string, fromAgent = fal
 }
 async function referenceWorkspaceChat(id: string) {
   const target = currentState.activeSessionId;
-  snapshotSessionReference(currentState, id, target);
+  snapshotSessionReference(currentState, id, target, undefined, uiLocale());
   await openPanel('chat');
   changeSelectedContext(target, content => ({ ...content, sessionRefId: id }));
   return { sessionId: id, selectedAsContext: true };
@@ -684,7 +691,7 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('windows.control', ({ kind, action }) => controlPanel(kind, action));
   workspaceCapabilities.register('bar.get', () => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); return ovdBar.status(); });
   workspaceCapabilities.register('bar.move', async (args, context) => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); await context.validateOperation?.(); context.signal.throwIfAborted(); return ovdBar.move(args, context.signal); });
-  workspaceCapabilities.register('chats.list', ({ query, offset, limit, revision }) => { const page = listChatSessions(currentState, query, offset, limit ?? 20, revision); return { ...page, sessions: page.sessions.map(({ id, title, updatedAt, messageCount }) => ({ id, title, updatedAt, messageCount })) }; });
+  workspaceCapabilities.register('chats.list', ({ query, offset, limit, revision }) => { const page = listChatSessions(currentState, query, offset, limit ?? 20, revision, uiLocale()); return { ...page, sessions: page.sessions.map(({ id, title, updatedAt, messageCount }) => ({ id, title, updatedAt, messageCount })) }; });
   workspaceCapabilities.register('chats.read', args => readChatHistory(currentState, args));
   workspaceCapabilities.register('chats.read_draft', ({ sessionId, offset = 0, revision }) => {
     const draft = getChatComposer(sessionId);
@@ -701,27 +708,27 @@ function registerWorkspaceCapabilities(): void {
     context.signal.throwIfAborted();
     const draft = getChatComposer(sessionId);
     const result = setChatComposer({ sessionId, expectedRevision, content: { ...draft.content, text } });
-    if (!result.applied) throw new Error('Der Entwurf wurde inzwischen bearbeitet. Bitte die aktuelle Fassung lesen.');
+    if (!result.applied) throw new Error(chatText().composerChanged);
     let acknowledgement;
     try { acknowledgement = await flushChatComposer(sessionId, result.snapshot.revision); }
-    catch { throw new Error(checkpoints.status().error ?? 'Der Chatentwurf konnte nicht gespeichert werden.'); }
+    catch { throw new Error(checkpoints.status().error ?? chatText().composerSaveFailed); }
     return { sessionId, revision: result.snapshot.revision, currentRevision: acknowledgement.snapshot.revision, superseded: !acknowledgement.acknowledged, sent: false };
   });
   workspaceCapabilities.register('chats.create', async ({ title }) => { const sessionId = newWorkspaceChat(title); await openPanel('chat'); return { sessionId, opened: true }; });
-  workspaceCapabilities.register('chats.use_model', async ({ tier }) => { const config = currentState.ai; if (!config || !(tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Dieses Modell bitte zuerst in den KI-Einstellungen einrichten.'); await openPanel('chat'); panels.get('chat')?.webContents.send('chat:use-model', tier); return { tier, appliesTo: 'next_messages' }; });
+  workspaceCapabilities.register('chats.use_model', async ({ tier }) => { const config = currentState.ai; if (!config || !(tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error(chatText().modelNotConfigured); await openPanel('chat'); panels.get('chat')?.webContents.send('chat:use-model', tier); return { tier, appliesTo: 'next_messages' }; });
   workspaceCapabilities.register('chats.open', async ({ sessionId }) => { selectWorkspaceChat(sessionId); await openPanel('chat'); return { sessionId, opened: true }; });
   workspaceCapabilities.register('chats.rename', ({ sessionId, title }) => { renameWorkspaceChat(sessionId, title); return { sessionId, renamed: true }; });
   workspaceCapabilities.register('chats.reference', ({ sessionId }) => referenceWorkspaceChat(sessionId));
   workspaceCapabilities.register('chats.fork', ({ messageId, replacementText }) => { const result = forkWorkspaceChat(messageId, replacementText, true); return { sessionId: result.sessionId, created: true }; });
   workspaceCapabilities.register('chats.reformulate', async ({ messageId, sessionId, tier }, context) => {
-    const source = reformulationSource(currentState, messageId, sessionId);
+    const source = reformulationSource(currentState, messageId, sessionId, uiLocale());
     const options: ReformulateChatOptions = { tier: tier ?? 'smart', sessionId: source.session.id };
     const config = currentState.ai;
-    if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Bitte zuerst ein Modell für diese Auswahl in den KI-Einstellungen speichern.');
+    if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error(chatText().setupModel);
     if (context.origin === 'agent' && chatBusy) {
-      if (pendingReformulation || pendingContinuation) throw new Error('Für diesen Auftrag ist bereits ein Chatwechsel vorgemerkt.');
+      if (pendingReformulation || pendingContinuation) throw new Error(chatText().changeAlreadyQueued);
       pendingReformulation = { messageId, options };
-      return { queued: true, sourceSessionId: source.session.id, sourceMessageId: messageId, actionsEnabled: false, message: 'Nach erfolgreichem Abschluss dieser Antwort wird eine neue Formulierung aus gespeicherten Belegen erstellt. Der ursprüngliche Auftrag wird nicht ausgeführt. Bei Stopp, Fehler oder Limit wird die Vormerkung verworfen.' };
+      return { queued: true, sourceSessionId: source.session.id, sourceMessageId: messageId, actionsEnabled: false, message: chatText().queuedRephrase };
     }
     await reformulateChat(messageId, options);
     return { reformulated: true, actionsEnabled: false, sessionId: currentState.activeSessionId };
@@ -730,9 +737,9 @@ function registerWorkspaceCapabilities(): void {
     continuationSource(messageId, sessionId);
     const options: ReformulateChatOptions = { tier: tier ?? 'smart', ...(sessionId ? { sessionId } : {}) };
     if (context.origin === 'agent' && chatBusy) {
-      if (pendingContinuation || pendingReformulation) throw new Error('Für diesen Auftrag ist bereits ein Chatwechsel vorgemerkt.');
+      if (pendingContinuation || pendingReformulation) throw new Error(chatText().changeAlreadyQueued);
       pendingContinuation = { messageId, options };
-      return { queued: true, message: 'Der gespeicherte Auftrag wird anschließend gezielt fortgesetzt. Erledigte Aktionen werden nicht erneut ausgeführt; unklare Änderungen bleiben bis zur Statusprüfung gesperrt.' };
+      return { queued: true, message: chatText().queuedContinuation };
     }
     await continueChat(messageId, options);
     return { continued: true, sessionId: currentState.activeSessionId };
@@ -750,12 +757,12 @@ function registerWorkspaceCapabilities(): void {
   });
   workspaceCapabilities.register('operations.read_result', ({ actionId }) => {
     const action = operationJournal.getAction(actionId);
-    if (!action) throw new Error('Aktionsnachweis nicht gefunden.');
+    if (!action) throw new Error(chatText().actionMissing);
     return { actionId, status: action.status, effect: action.effect, recordedAt: action.finishedAt ?? action.startedAt, historical: true, truncated: action.resultTruncated ?? false, ...(action.result ? { result: JSON.parse(action.result) as unknown } : { resultUnavailable: true }), untrusted: true };
   });
   workspaceCapabilities.register('operations.reconcile', ({ actionId }, context) => reconcileChatAction(actionId, context));
   workspaceCapabilities.register('operations.retry', ({ actionId }, context) => {
-    if (context.origin !== 'agent' || !activeOperationRunner) throw new Error('Bitte zuerst den gespeicherten Auftrag über „Auftrag fortsetzen“ öffnen. Es wurde keine Aktion ausgeführt.');
+    if (context.origin !== 'agent' || !activeOperationRunner) throw new Error(chatText().actionResumeFirst);
     return activeOperationRunner.retryRecorded(actionId, context.signal);
   });
   workspaceCapabilities.register('settings.agent_get', () => normalizeAgentSettings(currentState.agentSettings));
@@ -853,7 +860,7 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('settings.speech_save', args => prepareSettings('speech', args));
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
   workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
-  workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)); });
+  workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)).catch(localizeModelListError); });
   workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, native().clearKey, native().clearKeyDetail)) return { cancelled: true }; await deleteKey(currentState.ai ?? defaultAiConfig); return { removed: true }; });
   workspaceCapabilities.register('app.quit', (_args, context) => confirmQuit(context));
 }
@@ -861,7 +868,7 @@ function registerWorkspaceCapabilities(): void {
 function getChatRun(rawMessageId: unknown, rawSessionId?: unknown): OperationRunSummary | null {
   const id = reformulationMessageIdSchema.parse(rawMessageId), sessionId = z.string().min(1).max(128).optional().parse(rawSessionId) ?? currentState.activeSessionId;
   const message = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === id && item.role === 'assistant');
-  if (!message) throw new Error('Assistentennachricht nicht gefunden.');
+  if (!message) throw new Error(chatText().answerMissing);
   return message.operationRunId ? operationJournal.summary(message.operationRunId) : null;
 }
 function continuationSource(rawMessageId: unknown, rawSessionId?: unknown) {
@@ -869,43 +876,43 @@ function continuationSource(rawMessageId: unknown, rawSessionId?: unknown) {
   const session = currentState.sessions.find(item => item.id === sessionId);
   const index = session?.messages.findIndex(item => item.id === messageId && item.role === 'assistant') ?? -1;
   const answer = session?.messages[index];
-  if (!session || !answer || answer.status === 'streaming' || answer.reformulationOf) throw new Error('Bitte einen unterbrochenen ursprünglichen Auftrag zum Fortsetzen auswählen.');
-  if (!answer.operationRunId) throw new Error('Für diesen älteren Auftrag fehlt ein dauerhaftes Aktionsprotokoll. Er wird nicht automatisch erneut ausgeführt. Bitte bei Bedarf einen neuen Auftrag vorbereiten.');
+  if (!session || !answer || answer.status === 'streaming' || answer.reformulationOf) throw new Error(chatText().selectInterrupted);
+  if (!answer.operationRunId) throw new Error(chatText().noLegacyLog);
   const run = operationJournal.getRun(answer.operationRunId);
-  if (!run || run.status === 'running') throw new Error('Der ursprüngliche Auftrag ist nicht verfügbar oder läuft noch.');
-  if (operationJournal.listActions(run.rootRunId).some(action => action.status === 'completed' && action.binding.moduleId === 'ovd-assistant' && ['chats.reformulate', 'chats.continue'].includes(action.binding.action))) throw new Error('Dieser Auftrag wurde bereits an eine Neuformulierung oder Fortsetzung übergeben. Bitte im zugehörigen Zielchat weiterarbeiten.');
+  if (!run || run.status === 'running') throw new Error(chatText().taskUnavailable);
+  if (operationJournal.listActions(run.rootRunId).some(action => action.status === 'completed' && action.binding.moduleId === 'ovd-assistant' && ['chats.reformulate', 'chats.continue'].includes(action.binding.action))) throw new Error(chatText().taskHandedOff);
   let userIndex = index - 1;
   while (userIndex >= 0 && session.messages[userIndex].role !== 'user') userIndex--;
-  if (userIndex < 0) throw new Error('Die ursprüngliche Nutzernachricht ist nicht verfügbar.');
-  if (run.status === 'completed' && operationJournal.listActions(run.rootRunId).every(action => action.status === 'completed')) throw new Error('Dieser Auftrag ist bereits abgeschlossen. Für eine andere Formulierung bitte „Antwort neu formulieren“ verwenden; neue Aktionen benötigen einen neuen Auftrag.');
+  if (userIndex < 0) throw new Error(chatText().originalMissing);
+  if (run.status === 'completed' && operationJournal.listActions(run.rootRunId).every(action => action.status === 'completed')) throw new Error(chatText().alreadyDone);
   return { session, answer, user: session.messages[userIndex], userIndex, run };
 }
 async function reconcileChatAction(rawActionId: unknown, context?: CapabilityContext): Promise<OperationActionSummary> {
   const actionId = z.uuid().parse(rawActionId), action = operationJournal.getAction(actionId);
-  if (!action || !moduleHost) throw new Error('Aktionsnachweis nicht verfügbar.');
+  if (!action || !moduleHost) throw new Error(chatText().noActionRecord);
   const summary = () => operationJournal.summary(action.runId).actions.find(item => item.id === actionId)!;
   if (action.status === 'completed' || action.effect === 'none' && action.status !== 'running') return summary();
-  if (!action.args) throw new Error('Für den Statusabgleich fehlen die ursprünglichen gebundenen Argumente. Die Aktion bleibt gesperrt.');
+  if (!action.args) throw new Error(chatText().noBoundArguments);
   const run = operationJournal.getRun(action.runId)!;
   const ctx: CapabilityContext = context ?? { origin: 'ui', signal: new AbortController().signal, owner: panels.get('chat'), sessionId: run.sessionId };
   const result = await moduleHost.reconcileOperation(action.binding, action.args, { runId: action.runId, actionId: action.id, attemptId: action.attemptId, argsHash: action.argsHash }, ctx);
-  if (result.state === 'completed') await operationJournal.finishAction(action.id, action.attemptId, { status: 'completed', effect: action.binding.effect === 'read' ? 'none' : 'applied', result: JSON.stringify({ outcome: 'completed', result: result.result ?? null, message: result.detail ?? 'Das zuständige Modul hat die frühere Ausführung bestätigt.', reconciled: true }), detail: result.detail });
-  else if (result.state === 'not_applied') await operationJournal.finishAction(action.id, action.attemptId, { status: 'failed', effect: 'none', result: JSON.stringify({ outcome: 'failed', message: result.detail ?? 'Das zuständige Modul hat bestätigt, dass keine Änderung ausgeführt wurde.', reconciled: true }), detail: result.detail });
-  else await operationJournal.finishAction(action.id, action.attemptId, { status: 'uncertain', effect: action.binding.effect === 'read' ? 'none' : 'unknown', detail: result.detail ?? 'Kein verlässlicher Ausführungsnachweis verfügbar. Die Aktion bleibt gesperrt.' });
+  if (result.state === 'completed') await operationJournal.finishAction(action.id, action.attemptId, { status: 'completed', effect: action.binding.effect === 'read' ? 'none' : 'applied', result: JSON.stringify({ outcome: 'completed', result: result.result ?? null, message: result.detail ?? chatText().confirmedAction, reconciled: true }), detail: result.detail });
+  else if (result.state === 'not_applied') await operationJournal.finishAction(action.id, action.attemptId, { status: 'failed', effect: 'none', result: JSON.stringify({ outcome: 'failed', message: result.detail ?? chatText().noChange, reconciled: true }), detail: result.detail });
+  else await operationJournal.finishAction(action.id, action.attemptId, { status: 'uncertain', effect: action.binding.effect === 'read' ? 'none' : 'unknown', detail: result.detail ?? chatText().unknownOutcome });
   return summary();
 }
 async function continueChat(rawMessageId: unknown, rawOptions: unknown): Promise<void> {
   const options = reformulateChatOptionsSchema.parse(rawOptions);
-  if (chatBusy) throw new Error('Bitte warte auf die laufende Antwort.');
-  if (currentState.ai?.workspaceTools === false) throw new Error('Zum Fortsetzen müssen die Workspace-Werkzeuge vom Nutzer freigegeben sein. Es wurde keine Aktion ausgeführt.');
+  if (chatBusy) throw new Error(chatText().busy);
+  if (currentState.ai?.workspaceTools === false) throw new Error(chatText().needTools);
   const source = continuationSource(rawMessageId, options.sessionId);
   const unknown = operationJournal.listActions(source.run.rootRunId).find(action => action.status === 'running' || action.effect === 'unknown');
-  if (unknown) throw new Error(`„${unknown.label}“ hat einen unklaren oder noch laufenden Ausgang. Bitte im Auftragsstatus zuerst „Status prüfen“ verwenden. Der ursprüngliche Aufruf wurde nicht wiederholt.`);
+  if (unknown) throw new Error(chatText().verifyFirst(unknown.label));
   const now = new Date().toISOString(), sessionId = crypto.randomUUID();
   const messages = source.session.messages.slice(0, source.userIndex).map(message => ({ ...message, id: crypto.randomUUID() }));
-  const session = { id: sessionId, title: `${source.session.title.slice(0, 100)} (fortgesetzt)`, createdAt: now, updatedAt: now, historyStart: Math.min(source.session.historyStart, messages.length), messages };
+  const session = { id: sessionId, title: `${source.session.title.slice(0, 100)} (${chatText().continued})`, createdAt: now, updatedAt: now, historyStart: Math.min(source.session.historyStart, messages.length), messages };
   const config = currentState.ai;
-  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Bitte zuerst ein Modell für diese Auswahl in den KI-Einstellungen speichern.');
+  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error(chatText().setupModel);
   commit({ ...currentState, sessions: [session, ...currentState.sessions], activeSessionId: sessionId, chat: messages });
   await openPanel('chat');
   await sendChat(source.user.text, undefined, { tier: options.tier, sessionId }, source);
@@ -921,7 +928,7 @@ async function acceptChatRequest(sessionId: string, user: ChatMessage, assistant
     const receipt = storedChatComposer(state, sessionId)?.legacyReceipt;
     return withComposer(next, { sessionId, revision: composerRevision + 1, content: { text: '' }, ...(receipt ? { legacyReceipt: receipt } : {}) });
   };
-  if (composerRevision !== undefined && getChatComposer(sessionId).revision !== composerRevision) throw new Error('Der Entwurf wurde während der Vorbereitung geändert. Bitte prüfe ihn und sende erneut.');
+  if (composerRevision !== undefined && getChatComposer(sessionId).revision !== composerRevision) throw new Error(chatText().draftStale);
   const accepted = update(original);
   const write = checkpoints.writeNow(() => saveState(accepted, events));
   const finish = write.then(() => {
@@ -931,7 +938,7 @@ async function acceptChatRequest(sessionId: string, user: ChatMessage, assistant
     const chat = panels.get('chat')?.webContents;
     if (user.clientRequestId && chat && !chat.isDestroyed() && !chat.isCrashed()) chat.send('chat:request-committed', user.clientRequestId);
   }, () => {
-    throw new Error(getWorkspaceStoreFault() ? 'Die Speicherung der Nachricht konnte nicht bestätigt werden. Bitte OVD neu starten. Es wurde keine KI-Anfrage gesendet.' : 'Die Nachricht konnte lokal nicht gespeichert werden. Bitte erneut versuchen. Es wurde keine KI-Anfrage gesendet.');
+    throw new Error(getWorkspaceStoreFault() ? chatText().saveUnconfirmed : chatText().saveFailed);
   });
   acceptingChat = { sessionId, settled: finish.then(() => {}, () => {}) };
   try { await finish; } finally { acceptingChat = undefined; }
@@ -940,17 +947,17 @@ async function acceptChatRequest(sessionId: string, user: ChatMessage, assistant
 async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, continuation?: ReturnType<typeof continuationSource>): Promise<void> {
   if (typeof text !== 'string' || !text.trim() || text.length > 20_000) throw new Error('Invalid message');
   if (emailRef !== undefined) validateEmailReferenceId(emailRef);
-  if (chatBusy) throw new Error('Bitte warte auf die laufende Antwort.');
+  if (chatBusy) throw new Error(chatText().busy);
   const config = currentState.ai;
   const agentSettings = normalizeAgentSettings(currentState.agentSettings);
   const options = chatOptionsSchema.parse(rawOptions);
-  if (options.clientRequestId && currentState.sessions.some(session => session.messages.some(message => message.clientRequestId === options.clientRequestId))) throw new Error('Diese Nachricht wurde bereits im Chat gespeichert. Bitte verwende für eine neue Anfrage eine neue Nachricht.');
-  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Bitte zuerst ein Modell für diese Auswahl in den KI-Einstellungen speichern.');
+  if (options.clientRequestId && currentState.sessions.some(session => session.messages.some(message => message.clientRequestId === options.clientRequestId))) throw new Error(chatText().acceptedAlready);
+  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error(chatText().setupModel);
   const sessionId = currentState.activeSessionId;
-  if (options.sessionId && options.sessionId !== sessionId) throw new Error('Der aktive Chat wurde gewechselt. Bitte erneut versuchen.');
+  if (options.sessionId && options.sessionId !== sessionId) throw new Error(chatText().chatChanged);
   const chatSession = currentState.sessions.find(s => s.id === sessionId);
-  if (!chatSession) throw new Error('Chat nicht gefunden.');
-  const sessionRef = options.sessionRefId ? snapshotSessionReference(currentState, options.sessionRefId, sessionId) : undefined;
+  if (!chatSession) throw new Error(chatText().chatMissing);
+  const sessionRef = options.sessionRefId ? snapshotSessionReference(currentState, options.sessionRefId, sessionId, undefined, uiLocale()) : undefined;
   const message = text.trim();
   if (options.composerRevision !== undefined) {
     const draft = getChatComposer(sessionId);
@@ -958,7 +965,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     if (!options.clientRequestId || !options.sessionId || draft.revision !== options.composerRevision || draft.content.text.trim() !== message ||
       draft.content.emailSummary?.id !== emailRef || draft.content.sessionRefId !== options.sessionRefId ||
       references.length !== requested.length || !references.every((item, index) => sameModuleReference(item, requested[index]))) {
-      throw new Error('Der Entwurf wurde geändert. Bitte die aktuelle Fassung prüfen und erneut senden.');
+      throw new Error(chatText().reviewDraft);
     }
   }
   const user: ChatMessage = continuation ? { ...structuredClone(continuation.user), id: crypto.randomUUID() } : { id: crypto.randomUUID(), role: 'user', text: message, ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}), sessionRef, timestamp: new Date().toISOString() };
@@ -1000,7 +1007,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
       for (const saved of user.references ?? []) {
         if (saved.usage !== 'instructions') continue;
         const current = await moduleReferences.snapshot({ moduleId: saved.moduleId, type: saved.type, id: saved.id }, { origin: 'ui', signal: controller.signal, sessionId, owner: panels.get('chat') });
-        if (current.usage !== 'instructions' || current.sourceVersion !== saved.sourceVersion || current.text !== saved.text) throw new Error('Eine ausgewählte Arbeitsanweisung wurde seit dem ursprünglichen Auftrag geändert. Bitte einen neuen Auftrag mit der aktuellen Referenz vorbereiten.');
+        if (current.usage !== 'instructions' || current.sourceVersion !== saved.sourceVersion || current.text !== saved.text) throw new Error(chatText().instructionChanged);
       }
     }
     if (emailRef !== undefined) {
@@ -1034,8 +1041,8 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
       await saveCurrent();
     }
     controller.signal.throwIfAborted();
-    if (toolsEnabled && currentState.ai?.workspaceTools === false) throw new Error('Die Workspace-Werkzeuge wurden während der Vorbereitung deaktiviert. Die Anfrage wurde nicht an den KI-Anbieter gesendet.');
-    const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()), memory);
+    if (toolsEnabled && currentState.ai?.workspaceTools === false) throw new Error(chatText().toolsDisabled);
+    const providerMessages = makeMessages(history, currentState.mails, user, toolsEnabled, moduleHost?.summaries() ?? [], config.confirmationMode ?? 'ask', agentSettings, getTimeContext(new Date(), undefined, app.getLocale()), memory, uiLocale());
     if (toolsEnabled && !continuation) {
       const roots = new Set<string>();
       const unresolved = [...history].reverse().flatMap(item => {
@@ -1057,12 +1064,12 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     const referenceIds = [...new Set([...history, user].map(item => item.emailReference?.id).filter((id): id is string => !!id))];
     const onDelta = (delta: string) => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); };
     const operationContext: OperationContext = { origin: 'agent', signal: controller.signal, owner: panels.get('chat'), referenceIds, primaryEmailId, sessionId };
-    const runner = new OperationRunner(operationJournal, moduleHost!, operationRun, operationContext, !!continuation);
+    const runner = new OperationRunner(operationJournal, moduleHost!, operationRun, operationContext, !!continuation, uiLocale());
     activeOperationRunner = runner;
     if (toolsEnabled) {
       const diagnostics = beginAgentDiagnostics();
       await diagnostics.run(() => runAgent(config, key, providerMessages, options, controller.signal, onDelta,
-      { settings: agentSettings, getModules: query => moduleHost!.find(query),
+      { settings: agentSettings, locale: uiLocale(), getModules: query => moduleHost!.find(query),
         getModuleTools: query => moduleHost!.getTools(query),
         onToolPlan: (calls, signal) => runner.plan(calls, signal),
         invokeModuleTool: (moduleId, name, args, signal, callId) => runner.invoke(moduleId, name, args, signal, callId),
@@ -1070,7 +1077,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
         onProgress: event => diagnostics.progress(event),
         onLimitReached: info => { runLimit = info; updateAssistant({ agentRunLimit: info }); },
         onEvidence: evidence => updateAssistant({ evidence }),
-        finishAfterTool: () => pendingReformulation ? 'Die Neuformulierung wird jetzt aus gespeicherten Belegen erstellt. Der ursprüngliche Auftrag wird nicht erneut ausgeführt.' : pendingContinuation ? 'Der gespeicherte Auftrag wird jetzt gezielt fortgesetzt. Erledigte Aktionen werden nicht erneut ausgeführt.' : undefined,
+        finishAfterTool: () => pendingReformulation ? chatText().handoffRephrase : pendingContinuation ? chatText().handoffContinue : undefined,
         onReplaceText: text => { flush(); updateAssistant({ text }); },
         onToolEvent: event => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, toolEvents: [...(m.toolEvents ?? []), event] } : m))) }));
     }
@@ -1096,26 +1103,26 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     const cancelled = controller.signal.aborted;
     const saved = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
     if (!cancelled && error instanceof ContextBudgetError) runLimit = contextRunLimit(error);
-    updateAssistant({ status: cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed', ...(runLimit ? { agentRunLimit: runLimit } : {}), ...(saved?.evidence?.status === 'running' ? { evidence: textEvidence.finish(cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed') } : {}), ...(!cancelled ? { error: error instanceof Error ? error.message : 'Die Antwort wurde unterbrochen.' } : {}) });
-    await persistFinished().catch(() => updateAssistant({ error: 'Die Antwort und Ergebnisbelege konnten nicht auf dem Datenträger gespeichert werden. Bitte vor dem Beenden den Speicherfehler beheben.' }));
+    updateAssistant({ status: cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed', ...(runLimit ? { agentRunLimit: runLimit } : {}), ...(saved?.evidence?.status === 'running' ? { evidence: textEvidence.finish(cancelled ? 'cancelled' : runLimit ? 'limited' : 'failed') } : {}), ...(!cancelled ? { error: providerErrorText(error, uiLocale(), chatText().interrupted) } : {}) });
+    await persistFinished().catch(() => updateAssistant({ error: chatText().evidenceSaveFailed }));
   } finally {
     try { if (operationRun && operationJournal.getRun(operationRun.id)?.status === 'running') {
       const last = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
       const unresolved = operationJournal.listActions(operationRun.rootRunId).some(action => action.effect === 'unknown' || action.status === 'running');
-      await operationJournal.finishRun(operationRun.id, unresolved ? 'uncertain' : last?.status === 'cancelled' ? 'cancelled' : runLimit ? 'limited' : 'failed').catch(error => updateAssistant({ error: error instanceof Error ? error.message : 'Der Auftragsstatus konnte nicht dauerhaft gespeichert werden.' }));
-    } } catch (error) { updateAssistant({ error: error instanceof Error ? error.message : 'Der Auftragsstatus konnte nicht dauerhaft gespeichert werden. Es wird keine weitere Aktion gestartet.' }); }
+      await operationJournal.finishRun(operationRun.id, unresolved ? 'uncertain' : last?.status === 'cancelled' ? 'cancelled' : runLimit ? 'limited' : 'failed').catch(error => updateAssistant({ error: error instanceof Error ? error.message : chatText().taskSaveFailed }));
+    } } catch (error) { updateAssistant({ error: error instanceof Error ? error.message : chatText().taskSaveStopped }); }
     activeStream = undefined; activeOperationRunner = undefined; chatBusy = false;
     const pending = pendingReformulation, continued = pendingContinuation; pendingReformulation = undefined; pendingContinuation = undefined;
     if (pending) {
       const origin = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
       const completed = origin?.status === 'completed' && origin.evidence?.status === 'completed' && !origin.toolEvents?.some(event => event.status !== 'completed');
-      if (prepared && completed && !controller.signal.aborted) await reformulateChat(pending.messageId, pending.options).catch(error => updateAssistant({ error: error instanceof Error ? error.message : 'Die vorgemerkte Neuformulierung konnte nicht gestartet werden.' }));
-      else if (prepared) updateAssistant({ error: 'Die vorgemerkte Neuformulierung wurde nach Stopp, Fehler oder Limit nicht gestartet. Es wurde keine Aktion wiederholt.' });
+      if (prepared && completed && !controller.signal.aborted) await reformulateChat(pending.messageId, pending.options).catch(error => updateAssistant({ error: error instanceof Error ? error.message : chatText().rephraseStartFailed }));
+      else if (prepared) updateAssistant({ error: chatText().rephraseDropped });
     }
     if (continued) {
       const origin = currentState.sessions.find(item => item.id === sessionId)?.messages.find(item => item.id === assistant.id);
-      if (prepared && origin?.status === 'completed' && !controller.signal.aborted) await continueChat(continued.messageId, continued.options).catch(error => updateAssistant({ error: error instanceof Error ? error.message : 'Die vorgemerkte Fortsetzung konnte nicht gestartet werden.' }));
-      else if (prepared) updateAssistant({ error: 'Die vorgemerkte Fortsetzung wurde nach Stopp, Fehler oder Limit nicht gestartet.' });
+      if (prepared && origin?.status === 'completed' && !controller.signal.aborted) await continueChat(continued.messageId, continued.options).catch(error => updateAssistant({ error: error instanceof Error ? error.message : chatText().continueStartFailed }));
+      else if (prepared) updateAssistant({ error: chatText().continueDropped });
     }
   }
 }
@@ -1129,11 +1136,11 @@ function contextRunLimit(error: ContextBudgetError): AgentRunLimit {
 async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Promise<void> {
   const messageId = reformulationMessageIdSchema.parse(rawMessageId);
   const options = reformulateChatOptionsSchema.parse(rawOptions);
-  if (chatBusy) throw new Error('Bitte warte auf die laufende Antwort.');
+  if (chatBusy) throw new Error(chatText().busy);
   const config = currentState.ai;
-  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Bitte zuerst ein Modell für diese Auswahl in den KI-Einstellungen speichern.');
+  if (!config || !(options.tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error(chatText().setupModel);
   // Reject missing/legacy evidence before creating a branch or contacting the provider.
-  const fork = createReformulation(currentState, messageId, options.sessionId ?? currentState.activeSessionId);
+  const fork = createReformulation(currentState, messageId, options.sessionId ?? currentState.activeSessionId, uiLocale());
   const settings = normalizeAgentSettings(currentState.agentSettings);
   const controller = new AbortController();
   let buffered = '', flushTimer: NodeJS.Timeout | undefined, timedOut = false;
@@ -1151,7 +1158,7 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
   try {
     await saveCurrent();
     await openPanel('chat');
-    const messages = reformulationMessages(fork.source, settings.historyCharBudget, settings.historyMessageLimit);
+    const messages = reformulationMessages(fork.source, settings.historyCharBudget, settings.historyMessageLimit, uiLocale());
     new AgentContext().fit(messages, config, options, settings, () => undefined);
     const key = await getKey(config);
     controller.signal.throwIfAborted();
@@ -1162,8 +1169,8 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
     flush();
     const cancelled = controller.signal.aborted && !timedOut;
     // Discard rejected partial prose; it may falsely describe an unsolicited action.
-    update({ text: '', status: cancelled ? 'cancelled' : error instanceof ContextBudgetError ? 'limited' : 'failed', ...(error instanceof ContextBudgetError ? { agentRunLimit: contextRunLimit(error) } : {}), error: cancelled ? 'Neuformulieren gestoppt. Es wurde keine Aktion ausgeführt.' : timedOut ? 'Das Zeitlimit für die Neuformulierung ist erreicht. Es wurde keine Aktion ausgeführt.' : `${error instanceof Error ? error.message : 'Neuformulieren fehlgeschlagen.'} Es wurde keine Aktion ausgeführt.` });
-    await saveCurrent().catch(() => update({ error: 'Die Neuformulierung konnte nicht auf dem Datenträger gespeichert werden. Es wurde keine Aktion ausgeführt.' }));
+    update({ text: '', status: cancelled ? 'cancelled' : error instanceof ContextBudgetError ? 'limited' : 'failed', ...(error instanceof ContextBudgetError ? { agentRunLimit: contextRunLimit(error) } : {}), error: cancelled ? chatText().rephraseStopped : timedOut ? chatText().rephraseTimeout : `${providerErrorText(error, uiLocale(), chatText().rephraseFailed)} ${chatText().noExecution}` });
+    await saveCurrent().catch(() => update({ error: chatText().rephraseSaveFailed }));
   } finally { clearTimeout(timer); if (flushTimer) clearTimeout(flushTimer); activeStream = undefined; chatBusy = false; }
 }
 
@@ -1316,7 +1323,7 @@ async function initializeModules(): Promise<void> {
     if (coreReads.has(action)) return { args, effect: 'read' };
     if (action === 'chats.set_draft_text') {
       const draft = getChatComposer(args.sessionId);
-      if (draft.revision !== args.expectedRevision) throw new Error('Der Entwurf wurde inzwischen bearbeitet. Bitte die aktuelle Fassung lesen.');
+      if (draft.revision !== args.expectedRevision) throw new Error(chatText().composerChanged);
       return { args, effect: 'write', resource: { id: `chat-composer:${draft.sessionId}`, version: String(draft.revision) } };
     }
     const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
@@ -1329,7 +1336,7 @@ async function initializeModules(): Promise<void> {
       if (request.method !== 'GET' || url.hostname !== 'view' || parts.length !== 2 || url.search || url.username || url.password) throw new Error('Ungültige Modulansicht.');
       const html = await moduleHost!.readView(parts[0], parts[1]);
       return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'" } });
-    } catch { return new Response('Diese Modulansicht ist nicht verfügbar. Bitte den Modulstatus prüfen.', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Security-Policy': "default-src 'none'" } }); }
+    } catch { return new Response(native().moduleViewUnavailable, { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Security-Policy': "default-src 'none'" } }); }
   });
   ipcMain.handle('modules:repositories:list', event => { verifyPanel(event, ['settings']); return moduleRepositories!.list(); });
   ipcMain.handle('modules:repositories:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return moduleRepositories!.save(moduleRepositoryInputSchema.parse(input)); });
@@ -1368,10 +1375,11 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   if (stored === undefined) { app.quit(); return; }
   const loaded = stored ?? initialState();
   const settings = normalizeSettings(loaded.settings);
-  const startupText = nativeText[resolveUiLocale(settings.language, [systemLocale])];
+  const startupLocale = resolveUiLocale(settings.language, [systemLocale]);
+  const startupText = nativeText[startupLocale];
   operationJournal = new OperationJournal(path.join(app.getPath('userData'), 'operation-journal'));
   await operationJournal.initialize().catch(error => dialog.showErrorBox(startupText.journalUnavailable, error instanceof Error ? error.message : startupText.journalFailure));
-  currentState = normalizeSessions({ ...loaded, settings, agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });
+  currentState = normalizeSessions({ ...loaded, settings, agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) }, startupLocale);
   await initializeDiagnostics({ dataDirectory: app.getPath('userData'), appVersion: app.getVersion(), enabled: currentState.settings.diagnosticsEnabled === true });
   await initializeCredentialStore({ dataDirectory: app.getPath('userData') }).catch(() => dialog.showErrorBox(native().vaultUnavailable, native().vaultFailure));
   let previousChatGptProfile: string | undefined;
@@ -1442,12 +1450,12 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('ai:chatgpt:select', (event, input: unknown) => { verifyPanel(event, ['settings']); if (activeStream?.provider === 'chatgpt') activeStream.controller.abort(); return chatGptAuth().selectProfile(z.string().uuid().parse(input)); });
   ipcMain.handle('ai:chatgpt:usage', async event => { verifyPanel(event, ['settings', 'chat']); await shell.openExternal('https://chatgpt.com/settings/usage'); });
   ipcMain.handle('ai:settings:save', (event, input: unknown) => { verifySender(event); return saveAiSettings(input, uiOperationContext(event)); });
-  ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)); });
+  ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)).catch(localizeModelListError); });
   ipcMain.handle('ai:key:clear', async event => { verifySender(event); await deleteKey(currentState.ai ?? defaultAiConfig); });
   ipcMain.handle('chat:sessions:list', (event, input: unknown) => {
     verifyPanel(event, ['sessions', 'chat']);
     const { query, offset, limit, revision } = chatSessionListRequestSchema.parse(input ?? {});
-    return listChatSessions(currentState, query, offset, limit, revision);
+    return listChatSessions(currentState, query, offset, limit, revision, uiLocale());
   });
   ipcMain.handle('chat:history:earlier', event => {
     verifyPanel(event, ['chat']);
@@ -1493,7 +1501,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('chat:reformulate', (event, messageId: unknown, options: unknown) => { verifyPanel(event, ['chat']); return reformulateChat(messageId, options); });
   ipcMain.handle('chat:run', (event, messageId: unknown, sessionId: unknown) => { verifyPanel(event, ['chat']); return getChatRun(messageId, sessionId); });
   ipcMain.handle('chat:continue', (event, messageId: unknown, options: unknown) => { verifyPanel(event, ['chat']); return continueChat(messageId, options); });
-  ipcMain.handle('chat:action:reconcile', (event, actionId: unknown) => { verifyPanel(event, ['chat']); if (chatBusy) throw new Error('Bitte warte auf die laufende Antwort.'); return reconcileChatAction(actionId); });
+  ipcMain.handle('chat:action:reconcile', (event, actionId: unknown) => { verifyPanel(event, ['chat']); if (chatBusy) throw new Error(chatText().busy); return reconcileChatAction(actionId); });
   ipcMain.handle('chat:cancel', event => { verifySender(event); activeStream?.controller.abort(); });
   ipcMain.handle('files:list', async (event, requested?: string): Promise<FileListing> => { verifySender(event); if (requested !== undefined && typeof requested !== 'string') throw new Error('Ungültiger Dateipfad.'); const result = await requireFilesModule().list({ path: requested, limit: 100 }, uiOperationContext(event)); return { path: result.path, entries: result.entries }; });
   ipcMain.handle('files:choose', (event) => { verifySender(event); return chooseLocalFile(uiOperationContext(event)); });

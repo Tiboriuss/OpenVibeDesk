@@ -1,3 +1,6 @@
+import { useFormFeedback, formError, formDetail } from './form-feedback';
+import { aiSettingsText } from './ai-settings-copy';
+import { useUiLocale } from './locale';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronDown, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import { matchesSettingsEntry, settingsEntries } from './settings-registry';
@@ -9,7 +12,6 @@ import './ai-settings.css';
 
 type Thinking = 'off' | 'low' | 'medium' | 'high';
 type AiConfiguration = SavedAiSettings & { provider: Provider; protocol: Protocol; authMode: AuthMode; apiVersion: string };
-const providerLabels: Record<Provider, string> = { 'openai-compatible': 'OpenAI-kompatibel', openai: 'OpenAI', azure: 'Azure AI Foundry', chatgpt: 'ChatGPT' };
 const planWelcomeKey = 'openvibedesk.settings.chatgptPlanWelcome';
 function normalizedConfiguration(value: SavedAiSettings): AiConfiguration {
   return { ...value, provider: value.provider ?? 'openai-compatible', protocol: value.protocol ?? 'chat-completions', authMode: value.authMode ?? 'bearer', apiVersion: value.apiVersion ?? '', confirmationMode: value.confirmationMode === 'never' ? 'never' : 'ask' };
@@ -29,23 +31,28 @@ function loadGroups(): AiGroups {
 }
 
 function ModelField({ id, label, value, onChange, models, deployment = false }: { id: string; label: string; value: string; onChange(value: string): void; models: string[]; deployment?: boolean }) {
+  const copy = aiSettingsText[useUiLocale()];
   const [manual, setManual] = useState(false);
   const custom = value && !models.includes(value);
   return <div className="ai-field"><label htmlFor={id}>{label}</label>
     {models.length > 0 && !manual ? <select id={id} value={value} onChange={event => {
       if (event.target.value === '__manual_model__') setManual(true);
       else onChange(event.target.value);
-    }}><option value="">{deployment ? 'Deployment auswählen' : 'Modell auswählen'}</option>{custom && <option value={value}>{value} (manuell)</option>}{models.map(item => <option key={item} value={item}>{item}</option>)}<option value="__manual_model__">{deployment ? 'Deployment-Namen eingeben …' : 'Andere Modell-ID eingeben …'}</option></select>
-      : <input id={id} value={value} onChange={event => onChange(event.target.value)} autoComplete="off" spellCheck={false} placeholder={deployment ? 'Deployment-Namen aus Azure eingeben' : 'Modell-ID eingeben'} />}
-    {manual && models.length > 0 && <button className="ai-inline-button" type="button" onClick={() => setManual(false)}>Aus Modellliste auswählen</button>}
+    }}><option value="">{deployment ? copy.chooseDeployment : copy.chooseModel}</option>{custom && <option value={value}>{value} {copy.manual}</option>}{models.map(item => <option key={item} value={item}>{item}</option>)}<option value="__manual_model__">{deployment ? copy.otherDeployment : copy.otherModel}</option></select>
+      : <input id={id} value={value} onChange={event => onChange(event.target.value)} autoComplete="off" spellCheck={false} placeholder={deployment ? copy.enterDeployment : copy.enterModel} />}
+    {manual && models.length > 0 && <button className="ai-inline-button" type="button" onClick={() => setManual(false)}>{copy.showList}</button>}
   </div>;
 }
 
 function ThinkingField({ id, label, value, onChange }: { id: string; label: string; value: Thinking; onChange(value: Thinking): void }) {
-  return <div className="ai-field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={event => onChange(event.target.value as Thinking)}><option value="off">Aus</option><option value="low">Niedrig</option><option value="medium">Mittel</option><option value="high">Hoch</option></select></div>;
+  const copy = aiSettingsText[useUiLocale()];
+  return <div className="ai-field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={event => onChange(event.target.value as Thinking)}><option value="off">{copy.off}</option><option value="low">{copy.low}</option><option value="medium">{copy.medium}</option><option value="high">{copy.high}</option></select></div>;
 }
 
 export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { searchQuery?: string; onClearSearch?(): void; preparation?: SettingsSuggestion }) {
+  const locale = useUiLocale();
+  const copy = aiSettingsText[locale];
+  const providerLabels: Record<Provider, string> = { 'openai-compatible': copy.compatible, openai: 'OpenAI', azure: 'Azure AI Foundry', chatgpt: 'ChatGPT' };
   const [configuration, setConfiguration] = useState<AiConfiguration | null>(null);
   const [provider, setProvider] = useState<Provider>('openai-compatible');
   const [protocol, setProtocol] = useState<Protocol>('chat-completions');
@@ -53,7 +60,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const [apiVersion, setApiVersion] = useState('');
   const [chatGptStatus, setChatGptStatus] = useState<ChatGptStatus | null>(null);
   const [chatGptBusy, setChatGptBusy] = useState(false);
-  const [chatGptError, setChatGptError] = useState('');
+  const [chatGptError, setChatGptError] = useFormFeedback(copy, locale);
   const chatGptStatusRef = useRef<ChatGptStatus | null>(null);
   const planWelcomeSeen = useRef(false);
   const [planWelcomeOpen, setPlanWelcomeOpen] = useState(false);
@@ -68,10 +75,10 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<string[]>([]);
   const [discovering, setDiscovering] = useState(false);
-  const [discoveryError, setDiscoveryError] = useState('');
+  const [discoveryError, setDiscoveryError] = useFormFeedback(copy, locale);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [error, setError] = useFormFeedback(copy, locale);
+  const [notice, setNotice] = useFormFeedback(copy, locale);
   const [chatOpen, setChatOpen] = useState(loadChatGroup);
   const [openGroups, setOpenGroups] = useState<AiGroups>(loadGroups);
   const urlInput = useRef<HTMLInputElement>(null);
@@ -101,12 +108,12 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     if (values.confirmationMode === 'ask' || values.confirmationMode === 'never') setConfirmationMode(values.confirmationMode);
     if (typeof values.workspaceTools === 'boolean') setWorkspaceTools(values.workspaceTools);
     setOpenGroups({ connection: true, models: true, workspace: true });
-    setError(''); setNotice('KI-Vorschlag vorbereitet. Bitte prüfen und selbst speichern. Schlüssel wurden nicht übernommen.');
+    setError(''); setNotice(copy => copy.prepared);
   }
   function resetCurrentChanges() {
     if (!configuration || busy || chatGptBusy) return;
     applyConfiguration(configuration); setApiKey('');
-    setError(''); setNotice('Eigene Änderungen verworfen. Der Vorschlag wartet auf deine Übernahme.');
+    setError(''); setNotice(copy => copy.discarded);
     void discover();
   }
   function applyConfiguration(value: SavedAiSettings) {
@@ -135,7 +142,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
   async function refreshChatGptStatus() {
     setChatGptBusy(true); setChatGptError('');
     try { acceptChatGptStatus(await window.workspace.getChatGptStatus()); }
-    catch (reason) { setChatGptError(`ChatGPT-Status konnte nicht gelesen werden: ${String(reason)}`); }
+    catch (reason) { setChatGptError((copy, locale) => formError(reason, copy.statusError, locale)); }
     finally { setChatGptBusy(false); }
   }
   async function loginChatGpt(newProfile = false) {
@@ -143,7 +150,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     try {
       await window.workspace.startChatGptLogin(newProfile ? { newProfile: true } : chatGptStatus?.authenticated && !chatGptStatus.planAccess ? { consent: true } : undefined);
       acceptChatGptStatus(await window.workspace.getChatGptStatus());
-    } catch (reason) { setChatGptError(`ChatGPT-Anmeldung konnte nicht gestartet werden: ${String(reason)}`); }
+    } catch (reason) { setChatGptError((copy, locale) => formError(reason, copy.loginError, locale)); }
     finally { setChatGptBusy(false); }
   }
   async function endChatGptLogin(logout: boolean) {
@@ -152,18 +159,18 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       if (logout) await window.workspace.logoutChatGpt(); else await window.workspace.cancelChatGptLogin();
       acceptChatGptStatus(await window.workspace.getChatGptStatus());
       if (logout) invalidateDiscovery();
-    } catch (reason) { setChatGptError(`ChatGPT-Anmeldung konnte nicht geändert werden: ${String(reason)}`); }
+    } catch (reason) { setChatGptError((copy, locale) => formError(reason, copy.authError, locale)); }
     finally { setChatGptBusy(false); }
   }
   async function selectChatGptProfile(profileId: string) {
     setChatGptBusy(true); setChatGptError(''); invalidateDiscovery();
     try { await window.workspace.selectChatGptProfile(profileId); acceptChatGptStatus(await window.workspace.getChatGptStatus()); }
-    catch (reason) { setChatGptError(`ChatGPT-Konto konnte nicht ausgewählt werden: ${String(reason)}`); }
+    catch (reason) { setChatGptError((copy, locale) => formError(reason, copy.accountError, locale)); }
     finally { setChatGptBusy(false); }
   }
   async function manageChatGptUsage() {
     try { await window.workspace.openChatGptUsage(); }
-    catch (reason) { setChatGptError(`Nutzung konnte nicht geöffnet werden: ${String(reason)}`); }
+    catch (reason) { setChatGptError((copy, locale) => formError(reason, copy.usageError, locale)); }
   }
   function dismissPlanWelcome() {
     planWelcomeSeen.current = true;
@@ -206,7 +213,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     const id = ++discoveryId.current;
     setDiscovering(true); setDiscoveryError('');
     try { const found = await window.workspace.listAiModels(); if (id === discoveryId.current) setModels(found); }
-    catch (reason) { if (id === discoveryId.current) { setModels([]); setDiscoveryError(`Modellliste nicht verfügbar: ${String(reason)}. Modell- oder Deployment-Namen können manuell eingegeben werden. Die Liste prüft keine Chat-Anfrage.`); } }
+    catch (reason) { if (id === discoveryId.current) { setModels([]); setDiscoveryError((copy, locale) => formError(reason, copy.listError, locale)); } }
     finally { if (id === discoveryId.current) setDiscovering(false); }
   }
 
@@ -221,7 +228,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       applyConfiguration(value);
       if (!value.configured) setChatOpen(true);
       if (value.configured && value.provider !== 'chatgpt') void discover();
-    }).catch(reason => { if (active) setError(`Einstellungen konnten nicht geladen werden: ${String(reason)}`); });
+    }).catch(reason => { if (active) setError((copy, locale) => formError(reason, copy.loadError, locale)); });
     return () => { active = false; discoveryId.current++; };
   }, []);
 
@@ -230,7 +237,7 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
     if (provider !== 'chatgpt' && !urlInput.current?.checkValidity()) {
       onClearSearch?.();
       setOpenGroups(current => ({ ...current, connection: true }));
-      setError('Bitte eine gültige Endpunkt-URL eingeben.');
+      setError(copy => copy.invalidUrl);
       requestAnimationFrame(() => urlInput.current?.focus());
       return;
     }
@@ -240,76 +247,76 @@ export function AiSettings({ searchQuery = '', onClearSearch, preparation }: { s
       await window.workspace.saveAiSettings({ provider, protocol, authMode, apiVersion: apiVersion.trim(), baseUrl: baseUrl.trim(), smartModel: smartModel.trim(), simpleModel: simpleModel.trim(), smartThinking, simpleThinking, workspaceTools, confirmationMode, ...(apiKey && authMode !== 'none' && provider !== 'chatgpt' ? { apiKey } : {}) });
       const updated = await window.workspace.getAiSettings();
       applyConfiguration(updated); if (provider !== 'chatgpt') setApiKey('');
-      setNotice('KI-Einstellungen gespeichert.');
+      setNotice(copy => copy.saved);
       void discover();
-    } catch (reason) { setError(`Speichern fehlgeschlagen: ${String(reason)}`); }
+    } catch (reason) { setError((copy, locale) => formError(reason, copy.saveError, locale)); }
     finally { setBusy(false); }
   }
 
   async function removeKey() {
     setBusy(true); setError(''); setNotice('');
-    try { await window.workspace.clearAiKey(); setConfiguration(current => current && ({ ...current, hasApiKey: false })); setNotice('API-Schlüssel entfernt.'); void discover(); }
-    catch (reason) { setError(`Schlüssel konnte nicht entfernt werden: ${String(reason)}`); }
+    try { await window.workspace.clearAiKey(); setConfiguration(current => current && ({ ...current, hasApiKey: false })); setNotice(copy => copy.keyRemoved); void discover(); }
+    catch (reason) { setError((copy, locale) => formError(reason, copy.removeError, locale)); }
     finally { setBusy(false); }
   }
 
-  const chatSummary = configuration ? `${providerLabels[provider]}${!configuration.configured ? ' · Nicht eingerichtet' : ''}${dirty ? ' · Änderungen offen' : ''}${error ? ' · Fehler' : ''}` : error ? 'Nicht verfügbar' : 'Wird geladen …';
-  return <section className="ai-settings" aria-label="Chat-Einstellungen">
+  const chatSummary = configuration ? `${providerLabels[provider]}${!configuration.configured ? ' · ' + copy.notConfigured : ''}${dirty ? ' · ' + copy.changes : ''}${error ? ' · ' + copy.error : ''}` : error ? copy.unavailable : copy.loading;
+  return <section className="ai-settings" aria-label={copy.settings}>
     <details className="workspace-settings-group ai-chat-group" open={searching || chatOpen}>
       <summary onClick={event => { event.preventDefault(); setChatOpen(current => !current); }}><span><strong>Chat</strong><small>{chatSummary}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="workspace-settings-content">
-    {!configuration && !error && <p className="ai-loading">Einstellungen werden geladen …</p>}
+    {!configuration && !error && <p className="ai-loading">{copy.loadingSettings}</p>}
     <SettingsPreparationNotice suggestion={prepared.pending} blocked={dirty || busy || chatGptBusy} onApply={prepared.accept} onDismiss={prepared.dismiss} />
-    {prepared.pending && dirty && <button className="ai-inline-button" type="button" disabled={busy || chatGptBusy} onClick={resetCurrentChanges}>Eigene Änderungen verwerfen</button>}
+    {prepared.pending && dirty && <button className="ai-inline-button" type="button" disabled={busy || chatGptBusy} onClick={resetCurrentChanges}>{copy.discardMine}</button>}
     {configuration && <form className="ai-form" noValidate onSubmit={event => void save(event)}><fieldset className="ai-fields" disabled={busy || chatGptBusy}>
       <details className="ai-section" hidden={searching && !matches('connection')} open={groupOpen('connection')} onToggle={event => onGroupToggle('connection', event.currentTarget.open)}>
-      <summary><span><strong>Verbindung</strong><small>{providerLabels[configuration.provider]} · {configuration.provider === 'chatgpt' ? chatGptStatus?.authenticated ? chatGptStatus.planAccess ? 'ChatGPT-Plan aktiv' : 'Angemeldet · Plan nicht freigegeben' : 'Anmeldung erforderlich' : <>{configuration.configured ? (() => { try { const url = new URL(configuration.baseUrl); return url.host || 'Endpunkt gespeichert'; } catch { return 'Endpunkt gespeichert'; } })() : 'Nicht eingerichtet'} · {configuration.hasApiKey ? 'Schlüssel hinterlegt' : 'Kein Schlüssel'}</>}{connectionChanged ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <summary><span><strong>{copy.connection}</strong><small>{providerLabels[configuration.provider]} · {configuration.provider === 'chatgpt' ? chatGptStatus?.authenticated ? chatGptStatus.planAccess ? copy.activePlan : copy.noPlan : copy.signInRequired : <>{configuration.configured ? (() => { try { const url = new URL(configuration.baseUrl); return url.host || copy.savedEndpoint; } catch { return copy.savedEndpoint; } })() : copy.notConfigured} · {configuration.hasApiKey ? copy.keyStored : copy.noKey}</>}{connectionChanged ? ' · ' + copy.changes : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="ai-section-content">
-      <div className="ai-field"><label htmlFor="ai-provider">Anbieter</label><select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as Provider)}><option value="openai-compatible">OpenAI-kompatibel / lokaler Anbieter</option><option value="openai">OpenAI</option><option value="azure">Azure AI Foundry / Azure OpenAI</option><option value="chatgpt">ChatGPT</option></select><p>{provider === 'azure' ? 'Die Modellfelder verwenden deine Azure-Deployment-Namen.' : provider === 'chatgpt' ? 'Nutze deinen ChatGPT-Plan für berechtigte KI-Anfragen in OVD. Du meldest dich dafür im Browser an.' : provider === 'openai' ? 'OpenAI mit einem API-Schlüssel und frei wählbarem Modell.' : 'Für Gateways und lokale Dienste mit OpenAI-kompatibler Schnittstelle.'}</p></div>
+      <div className="ai-field"><label htmlFor="ai-provider">{copy.provider}</label><select id="ai-provider" value={provider} onChange={event => changeProvider(event.target.value as Provider)}><option value="openai-compatible">{copy.compatibleLocal}</option><option value="openai">OpenAI</option><option value="azure">Azure AI Foundry / Azure OpenAI</option><option value="chatgpt">ChatGPT</option></select><p>{provider === 'azure' ? copy.azureHint : provider === 'chatgpt' ? copy.chatGptHint : provider === 'openai' ? copy.openAiHint : copy.compatibleHint}</p></div>
       {provider === 'chatgpt' ? <>
-      {(chatGptStatus?.profiles.length ?? 0) > 1 && <div className="ai-field"><label htmlFor="ai-chatgpt-account">ChatGPT-Konto</label><select id="ai-chatgpt-account" value={chatGptStatus?.activeProfileId ?? ''} disabled={chatGptStatus?.loginPending} onChange={event => void selectChatGptProfile(event.target.value)}>{!chatGptStatus?.activeProfileId && <option value="" disabled>Konto auswählen</option>}{chatGptStatus?.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.label}{profile.authenticated ? '' : ' · erneut anmelden'}</option>)}</select></div>}
-      <div className="ai-chatgpt-status" role="status"><strong>{chatGptBusy ? 'ChatGPT wird geprüft …' : chatGptStatus?.loginPending ? 'Anmeldung im Browser abschließen' : chatGptStatus?.authenticated ? 'Mit ChatGPT angemeldet' : 'Noch nicht mit ChatGPT verbunden'}</strong>{chatGptStatus?.accountLabel && <span>{chatGptStatus.accountLabel}</span>}{chatGptStatus?.authenticated && <span>{chatGptStatus.planAccess ? 'Dein ChatGPT-Plan wird für berechtigte Anfragen verwendet.' : 'Dein ChatGPT-Plan ist für OVD noch nicht freigegeben. Melde dich erneut an und prüfe die Berechtigungen.'}</span>}{chatGptStatus?.error && <p>{chatGptStatus.error}</p>}</div>
-      <div className="ai-chatgpt-actions">{chatGptStatus?.loginPending ? <button id="ai-chatgpt-cancel" className="ai-refresh" type="button" onClick={() => void endChatGptLogin(false)}>Anmeldung abbrechen</button> : <><button id="ai-chatgpt-login" className="ai-chatgpt-signin" type="button" data-oai-siwc-button="" onClick={() => void loginChatGpt()}>Continue with ChatGPT</button>{(chatGptStatus?.profiles.length ?? 0) > 0 && <button id="ai-chatgpt-add-account" className="ai-refresh" type="button" onClick={() => void loginChatGpt(true)}>Konto hinzufügen</button>}</>}<button id="ai-chatgpt-refresh" className="ai-refresh" type="button" onClick={() => void refreshChatGptStatus()}><RefreshCw size={14} /> Status prüfen</button>{chatGptStatus?.authenticated && <button id="ai-chatgpt-logout" className="ai-remove" type="button" onClick={() => void endChatGptLogin(true)}>Abmelden</button>}</div>
-      {chatGptStatus?.authenticated && <button id="ai-chatgpt-usage" className="ai-inline-button" type="button" onClick={() => void manageChatGptUsage()}>Nutzung in ChatGPT verwalten</button>}
+      {(chatGptStatus?.profiles.length ?? 0) > 1 && <div className="ai-field"><label htmlFor="ai-chatgpt-account">{copy.account}</label><select id="ai-chatgpt-account" value={chatGptStatus?.activeProfileId ?? ''} disabled={chatGptStatus?.loginPending} onChange={event => void selectChatGptProfile(event.target.value)}>{!chatGptStatus?.activeProfileId && <option value="" disabled>{copy.chooseAccount}</option>}{chatGptStatus?.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.label}{profile.authenticated ? '' : ' · ' + copy.signInAgain}</option>)}</select></div>}
+      <div className="ai-chatgpt-status" role="status"><strong>{chatGptBusy ? copy.checkingAccount : chatGptStatus?.loginPending ? copy.finishLogin : chatGptStatus?.authenticated ? copy.signedIn : copy.disconnected}</strong>{chatGptStatus?.accountLabel && <span>{chatGptStatus.accountLabel}</span>}{chatGptStatus?.authenticated && <span>{chatGptStatus.planAccess ? copy.planActive : copy.planUnavailable}</span>}{chatGptStatus?.error && <p>{formDetail(chatGptStatus.error, locale)}</p>}</div>
+      <div className="ai-chatgpt-actions">{chatGptStatus?.loginPending ? <button id="ai-chatgpt-cancel" className="ai-refresh" type="button" onClick={() => void endChatGptLogin(false)}>{copy.cancelLogin}</button> : <><button id="ai-chatgpt-login" className="ai-chatgpt-signin" type="button" data-oai-siwc-button="" onClick={() => void loginChatGpt()}>Continue with ChatGPT</button>{(chatGptStatus?.profiles.length ?? 0) > 0 && <button id="ai-chatgpt-add-account" className="ai-refresh" type="button" onClick={() => void loginChatGpt(true)}>{copy.addAccount}</button>}</>}<button id="ai-chatgpt-refresh" className="ai-refresh" type="button" onClick={() => void refreshChatGptStatus()}><RefreshCw size={14} /> {copy.checkStatus}</button>{chatGptStatus?.authenticated && <button id="ai-chatgpt-logout" className="ai-remove" type="button" onClick={() => void endChatGptLogin(true)}>{copy.logout}</button>}</div>
+      {chatGptStatus?.authenticated && <button id="ai-chatgpt-usage" className="ai-inline-button" type="button" onClick={() => void manageChatGptUsage()}>{copy.manageUsage}</button>}
       {chatGptError && <p className="ai-feedback ai-error" role="alert">{chatGptError}</p>}
       </> : <>
-      <div className="ai-field"><label htmlFor="ai-base-url">Endpunkt-URL</label><input ref={urlInput} id="ai-base-url" type="url" required autoComplete="off" spellCheck={false} value={baseUrl} onChange={event => { invalidateDiscovery(); setBaseUrl(event.target.value); }} placeholder={provider === 'azure' ? 'https://deine-ressource.openai.azure.com/openai/v1' : 'https://api.openai.com/v1'} /><p>{provider === 'azure' ? <>Ressourcen-URL mit <code>/openai/v1</code> oder die vollständige URL aus dem Azure-Deployment.</> : <>Basis-URL des Anbieters, üblicherweise mit <code>/v1</code>.</>}</p></div>
+      <div className="ai-field"><label htmlFor="ai-base-url">{copy.endpoint}</label><input ref={urlInput} id="ai-base-url" type="url" required autoComplete="off" spellCheck={false} value={baseUrl} onChange={event => { invalidateDiscovery(); setBaseUrl(event.target.value); }} placeholder={provider === 'azure' ? 'https://example.openai.azure.com/openai/v1' : 'https://api.openai.com/v1'} /><p>{provider === 'azure' ? copy.azureUrlHelp : copy.urlHelp}</p></div>
       <div className="ai-connection-options">
-      <div className="ai-field"><label htmlFor="ai-protocol">Schnittstelle</label><select id="ai-protocol" value={protocol} onChange={event => { invalidateDiscovery(); setProtocol(event.target.value as Protocol); }}><option value="chat-completions">Chat Completions</option><option value="responses">Responses API</option></select><p>{protocol === 'responses' ? 'Für Modelle mit Responses-Unterstützung.' : 'Für Anbieter und Modelle mit Chat-Completions-Unterstützung.'}</p></div>
-      <div className="ai-field"><label htmlFor="ai-auth-mode">Anmeldung</label><select id="ai-auth-mode" value={authMode} onChange={event => { invalidateDiscovery(); setAuthMode(event.target.value as AuthMode); }}><option value="bearer">Bearer-Token</option><option value="api-key">API-Schlüssel (api-key)</option><option value="none">Ohne Anmeldung</option></select><p>{authMode === 'api-key' ? 'Sendet den Schlüssel im api-key-Header, z. B. für Azure.' : authMode === 'none' ? 'Für lokale Dienste, die keinen Schlüssel verlangen.' : 'Sendet den Schlüssel als Authorization: Bearer.'}</p></div>
+      <div className="ai-field"><label htmlFor="ai-protocol">{copy.protocol}</label><select id="ai-protocol" value={protocol} onChange={event => { invalidateDiscovery(); setProtocol(event.target.value as Protocol); }}><option value="chat-completions">Chat Completions</option><option value="responses">Responses API</option></select><p>{protocol === 'responses' ? copy.responsesHint : copy.completionsHint}</p></div>
+      <div className="ai-field"><label htmlFor="ai-auth-mode">{copy.auth}</label><select id="ai-auth-mode" value={authMode} onChange={event => { invalidateDiscovery(); setAuthMode(event.target.value as AuthMode); }}><option value="bearer">{copy.bearer}</option><option value="api-key">{copy.keyHeader}</option><option value="none">{copy.noAuth}</option></select><p>{authMode === 'api-key' ? copy.keyHelp : authMode === 'none' ? copy.noAuthHelp : copy.bearerHelp}</p></div>
       </div>
-      {provider === 'azure' && (legacyAzure || apiVersion) && <div className="ai-field"><label htmlFor="ai-api-version">Azure API-Version</label><input id="ai-api-version" value={apiVersion} onChange={event => { invalidateDiscovery(); setApiVersion(event.target.value); }} spellCheck={false} autoComplete="off" placeholder="Zum Beispiel 2024-10-21" /><p>Für klassische Deployment-URLs erforderlich. Bei <code>/openai/v1</code> normalerweise leer lassen.</p></div>}
-      {authMode !== 'none' && <div className="ai-field"><div className="ai-label-line"><label htmlFor="ai-api-key">API-Schlüssel / Zugriffstoken</label><span className={`ai-key-status ${configuration.hasApiKey && !credentialChanged ? 'is-saved' : ''}`}><KeyRound size={12} />{credentialChanged ? 'Je Verbindung gespeichert' : configuration.hasApiKey ? 'Gespeichert' : 'Nicht hinterlegt'}</span></div><input id="ai-api-key" type="password" autoComplete="new-password" spellCheck={false} value={apiKey} onChange={event => { invalidateDiscovery(); setApiKey(event.target.value); }} placeholder={configuration.hasApiKey && !credentialChanged ? 'Leer lassen, um den Schlüssel zu behalten' : 'Schlüssel für die gewählte Anmeldung'} /><p>{credentialChanged ? 'Gespeicherte Schlüssel sind nach Endpunkt und Anmeldeart getrennt.' : configuration.hasApiKey ? 'Ein neuer Wert ersetzt den gespeicherten Schlüssel dieser Verbindung.' : 'Der Schlüssel wird beim Speichern im System hinterlegt.'}</p></div>}
-      {configuration.hasApiKey && !credentialChanged && <button className="ai-remove" type="button" disabled={busy} onClick={() => void removeKey()}><Trash2 size={14} /> Gespeicherten Schlüssel entfernen</button>}
+      {provider === 'azure' && (legacyAzure || apiVersion) && <div className="ai-field"><label htmlFor="ai-api-version">{copy.apiVersion}</label><input id="ai-api-version" value={apiVersion} onChange={event => { invalidateDiscovery(); setApiVersion(event.target.value); }} spellCheck={false} autoComplete="off" placeholder={copy.versionExample} /><p>{copy.versionHelp}</p></div>}
+      {authMode !== 'none' && <div className="ai-field"><div className="ai-label-line"><label htmlFor="ai-api-key">{copy.apiKey}</label><span className={`ai-key-status ${configuration.hasApiKey && !credentialChanged ? 'is-saved' : ''}`}><KeyRound size={12} />{credentialChanged ? copy.connectionKey : configuration.hasApiKey ? copy.stored : copy.noStoredKey}</span></div><input id="ai-api-key" type="password" autoComplete="new-password" spellCheck={false} value={apiKey} onChange={event => { invalidateDiscovery(); setApiKey(event.target.value); }} placeholder={configuration.hasApiKey && !credentialChanged ? copy.keepKey : copy.enterKey} /><p>{credentialChanged ? copy.keyByEndpoint : configuration.hasApiKey ? copy.replaceKey : copy.storeKey}</p></div>}
+      {configuration.hasApiKey && !credentialChanged && <button className="ai-remove" type="button" disabled={busy} onClick={() => void removeKey()}><Trash2 size={14} /> {copy.removeKey}</button>}
       </>}
       </div></details>
       <details className="ai-section" hidden={searching && !matches('models')} open={groupOpen('models')} onToggle={event => onGroupToggle('models', event.currentTarget.open)}>
-      <summary><span><strong>Modelle</strong><small>Intelligent: {configuration.smartModel || 'nicht festgelegt'} · Einfach: {configuration.simpleModel || 'nicht festgelegt'}{smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <summary><span><strong>{copy.models}</strong><small>{copy.smart} {configuration.smartModel || copy.unset} {copy.simple} {configuration.simpleModel || copy.unset}{smartModel !== configuration.smartModel || simpleModel !== configuration.simpleModel || smartThinking !== configuration.smartThinking || simpleThinking !== configuration.simpleThinking ? ' · ' + copy.changes : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="ai-section-content">
-      <div className="ai-models-heading"><p role="status">{discovering ? 'Modelle werden geladen …' : models.length ? `${models.length} Modelle gefunden` : 'Keine Modelle geladen'}</p><button className="ai-refresh" type="button" disabled={busy || discovering || connectionChanged} onClick={() => void discover()}><RefreshCw size={14} /> Aktualisieren</button></div>
-      {connectionChanged && <p className="ai-model-hint">Speichere zuerst die geänderte Verbindung, um deren Modellliste zu laden.</p>}
+      <div className="ai-models-heading"><p role="status">{discovering ? copy.loadingModels : models.length ? (locale === 'de' ? `${models.length.toLocaleString(locale)} ${models.length === 1 ? 'Modell' : 'Modelle'} gefunden` : `${models.length.toLocaleString(locale)} ${models.length === 1 ? 'model' : 'models'} found`) : copy.noModels}</p><button className="ai-refresh" type="button" disabled={busy || discovering || connectionChanged} onClick={() => void discover()}><RefreshCw size={14} /> {copy.refresh}</button></div>
+      {connectionChanged && <p className="ai-model-hint">{copy.saveBeforeLoading}</p>}
       {discoveryError && !connectionChanged && <p className="ai-model-hint" role="status">{discoveryError}</p>}
-      {!discoveryError && !discovering && models.length === 0 && <p className="ai-model-hint">Speichere die Verbindung oder gib die Modell-IDs manuell ein.</p>}
-      {provider === 'azure' && <p className="ai-model-hint">Verwende deine Azure-Deployment-Namen; Modellkatalog-Einträge können davon abweichen.</p>}
-      <ModelField id="ai-smart-model" label={provider === 'azure' ? 'Intelligentes Deployment' : 'Intelligentes Modell'} value={smartModel} onChange={setSmartModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
-      <ThinkingField id="ai-smart-thinking" label="Thinking für intelligentes Modell" value={smartThinking} onChange={setSmartThinking} />
-      <ModelField id="ai-simple-model" label={provider === 'azure' ? 'Einfaches Deployment' : 'Einfaches Modell'} value={simpleModel} onChange={setSimpleModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
-      <ThinkingField id="ai-simple-thinking" label="Thinking für einfaches Modell" value={simpleThinking} onChange={setSimpleThinking} />
-      <p className="ai-model-hint">Thinking-Unterstützung hängt vom Modell ab. „Aus“ verwendet dessen Standard.</p>
+      {!discoveryError && !discovering && models.length === 0 && <p className="ai-model-hint">{copy.manualHint}</p>}
+      {provider === 'azure' && <p className="ai-model-hint">{copy.deploymentHint}</p>}
+      <ModelField id="ai-smart-model" label={provider === 'azure' ? copy.smartDeployment : copy.smartModel} value={smartModel} onChange={setSmartModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
+      <ThinkingField id="ai-smart-thinking" label={copy.smartThinking} value={smartThinking} onChange={setSmartThinking} />
+      <ModelField id="ai-simple-model" label={provider === 'azure' ? copy.simpleDeployment : copy.simpleModel} value={simpleModel} onChange={setSimpleModel} models={connectionChanged ? [] : models} deployment={provider === 'azure'} />
+      <ThinkingField id="ai-simple-thinking" label={copy.simpleThinking} value={simpleThinking} onChange={setSimpleThinking} />
+      <p className="ai-model-hint">{copy.reasoningHint}</p>
       </div></details>
       <details className="ai-section" hidden={searching && !matches('workspace')} open={groupOpen('workspace')} onToggle={event => onGroupToggle('workspace', event.currentTarget.open)}>
-      <summary><span><strong>Workspace-Zugriff</strong><small>Werkzeuge {configuration.workspaceTools ? 'aktiviert' : 'deaktiviert'} · {configuration.confirmationMode === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen'}{workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode ? ' · Änderung offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-      <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">Workspace-Werkzeuge</label><p>Der Assistent kann für deine Aufträge selbstständig in verfügbaren Modulen suchen, Inhalte lesen und Ansichten öffnen. Dafür muss das Modell Werkzeugaufrufe unterstützen.</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
-      <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">Ohne Abfragen</label><p id="ai-confirmation-description">Suchen und Lesen laufen bereits selbstständig. Dieser Schalter überspringt auch Bestätigungen für angeforderte Aktionen wie Senden und Löschen. Neue oder geänderte Fremdmodule benötigen weiterhin deine Freigabe.</p><p className="ai-setting-default">Standard: Aus. Wirkt nach dem Speichern.</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
+      <summary><span><strong>{copy.access}</strong><small>{copy.tools} {configuration.workspaceTools ? copy.enabled : copy.disabled} · {configuration.confirmationMode === 'never' ? copy.without : copy.with}{workspaceTools !== configuration.workspaceTools || confirmationMode !== configuration.confirmationMode ? ' · ' + copy.changes : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <div className="ai-section-content"><div className="setting-row ai-tool-row"><div><label htmlFor="workspace-tools">{copy.workspaceTools}</label><p>{copy.toolsHelp}</p></div><input id="workspace-tools" className="setting-toggle" type="checkbox" checked={workspaceTools} onChange={event => setWorkspaceTools(event.target.checked)} /></div>
+      <div className="setting-row ai-confirmation-mode"><div><label htmlFor="ai-confirmation-mode">{copy.without}</label><p id="ai-confirmation-description">{copy.confirmationHelp}</p><p className="ai-setting-default">{copy.confirmationDefault}</p></div><input id="ai-confirmation-mode" className="setting-toggle" type="checkbox" aria-describedby="ai-confirmation-description" checked={confirmationMode === 'never'} onChange={event => setConfirmationMode(event.target.checked ? 'never' : 'ask')} /></div></div>
       </details>
-      <div className="ai-actions"><span className="ai-save-hint">{dirty ? 'Ungespeicherte Änderungen' : ''}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy || !dirty && configuration.configured}>{busy ? 'Wird gespeichert …' : 'Chat-Einstellungen speichern'}</button></div>
+      <div className="ai-actions"><span className="ai-save-hint">{dirty ? copy.unsaved : ''}</span><button className="ai-save" type="submit" disabled={busy || chatGptBusy || !dirty && configuration.configured}>{busy ? copy.saving : copy.save}</button></div>
     </fieldset></form>}
     {error && <p className="ai-feedback ai-error" role="alert">{error}</p>}
     {notice && <p className="ai-feedback ai-success" role="status">{notice}</p>}
       </div>
     </details>
     <dialog ref={planWelcome} className="ai-chatgpt-welcome" aria-labelledby="ai-chatgpt-welcome-title" onCancel={event => { event.preventDefault(); dismissPlanWelcome(); }}>
-      <h2 id="ai-chatgpt-welcome-title">Du verwendest deinen ChatGPT-Plan</h2><p>Berechtigte KI-Anfragen in OVD nutzen deinen ChatGPT-Plan. Du kannst die Nutzung und Limits in deinen ChatGPT-Einstellungen verwalten.</p>{chatGptError && <p className="ai-error" role="alert">{chatGptError}</p>}<div><button className="ai-refresh" type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button><button id="ai-chatgpt-welcome-close" className="ai-save" type="button" autoFocus onClick={dismissPlanWelcome}>Verstanden</button></div>
+      <h2 id="ai-chatgpt-welcome-title">{copy.welcome}</h2><p>{copy.welcomeHelp}</p>{chatGptError && <p className="ai-error" role="alert">{chatGptError}</p>}<div><button className="ai-refresh" type="button" onClick={() => void manageChatGptUsage()}>{copy.usage}</button><button id="ai-chatgpt-welcome-close" className="ai-save" type="button" autoFocus onClick={dismissPlanWelcome}>{copy.done}</button></div>
     </dialog>
   </section>;
 }

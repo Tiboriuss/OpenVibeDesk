@@ -1,3 +1,4 @@
+import { moduleDialogs, moduleStatusReason } from './module-copy';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -6,7 +7,7 @@ import { z } from 'zod';
 import { ModuleRegistry } from './modules';
 import { ModuleRuntimeManager } from './module-runtime';
 import { type CapabilityContext, type WorkspaceCapabilityRegistry } from './workspace-capabilities';
-import type { UiLocale } from '../shared/locale';
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 import type { ModuleManifest, ModuleEventStatus, ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { ModuleToolProvider } from '../shared/module-tool-provider';
 import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
@@ -74,6 +75,8 @@ function generatedCommandText(kind: 'view' | 'window' | 'settings', title: strin
 
 // A registry listing is a detached copy. Keep the approved runtime manifest and its bindings canonical.
 function presentModule(module: ModuleInfo, locale: UiLocale): ModuleInfo {
+  if (module.reason) module.reason = moduleStatusReason(module.reason, locale);
+  if (locale === 'en' && !module.manifest && module.id.startsWith('invalid-root-') && module.title === 'Modulverzeichnis') module.title = 'Module directory';
   const manifest = module.manifest;
   if (!manifest?.locales) return module;
   const catalog = manifest.locales[locale];
@@ -124,7 +127,7 @@ export class ModuleHost {
       deliver: (delivery, signal) => this.deliverEvent(delivery, signal),
       changed: (id, error) => {
         if (!id) this.eventQueueError = error;
-        else if (error) this.publishAttention(id, { key: 'events-delivery', message: 'Ereignisverarbeitung wartet auf Bestätigung.' });
+        else if (error) this.publishAttention(id, { key: 'events-delivery', message: moduleDialogs[this.locale].eventPending });
         else if (!moduleEventQueueStatus(id).failed) this.clearAttention(id, 'events-delivery');
         options.changed();
       }
@@ -180,7 +183,9 @@ export class ModuleHost {
     if (topics.length) await this.registry.verifyUnchanged(id);
     // Confirmation revalidates the journal binding. Do not hold the mutation
     // lock while that validation calls prepareOperation back through the host.
-    if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title}: Ereignisse ändern?`, topics.length ? `Künftige Ereignisse werden im Hintergrund an dieses Modul zugestellt:\n${topics.join('\n')}` : 'Dieses Modul erhält keine weiteren Ereignisse.')) return false;
+    const copy = moduleDialogs[this.locale];
+    const title = this.getModule(id)?.title ?? record.module.title;
+    if (context.origin === 'agent' && !await this.options.confirm(context, copy.changeSubscriptions(title), topics.length ? copy.subscribe(topics) : copy.unsubscribe)) return false;
     context.signal.throwIfAborted(); this.assertAgentAccess(context);
     await context.validateOperation?.();
     await context.beforeDispatch?.();
@@ -275,7 +280,7 @@ export class ModuleHost {
     if (acknowledged) this.options.attentionChanged?.();
     return { acknowledged };
   }
-  private get locale(): UiLocale { return this.options.getLocale?.() ?? 'de'; }
+  private get locale(): UiLocale { return this.options.getLocale?.() ?? defaultUiLocale; }
   list(): ModuleInfo[] {
     const locale = this.locale;
     return this.registry.listModules().map(module => presentModule(module, locale));
@@ -720,7 +725,7 @@ export class ModuleHost {
         return { opened: true };
       }
       if (!binding.validate!(args)) throw new Error('Die Argumente entsprechen nicht dem deklarierten Modulschema.');
-      if (binding.confirmation && !await this.options.confirm(context, binding.confirmation.title ?? record.module.title, binding.confirmation.message)) return { outcome: 'cancelled', cancelled: true, message: 'Die Modulfunktion wurde nicht ausgeführt.' };
+      if (binding.confirmation && !await this.options.confirm(context, binding.confirmation.title ?? this.getModule(record.module.id)?.title ?? record.module.title, binding.confirmation.message)) return { outcome: 'cancelled', cancelled: true, message: moduleDialogs[this.locale].cancelled };
       this.requireReady(id);
       let starting = this.activation.get(id);
       if (!starting) { starting = this.registry.verifyUnchanged(id).then(() => this.runtimes.start(record)); this.activation.set(id, starting); }
@@ -747,14 +752,16 @@ export class ModuleHost {
       if (!enabled && ((this.pending.get(id) ?? 0) > 0 || this.runtimes.isBusy(id))) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
     };
     const processModule = record.module.manifest?.runtime.type === 'process';
+    const copy = moduleDialogs[this.locale];
+    const title = this.getModule(id)?.title ?? record.module.title;
     const needsApproval = enabled && processModule && this.config.approvals[id] !== record.fingerprint;
     if (!enabled) {
       if ((this.pending.get(id) ?? 0) > 0 || this.runtimes.isBusy(id)) throw new Error('In diesem Modul läuft noch ein Vorgang. Bitte warte auf dessen Abschluss.');
       await this.options.beforeDisable(id);
-      if (context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} deaktivieren?`, 'Seine Ansichten werden geschlossen; gespeicherte Daten bleiben erhalten.')) return false;
+      if (context.origin === 'agent' && !await this.options.confirm(context, copy.disable(title), copy.disableDetail)) return false;
     } else {
-      if (needsApproval && !await this.options.confirm(context, `${record.module.title} freigeben?`, `Dieses lokale Modul führt Programmcode mit deinen Benutzerrechten aus. Der eigene Prozess schützt OVD vor Abstürzen, ist aber keine Betriebssystem-Sandbox.\n\nDeklarierte Zugriffe: ${record.module.manifest!.permissions.join(', ') || 'keine'}\n\nQuelle: ${record.rootPath}\nVersion: ${record.module.version}`, { alwaysAsk: true })) return false;
-      if (!needsApproval && context.origin === 'agent' && !await this.options.confirm(context, `${record.module.title} aktivieren?`, 'Das Modul und seine Funktionen werden in OVD verfügbar.')) return false;
+      if (needsApproval && !await this.options.confirm(context, copy.approve(title), copy.approveDetail(record.module.manifest!.permissions, record.rootPath, record.module.version), { alwaysAsk: true })) return false;
+      if (!needsApproval && context.origin === 'agent' && !await this.options.confirm(context, copy.enable(title), copy.enableDetail)) return false;
     }
     // Confirmation must not hold the mutation lock: journal validation calls
     // prepareOperation through the host. A rejected dialog never marks dispatch.

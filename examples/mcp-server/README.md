@@ -6,7 +6,7 @@ This standalone MCP server demonstrates how an application can expose its functi
 
 Install the repository dependencies with `pnpm install`, then:
 
-1. Add a server under **Settings → MCP** (currently **Einstellungen → MCP**), for example with the name “Example framework” and description “Create and find tasks”.
+1. Add a server under **Settings → MCP** (German: **Einstellungen → MCP**), for example with the name “Example framework” and description “Create and find tasks”.
 2. Select **Stdio**. Enter `node` as the executable, or its absolute path if it is not on the app's `PATH`.
 3. Add the absolute path to [`server.cjs`](server.cjs) as one argument, then save.
 4. Connect, select the required tools in the inventory and save the tool permissions.

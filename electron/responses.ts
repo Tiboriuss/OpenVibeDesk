@@ -1,3 +1,4 @@
+import { providerFailure, ProviderDisplayError } from './provider-errors';
 import type { AiConfig, ChatOptions } from '../shared/model';
 import { providerEndpoint, providerHeaders, providerHttpError, providerReportedError } from './ai-provider';
 import { chatGptAuth } from './chatgpt-auth';
@@ -11,19 +12,19 @@ type Transport = 'stream' | 'complete';
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 function reasoningContinuation(item: Record<string, unknown>, diagnostics?: ProviderDiagnosticsTrace) {
-  const invalid = (field: 'encrypted_content' | 'id' | 'summary'): never => { diagnostics?.failure('reasoning_metadata_invalid', { field, actual: item[field] }); throw new Error('Der Endpunkt hat ungültige Responses-Fortsetzungsdaten geliefert.'); };
+  const invalid = (field: 'encrypted_content' | 'id' | 'summary'): never => { diagnostics?.failure('reasoning_metadata_invalid', { field, actual: item[field] }); throw providerFailure('invalidContinuation'); };
   if (item.encrypted_content !== undefined && item.encrypted_content !== null && typeof item.encrypted_content !== 'string') return invalid('encrypted_content');
   if (item.id !== undefined && typeof item.id !== 'string') return invalid('id');
-  if (item.status !== undefined && item.status !== null && item.status !== 'completed') { diagnostics?.failure('reasoning_not_completed', { field: 'status', actual: item.status }); throw new Error('Der Endpunkt hat keine vollständig abgeschlossenen Responses-Fortsetzungsdaten geliefert.'); }
+  if (item.status !== undefined && item.status !== null && item.status !== 'completed') { diagnostics?.failure('reasoning_not_completed', { field: 'status', actual: item.status }); throw providerFailure('unfinishedContinuation'); }
   const summary = item.summary ?? [];
   if (!Array.isArray(summary) || summary.some(part => !record(part) || part.type !== 'summary_text' || typeof part.text !== 'string')) return invalid('summary');
   return { type: 'reasoning', summary: summary.map(part => ({ type: 'summary_text', text: part.text as string })), ...(item.id ? { id: item.id as string } : {}), ...(item.encrypted_content ? { encrypted_content: item.encrypted_content as string } : {}) };
 }
 
 function parseOutput(value: unknown, tools: readonly unknown[] | undefined, transport: Transport, directChatGpt = false, diagnostics?: ProviderDiagnosticsTrace): StreamTurn {
-  if (!record(value)) throw new Error('Der Endpunkt hat keine gültige Responses-Antwort geliefert.');
+  if (!record(value)) throw providerFailure('invalidResponse');
   const output = value.output;
-  if (!Array.isArray(output)) throw new Error('Der Endpunkt hat keine gültige Responses-Ausgabe geliefert.');
+  if (!Array.isArray(output)) throw providerFailure('invalidOutput');
   const toolCalls: ToolCall[] = [], responseItems: ResponseInputItem[] = [];
   const invalid = (field: 'tool_calls' | 'id' | 'name' | 'arguments' | 'type'): never => { throw toolCallError('structure', toolCalls, undefined, transport, field); };
   let text = '';
@@ -41,14 +42,14 @@ function parseOutput(value: unknown, tools: readonly unknown[] | undefined, tran
       if (item.status !== undefined && item.status !== 'completed') throw toolCallError('finish', toolCalls, String(item.status), transport);
       responseItems.push({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments, ...(directChatGpt ? { namespace: 'ovd' } : {}) });
     } else if (item.type === 'message') {
-      if (item.role !== 'assistant' || !Array.isArray(item.content) || (item.status !== undefined && item.status !== 'completed')) throw new Error('Der Endpunkt hat keine vollständig abgeschlossene Assistentenantwort geliefert.');
+      if (item.role !== 'assistant' || !Array.isArray(item.content) || (item.status !== undefined && item.status !== 'completed')) throw providerFailure('unfinishedAssistant');
       const content: ResponseInputItem[] = [];
       for (const part of item.content) {
-        if (!record(part)) throw new Error('Der Endpunkt hat ein nicht unterstütztes Textformat geliefert.');
+        if (!record(part)) throw providerFailure('unsupportedText');
         if (part.type === 'output_text' && typeof part.text === 'string') { text += part.text; content.push({ type: 'output_text', text: part.text, annotations: [] }); }
         else if (part.type === 'refusal' && typeof part.refusal === 'string') { text += part.refusal; content.push({ type: 'refusal', refusal: part.refusal }); }
-        else throw new Error('Der Endpunkt hat ein nicht unterstütztes Textformat geliefert.');
-        if (text.length > MAX_TEXT_CHARS) throw new Error('Die Antwort des Endpunkts ist zu groß.');
+        else throw providerFailure('unsupportedText');
+        if (text.length > MAX_TEXT_CHARS) throw providerFailure('tooLarge');
       }
       responseItems.push({ type: 'message', role: 'assistant', content, ...(item.phase === 'commentary' || item.phase === 'final_answer' ? { phase: item.phase } : {}) });
     } else if (item.type === 'reasoning') {
@@ -56,12 +57,12 @@ function parseOutput(value: unknown, tools: readonly unknown[] | undefined, tran
     } else {
       // OVD offers only its functions; a hosted web/shell/search call is not a
       // substitute for an approved local capability and is never replayed.
-      throw new Error('Der Endpunkt hat einen nicht angebotenen Responses-Ausgabetyp geliefert.');
+      throw providerFailure('unsupportedItem');
     }
   }
   if (value.status !== 'completed' || value.error || value.incomplete_details) {
     if (toolCalls.length) throw toolCallError('finish', toolCalls, typeof value.status === 'string' ? value.status : undefined, transport);
-    throw new Error('Der Endpunkt hat keine vollständig abgeschlossene Responses-Antwort geliefert.');
+    throw providerFailure('unfinishedResponse');
   }
   if (toolCalls.length) {
     // A completed Responses object is authoritative, like the complete fallback;
@@ -70,7 +71,7 @@ function parseOutput(value: unknown, tools: readonly unknown[] | undefined, tran
     for (const item of responseItems) if (item.type === 'function_call') {
       item.arguments = toolCalls.find(call => call.id === item.call_id)!.function.arguments;
     }
-  } else if (!text.trim()) throw new Error('Der Endpunkt hat keine lesbare Textantwort geliefert.');
+  } else if (!text.trim()) throw providerFailure('noText');
   return { text, toolCalls, responseItems };
 }
 
@@ -89,20 +90,20 @@ export async function requestResponsesTurn(
     const body = serializeProviderRequest({ ...config, protocol: 'responses' }, messages, options, false, tools, budget);
     const response = await fetch(providerEndpoint(config, 'responses', model), { method: 'POST', headers: providerHeaders(config, key, 'application/json'), body, redirect: 'error', signal: AbortSignal.any([signal, timeout.signal]) });
     diagnostics.response(response);
-    if (!response.ok) throw await providerHttpError(config, response, 'auch ohne Streaming');
-    if (Number(response.headers.get('content-length') ?? 0) > MAX_WIRE_BYTES) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
-    if (!response.body) throw new Error('Der Endpunkt hat auch ohne Streaming keine Antwort geliefert.');
+    if (!response.ok) throw await providerHttpError(config, response, 'complete');
+    if (Number(response.headers.get('content-length') ?? 0) > MAX_WIRE_BYTES) throw providerFailure('completeLarge');
+    if (!response.body) throw providerFailure('completeMissing');
     reader = response.body.getReader();
     const chunks: Uint8Array[] = []; let size = 0;
     while (true) {
       const next = await reader.read(); if (next.done) break;
       size += next.value.byteLength;
-      if (size > MAX_WIRE_BYTES) throw new Error('Die vollständige Antwort des Endpunkts ist zu groß.');
+      if (size > MAX_WIRE_BYTES) throw providerFailure('completeLarge');
       chunks.push(next.value);
     }
     signal.throwIfAborted();
     let value: unknown;
-    try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new Error('Der Endpunkt hat auch ohne Streaming keine gültige JSON-Antwort geliefert.'); }
+    try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw providerFailure('completeJson'); }
     diagnostics.event(value);
     const result = parseOutput(value, tools, 'complete', false, diagnostics);
     diagnostics.finish(result.text.length, result.toolCalls.length, size);
@@ -110,10 +111,10 @@ export async function requestResponsesTurn(
   } catch (error) {
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
-    if (timeout.signal.aborted) throw new Error('Der Endpunkt hat auch ohne Streaming nicht rechtzeitig geantwortet.');
+    if (timeout.signal.aborted) throw providerFailure('completeTimeout');
     if (error instanceof ContextBudgetError) throw error;
-    if (error instanceof Error && /^(Der Endpunkt|Die Antwort|Die vollständige)/.test(error.message)) throw error;
-    throw new Error('Die vollständige Antwort des Endpunkts konnte nicht geladen werden. Bitte Verbindung prüfen.');
+    if (error instanceof ProviderDisplayError) throw error;
+    throw providerFailure('completeConnection');
   } finally { clearTimeout(timer); if (reader) await reader.cancel().catch(() => {}); }
 }
 
@@ -134,7 +135,7 @@ export async function streamResponsesTurn(
     const response = await fetch(providerEndpoint(config, 'responses', model), { method: 'POST', headers: providerHeaders(config, credential, 'text/event-stream'), body, redirect: 'error', signal: requestSignal });
     diagnostics.response(response);
     if (!response.ok) throw await providerHttpError(config, response);
-    if (!response.body) throw new Error('Der Endpunkt hat keine Antwort geliefert.');
+    if (!response.body) throw providerFailure('empty');
     reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let line = '', pendingCR = false, data: string[] = [], eventSize = 0, wireSize = 0, answer = '';
@@ -143,11 +144,11 @@ export async function streamResponsesTurn(
     const items = new Map<number, { id: string; type: string; added: boolean; done?: Record<string, unknown> }>();
     const itemIndexes = new Map<string, number>();
     const invalid = (field: 'tool_calls' | 'index' | 'id' | 'name' | 'arguments' | 'type', reason = 'tool_structure_invalid', comparison?: DiagnosticComparison): never => { diagnostics.failure(reason, { ...comparison, field }); throw toolCallError('structure', [...calls.values()].map(item => item.call), undefined, 'stream', field); };
-    const inconsistentOutput = (reason: string, comparison?: DiagnosticComparison): never => { diagnostics.failure(reason, comparison); throw new Error('Der Endpunkt hat widersprüchliche Responses-Ausgabedaten geliefert.'); };
+    const inconsistentOutput = (reason: string, comparison?: DiagnosticComparison): never => { diagnostics.failure(reason, comparison); throw providerFailure('conflictingOutput'); };
     const unfinishedOutput = (): never => {
       diagnostics.failure('fallback_items_unfinished');
       if (calls.size) throw toolCallError('finish', [...calls.values()].map(item => item.call));
-      throw new Error('Der Endpunkt hat keine vollständig abgeschlossene Responses-Ausgabe geliefert.');
+      throw providerFailure('unfinishedOutput');
     };
     function observeItem(index: unknown, id: unknown, type: unknown) {
       if (!Number.isSafeInteger(index) || (index as number) < 0) return inconsistentOutput('item_index_invalid', { field: 'index', actual: index });
@@ -202,7 +203,7 @@ export async function streamResponsesTurn(
     }
     const emit = (text: string) => {
       answer += text;
-      if (answer.length > MAX_TEXT_CHARS) throw new Error('Die Antwort des Endpunkts ist zu groß.');
+      if (answer.length > MAX_TEXT_CHARS) throw providerFailure('tooLarge');
       if (text) { onDelta(text); signal.throwIfAborted(); }
     };
     function dispatch() {
@@ -210,16 +211,16 @@ export async function streamResponsesTurn(
       const raw = data.join('\n'); data = []; eventSize = 0;
       if (raw.trim() === '[DONE]') return; // Only response.completed proves completion.
       let value: unknown;
-      try { value = JSON.parse(raw); } catch { diagnostics.failure('event_json_invalid', { actual: raw }); throw new Error('Der Endpunkt hat ungültige Streaming-Daten geliefert.'); }
+      try { value = JSON.parse(raw); } catch { diagnostics.failure('event_json_invalid', { actual: raw }); throw providerFailure('invalidStream'); }
       diagnostics.event(value);
-      if (!record(value) || typeof value.type !== 'string') throw new Error('Der Endpunkt hat ungültige Responses-Ereignisse geliefert.');
+      if (!record(value) || typeof value.type !== 'string') throw providerFailure('invalidEvent');
       if (value.type === 'error' || value.type === 'response.failed') {
         if (config.provider === 'chatgpt') throw providerReportedError(config, record(value.response) ? value.response.error : value.error ?? value);
-        throw new Error('Der Endpunkt meldet einen Fehler beim Streaming.');
+        throw providerFailure('streamError');
       }
       if (value.type === 'response.incomplete') throw toolCallError('finish', [...calls.values()].map(item => item.call), 'incomplete');
       if (value.type === 'response.output_text.delta' || value.type === 'response.refusal.delta') {
-        if (typeof value.delta !== 'string') throw new Error('Der Endpunkt hat ein nicht unterstütztes Textformat geliefert.');
+        if (typeof value.delta !== 'string') throw providerFailure('unsupportedText');
         if (value.output_index !== undefined || value.item_id !== undefined) {
           const item = observeItem(value.output_index, value.item_id, 'message');
           if (item.done) return inconsistentOutput('text_after_item_done', { outputIndex: value.output_index, field: 'delta', actual: value.delta });
@@ -265,7 +266,7 @@ export async function streamResponsesTurn(
         validateToolCallSize(existing.call, index, [...calls.values()].map(entry => entry.call));
       } else if (value.type === 'response.completed') {
         const parsed = parseOutput(completedResponse(value.response), tools, 'stream', config.provider === 'chatgpt', diagnostics);
-        if (!parsed.text.startsWith(answer)) { diagnostics.failure('stream_text_changed', { field: 'content', expected: answer, actual: parsed.text }); throw new Error('Der Endpunkt hat widersprüchliche Streaming-Texte geliefert.'); }
+        if (!parsed.text.startsWith(answer)) { diagnostics.failure('stream_text_changed', { field: 'content', expected: answer, actual: parsed.text }); throw providerFailure('conflictingText'); }
         // Final output is complete and authoritative; unfinished calls are never
         // returned to the agent merely because an item.done event was received.
         for (const { call } of calls.values()) {
@@ -282,14 +283,14 @@ export async function streamResponsesTurn(
       if (text.startsWith(':')) return;
       const colon = text.indexOf(':'), field = colon === -1 ? text : text.slice(0, colon);
       let value = colon === -1 ? '' : text.slice(colon + 1); if (value.startsWith(' ')) value = value.slice(1);
-      if (field === 'data') { eventSize += value.length; if (eventSize > 1_000_000) throw new Error('Die Antwort des Endpunkts ist zu groß.'); data.push(value); }
+      if (field === 'data') { eventSize += value.length; if (eventSize > 1_000_000) throw providerFailure('tooLarge'); data.push(value); }
     }
     function consume(text: string) {
       for (const char of text) {
         if (pendingCR) { pendingCR = false; if (char === '\n') continue; }
         if (char === '\r') { processLine(line); line = ''; pendingCR = true; }
         else if (char === '\n') { processLine(line); line = ''; }
-        else { line += char; if (line.length > 1_000_000) throw new Error('Die Antwort des Endpunkts ist zu groß.'); }
+        else { line += char; if (line.length > 1_000_000) throw providerFailure('tooLarge'); }
         if (result) return;
       }
     }
@@ -297,21 +298,21 @@ export async function streamResponsesTurn(
       const next = await reader.read();
       if (next.done) { consume(decoder.decode()); if (line) processLine(line); dispatch(); break; }
       resetTimer(); wireSize += next.value.byteLength;
-      if (wireSize > MAX_WIRE_BYTES) throw new Error('Die Antwort des Endpunkts ist zu groß.');
+      if (wireSize > MAX_WIRE_BYTES) throw providerFailure('tooLarge');
       consume(decoder.decode(next.value, { stream: true }));
     }
     if (!result) {
       if (calls.size) throw toolCallError('finish', [...calls.values()].map(item => item.call));
-      throw new Error('Die Streaming-Antwort wurde vorzeitig beendet.');
+      throw providerFailure('streamEnded');
     }
     diagnostics.finish(result.text.length, result.toolCalls.length, wireSize);
     return result;
   } catch (error) {
     diagnostics.error(error, signal, timeout.signal);
     if (signal.aborted) throw new DOMException('Generierung abgebrochen.', 'AbortError');
-    if (timeout.signal.aborted) throw new Error('Der Endpunkt hat nicht rechtzeitig geantwortet.');
+    if (timeout.signal.aborted) throw providerFailure('timeout');
     if (error instanceof ContextBudgetError) throw error;
-    if (error instanceof Error && (error.name === 'ChatGptAuthError' || /^(Der Endpunkt|Die Antwort|Die Streaming-Antwort)/.test(error.message))) throw error;
-    throw new Error('Die Verbindung zum Endpunkt ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.');
+    if (error instanceof ProviderDisplayError || error instanceof Error && error.name === 'ChatGptAuthError') throw error;
+    throw providerFailure('connection');
   } finally { clearTimeout(timer!); if (reader) await reader.cancel().catch(() => {}); }
 }

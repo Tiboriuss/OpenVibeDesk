@@ -2,7 +2,7 @@
 
 [Repository overview](../README.md)
 
-OpenVibeDesk's documentation is maintained in English. The app currently uses primarily German interface labels; setup instructions include those exact labels where they help you find a control.
+OpenVibeDesk's documentation is maintained in English. The host interface is available in English and German. English is the default. Module authors can use the [localization guide](localization.md) to support both languages.
 
 ## Choose a starting point
 

@@ -6,9 +6,12 @@ import type { AgentRunLimit, AgentSettings, AiConfig, ChatOptions, ToolEvent } f
 import type { ModuleListing, ModuleQuery, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { AgentDiagnosticEvent } from './diagnostics';
 import { AgentContext, RESULT_READER_NAME, resultReaderDefinition } from './agent-context';
+import { defaultUiLocale } from '../shared/locale';
+import { agentRunText } from './agent-run-text';
 import { ContextBudgetError } from './provider-request';
 
 export type AgentDependencies = {
+  locale?: import('../shared/locale').UiLocale;
   settings?: AgentSettings;
   getModules(options?: ModuleQuery): ModuleListing | Promise<ModuleListing>;
   getModuleTools(options: ModuleToolQuery): ModuleToolListing | Promise<ModuleToolListing>;
@@ -38,11 +41,13 @@ export async function runAgent(
   signal: AbortSignal, onDelta: (text: string) => void, deps: AgentDependencies
 ): Promise<void> {
   const settings = normalizeAgentSettings(deps.settings), startedAt = Date.now();
+  const locale = deps.locale ?? defaultUiLocale;
+  const copy = agentRunText[locale];
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), settings.timeoutSeconds * 1000);
   const combined = AbortSignal.any([signal, timeout.signal]);
   const conversation = [...messages];
-  const runtime = new ModuleToolRuntime(settings);
+  const runtime = new ModuleToolRuntime(settings, deps.locale);
   const context = new AgentContext();
   const evidence = createChatEvidenceCollector(deps.onEvidence);
   let evidenceStatus: Exclude<ChatEvidenceStatus, 'running'> = 'completed';
@@ -65,9 +70,9 @@ export async function runAgent(
     const limit = reason === 'context_budget' ? settings.contextTokenBudget : reason === 'tool_rounds' ? settings.maxToolRounds : reason === 'tool_calls' ? settings.maxToolCalls : settings.timeoutSeconds;
     const info: AgentRunLimit = { status: 'limit_reached', reason, toolRounds, toolCalls: callCount, discoveryCalls, actionCalls, elapsedMs: Math.max(0, Date.now() - startedAt), limit, nextToolType, ...(budgetError ? { context: { requestBytes: budgetError.observedBytes, estimatedInputTokens: budgetError.estimatedInputTokens, inputTokenBudget: budgetError.inputTokenBudget, outputTokenReserve: budgetError.outputTokenReserve } } : {}) };
     if (info.context) progress({ phase: 'context', limitReason: 'context_budget', ...info.context });
-    const reached = reason === 'tool_rounds' ? `Das eingestellte Limit von ${limit} Werkzeugrunden ist erreicht.` : reason === 'tool_calls' ? `Das eingestellte Limit von ${limit} Werkzeugaufrufen ist erreicht.` : `Das eingestellte Zeitlimit von ${limit} Sekunden ist erreicht.`;
-    const pending = nextToolType === 'discovery' ? 'Die nächste Modul- oder Werkzeugsuche wurde nicht gestartet.' : nextToolType === 'action' ? 'Die nächste Modulaktion wurde nicht gestartet.' : nextToolType === 'mixed' ? 'Die nächste Runde mit Suche und Modulaktionen wurde nicht gestartet.' : awaitingAction ? 'Der zuletzt gestartete Vorgang kann noch abgeschlossen werden; bitte seinen Status prüfen.' : 'Es wird kein weiterer Werkzeugaufruf gestartet.';
-    emitMessage(budgetError ? budgetError.message : `${reached} Bisher: ${toolRounds} Werkzeugrunden, ${callCount} Aufrufe (${discoveryCalls} Modul-/Werkzeugsuchen, ${actionCalls} Modulaktionsaufrufe). ${pending} Bereits ausgeführte Änderungen und protokollierte Statusangaben bleiben erhalten. Es gibt keinen automatischen weiteren Versuch.`);
+    const reached = reason === 'tool_rounds' ? copy.rounds(limit) : reason === 'tool_calls' ? copy.calls(limit) : copy.timeout(limit);
+    const pending = nextToolType !== 'none' ? copy[nextToolType] : awaitingAction ? copy.inFlight : copy.noNext;
+    emitMessage(budgetError ? budgetError.display(locale) : `${reached} ${copy.usage(toolRounds, callCount, discoveryCalls, actionCalls)} ${pending} ${copy.preserved}`);
     deps.onLimitReached?.(info);
   };
   const checkAbort = (): boolean => {
@@ -165,11 +170,11 @@ export async function runAgent(
           invokeModuleTool: async (moduleId, name, args) => { combined.throwIfAborted(); return deps.invokeModuleTool(moduleId, name, args, combined, call.id); }
         }, offeredNames, offer.active));
         let parsed: unknown;
-        try { parsed = JSON.parse(result); } catch { parsed = { ok: false, error: 'Die Modulfunktion hat kein gültiges Ergebnis geliefert.' }; }
+        try { parsed = JSON.parse(result); } catch { parsed = { ok: false, error: copy.badResult }; }
         const outcome = inspectToolResult(parsed), label = runtime.label(call.function.name, offer.active);
         const interruptedAction = !discovery && timeout.signal.aborted && !outcome.explicit && outcome.status === 'failed';
         const event: ToolEvent = { name: call.function.name, status: interruptedAction ? 'uncertain' : outcome.status, label,
-          ...(interruptedAction ? { detail: 'Das Zeitlimit wurde während des Aufrufs erreicht. Bitte den tatsächlichen Status prüfen; der Aufruf wird nicht wiederholt.' } : outcome.detail ? { detail: outcome.detail } : {}) };
+          ...(interruptedAction ? { detail: copy.interrupted } : outcome.detail ? { detail: outcome.detail } : {}) };
         // Cache pages can contain facts absent from the original bounded excerpt.
         // Preserve them as read evidence, without adding/replaying a domain action.
         if (!discovery) evidence.record(event, result, offer.active.get(call.function.name)?.moduleId);
@@ -185,7 +190,7 @@ export async function runAgent(
         if (!interruptedAction) awaitingAction = false;
         if (checkAbort()) return;
         if (outcome.status === 'cancelled') {
-          emitMessage(`${label}: abgebrochen.${outcome.detail ? ` ${outcome.detail}` : ''}`);
+          emitMessage(`${label}: ${copy.cancelled}.${outcome.detail ? ` ${outcome.detail}` : ''}`);
           evidenceStatus = 'cancelled'; finishReason = 'cancelled';
           return;
         }
@@ -211,7 +216,7 @@ export async function runAgent(
       evidenceStatus = 'cancelled';
       finishReason = 'cancelled';
       if (inFlightCall) {
-        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'cancelled' : 'uncertain', detail: inFlightCall.discovery ? 'Die Modul-/Werkzeugsuche wurde gestoppt.' : 'Der Assistent wurde gestoppt. Der gestartete Vorgang kann noch laufen; bitte den tatsächlichen Status prüfen. Kein automatischer weiterer Versuch.' };
+        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'cancelled' : 'uncertain', detail: inFlightCall.discovery ? copy.searchStopped : copy.actionStopped };
         if (!inFlightCall.discovery) evidence.record(event);
         deps.onToolEvent?.(event);
         progress({ phase: 'tool_result', name: inFlightCall.name, discovery: inFlightCall.discovery, status: event.status, ...(inFlightCall.moduleId ? { moduleId: inFlightCall.moduleId } : {}) });
@@ -220,7 +225,7 @@ export async function runAgent(
     }
     if (timeout.signal.aborted) {
       if (inFlightCall) {
-        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'failed' : 'uncertain', detail: inFlightCall.discovery ? 'Das Zeitlimit wurde während der Modul-/Werkzeugsuche erreicht.' : 'Das Zeitlimit wurde während des Aufrufs erreicht. Der Vorgang kann noch laufen; bitte seinen Status prüfen. Kein automatischer weiterer Versuch.' };
+        const event: ToolEvent = { name: inFlightCall.name, label: inFlightCall.label, status: inFlightCall.discovery ? 'failed' : 'uncertain', detail: inFlightCall.discovery ? copy.searchTimedOut : copy.actionTimedOut };
         if (!inFlightCall.discovery) evidence.record(event);
         deps.onToolEvent?.(event);
         progress({ phase: 'tool_result', name: inFlightCall.name, discovery: inFlightCall.discovery, status: event.status, ...(inFlightCall.moduleId ? { moduleId: inFlightCall.moduleId } : {}) });

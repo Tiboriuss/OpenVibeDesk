@@ -17,14 +17,14 @@ Repository catalogs and unused tool schemas stay out of normal chat requests. Th
 
 ## Configure a source
 
-Open **Settings → Modules** (**Einstellungen → Module**). Installed modules appear first. The collapsed **Module sources** (**Modulquellen**) group manages repositories; **Module catalog** (**Modulkatalog**) shows their packages. Expand the group you need. Settings search reveals these controls without discarding existing form edits.
+Open **Settings → Modules** (**Einstellungen → Module**). Installed modules appear first. The collapsed **Module sources** (**Modulquellen**) group manages repositories; **Module catalog** shows their packages. Expand the group you need. Settings search reveals these controls without discarding existing form edits.
 
-1. Expand **Modulquellen → Repository hinzufügen**, enter a name and a supported URL, and optionally enter an access token for a private source.
-2. Select **Quelle hinzufügen**. Saving configuration does not download or execute modules.
-3. Expand **Modulkatalog** and select **Katalog laden**. Use **Alle Quellen** to refresh all saved sources or select a single source. Each source shows its own status and last successful check.
-4. Search by module title, ID or description and choose **Installieren** for the desired package.
-5. Select **Freigeben & aktivieren**, review the module's declared access and approve its local file fingerprint. Installation alone never runs its code. Changed code needs new approval, even when the Assistant's **Ohne Abfragen** mode is enabled.
-6. Open the module from its navigation entry, if it contributes one, or ask the Assistant to use its functions. The installed module also appears in the normal module list. Its navigation order can be changed under [**OVD-Bar → Einträge & Reihenfolge**](ovd-bar.md).
+1. Expand **Module sources → Add repository**, enter a name and a supported URL, and optionally enter an access token for a private source.
+2. Select **Add source**. Saving configuration does not download or execute modules.
+3. Expand **Module catalog** and select **Load catalog**. Use **All sources** to refresh all saved sources or select a single source. Each source shows its own status and last successful check.
+4. Search by module title, ID or description and choose **Install** for the desired package.
+5. Select **Approve and enable**, review the module's declared access and approve its local file fingerprint. Installation alone never runs its code. Changed code needs new approval, even when the Assistant's **Without confirmations** mode is enabled.
+6. Open the module from its navigation entry, if it contributes one, or ask the Assistant to use its functions. The installed module also appears in the normal module list. Its navigation order can be changed under [**OVD-Bar → Items and order**](ovd-bar.md).
 
 Supported source addresses:
 
@@ -134,7 +134,7 @@ Catalog format `version: 1`, module `apiVersion: 1` and the package's own versio
 
 GitHub catalog reads resolve one immutable repository tree; package files come from that exact tree even if the branch moves during a download. Direct HTTPS sources use the published per-file hashes to detect mismatched content. Checksums detect inconsistency, but do not establish publisher trust independently of the source.
 
-To check for updates, return to **Modulkatalog** and select **Katalog laden**. A newer advertised package shows **Aktualisieren** with the old and new versions. Finish work and save edits in that module before updating. The catalog does not offer a downgrade or a reinstall of the same version, even if the publisher has changed its files.
+To check for updates, return to **Module catalog** and select **Load catalog**. A newer advertised package shows **Aktualisieren** with the old and new versions. Finish work and save edits in that module before updating. The catalog does not offer a downgrade or a reinstall of the same version, even if the publisher has changed its files.
 
 Downloads are staged in a hidden directory and checked for size, hashes, manifest identity, API compatibility and required entry files before replacement. The host rejects busy modules, built-in IDs, foreign folders and locally modified installations. Updates stop the affected module and close its views, preserve `module-data/<id>`, revoke the previous approval, and discover the new version without restarting unrelated modules. Disabled modules remain disabled. A successfully installed update waits for approval and activation; it does not resume the old code automatically. If installation or configuration persistence fails, OVD attempts to restore the previous package. A recovery journal reconciles interrupted replacements at startup; a failed rollback asks the user to restart OVD.
 
@@ -148,10 +148,10 @@ Current bounds are 50 sources, 200 module listings per source, a 2 MiB catalog r
 
 | What you see | Meaning and next step |
 | --- | --- |
-| **Noch nicht geladen** | The source is saved but has no loaded catalog in this session. Select **Katalog laden**. |
+| **Noch nicht geladen** | The source is saved but has no loaded catalog in this session. Select **Load catalog**. |
 | A source error with older entries still visible | A refresh failed. Older entries are retained for context, but installation from that source is blocked until it loads successfully. |
-| **Verfügbar** | The module is not installed. Choose **Installieren**, then approve and activate it. |
-| **Installiert** / approval required | Files are present but code is awaiting approval. Use **Freigeben & aktivieren**. |
+| **Verfügbar** | The module is not installed. Choose **Install**, then approve and activate it. |
+| **Installiert** / approval required | Files are present but code is awaiting approval. Use **Approve and enable**. |
 | **Nicht kompatibel** | The catalog advertises an unsupported module API. Check the module's host requirements. Newer manifest fields can also be rejected during package validation. |
 | **Konflikt mit installiertem Modul** | That ID is already local, owned by another source, installed in another folder or modified locally. OVD preserves it instead of overwriting it. Use a distinct ID for a development fork. |
 | Access denied or HTTP 404 | Check the URL, default-branch catalog, token access/expiry and any organization approval. GitHub may also return an access error for a rate limit. |

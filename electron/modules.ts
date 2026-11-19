@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { UiLocale } from '../shared/locale';
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 import type { ModuleInfo, ModuleListing, ModuleManifest, ModuleQuery, ModuleSummary } from '../shared/modules';
 
 export const MODULE_API_VERSION = 1;
@@ -213,14 +213,14 @@ export class ModuleRegistry {
   }
 
   listModules(): ModuleInfo[] { return copy([...this.records.values()].map(record => record.module).concat(this.issues)); }
-  searchEntries(locale: UiLocale = 'de') {
+  searchEntries(locale: UiLocale = defaultUiLocale) {
     return [...this.records.values()].filter(({ module }) => module.status === 'ready').map(({ module }) => {
       const catalog = module.manifest?.locales?.[locale], title = catalog?.title ?? module.title, description = catalog?.description ?? module.description;
       return { summary: { id: module.id, title, description: description.slice(0, 240) }, search: [module.id, title, description, ...(catalog?.keywords ?? module.manifest?.keywords ?? [])].join(' ') };
     });
   }
-  listSummaries(locale: UiLocale = 'de'): ModuleSummary[] { return this.searchEntries(locale).map(item => item.summary); }
-  findModules(rawOptions: ModuleQuery = {}, locale: UiLocale = 'de'): ModuleListing {
+  listSummaries(locale: UiLocale = defaultUiLocale): ModuleSummary[] { return this.searchEntries(locale).map(item => item.summary); }
+  findModules(rawOptions: ModuleQuery = {}, locale: UiLocale = defaultUiLocale): ModuleListing {
     const options = querySchema.parse(rawOptions), query = fold(options.query ?? ''), terms = query.split(/[\s._-]+/).filter(Boolean);
     const available = this.searchEntries(locale).map(({ summary, search }) => ({
       summary, exact: fold(summary.id) === query || fold(summary.title) === query, score: terms.filter(term => fold(search).includes(term)).length

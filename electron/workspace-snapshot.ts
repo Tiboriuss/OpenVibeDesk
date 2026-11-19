@@ -40,7 +40,7 @@ const message = z.object({
 });
 const uniqueIds = (items: readonly { id: string }[]) => new Set(items.map(item => item.id)).size === items.length;
 const messages = z.array(message).refine(uniqueIds);
-const session = z.object({ id, title: text, createdAt: timestamp, updatedAt: timestamp, historyStart: count, messages });
+const session = z.object({ id, title: text, placeholderTitle: z.boolean().optional(), createdAt: timestamp, updatedAt: timestamp, historyStart: count, messages });
 const thinking = z.enum(['off', 'low', 'medium', 'high']);
 const ai = z.object({
   baseUrl: text.optional(), model: text.optional(), thinking: thinking.optional(), smartModel: text.optional(), simpleModel: text.optional(),

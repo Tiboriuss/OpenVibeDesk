@@ -1,3 +1,6 @@
+import { useFormFeedback } from './form-feedback';
+import { diagnosticsText } from './diagnostics-copy';
+import { useUiLocale } from './locale';
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Download, RefreshCw, Trash2 } from 'lucide-react';
 import type { DiagnosticsStatus } from '../shared/diagnostics';
@@ -16,18 +19,21 @@ function initialGroups(): Record<Group, boolean> {
   } catch { /* Keep the groups usable when local storage is unavailable. */ }
   return { logging: false };
 }
-function bytes(value: number): string {
-  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
-  if (value >= 1024) return `${(value / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 })} KB`;
-  return `${value.toLocaleString('de-DE')} B`;
+function formatBytes(value: number, locale: string): string {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toLocaleString(locale, { maximumFractionDigits: 1 })} MB`;
+  if (value >= 1024) return `${(value / 1024).toLocaleString(locale, { maximumFractionDigits: 1 })} KB`;
+  return `${value.toLocaleString(locale)} B`;
 }
 
 export function DiagnosticsSettings({ active, enabled, searchQuery = '' }: { active: boolean; enabled: boolean; searchQuery?: string }) {
+  const locale = useUiLocale();
+  const copy = diagnosticsText[locale];
+  const bytes = (value: number) => formatBytes(value, locale);
   const [status, setStatus] = useState<DiagnosticsStatus>();
   const [groups, setGroups] = useState(initialGroups);
   const [searchGroups, setSearchGroups] = useState<Record<Group, boolean>>({ logging: true });
   const [busy, setBusy] = useState<'toggle' | 'export' | 'clear'>();
-  const [loading, setLoading] = useState(false), [error, setError] = useState(''), [loadError, setLoadError] = useState(''), [notice, setNotice] = useState('');
+  const [loading, setLoading] = useState(false), [error, setError] = useFormFeedback(copy, locale), [loadError, setLoadError] = useFormFeedback(copy, locale), [notice, setNotice] = useFormFeedback(copy, locale);
   const request = useRef(0), busyRef = useRef(false), mounted = useRef(true);
   const searching = !!searchQuery.trim();
   const matches = (group: Group) => !searching || matchesSettingsEntry(settingsEntries.find(entry => entry.id === `diagnostics.${group}`)!, searchQuery);
@@ -36,7 +42,6 @@ export function DiagnosticsSettings({ active, enabled, searchQuery = '' }: { act
     try { localStorage.setItem(storageKey, JSON.stringify(groups)); } catch { /* The current session keeps its group state. */ }
   }, [groups]);
   useEffect(() => { if (searchQuery.trim()) setSearchGroups({ logging: true }); }, [searchQuery]);
-  useEffect(() => { if (!busyRef.current) setNotice(''); }, [enabled]);
   async function refresh(showLoading = false) {
     if (busyRef.current) return;
     const id = ++request.current;
@@ -45,7 +50,7 @@ export function DiagnosticsSettings({ active, enabled, searchQuery = '' }: { act
       const value = await window.workspace.getDiagnosticsStatus();
       if (mounted.current && id === request.current) { setStatus(value); setLoadError(''); }
     } catch {
-      if (mounted.current && id === request.current) setLoadError('Diagnosestatus konnte nicht geladen werden. Bitte erneut versuchen.');
+      if (mounted.current && id === request.current) setLoadError(copy => copy.loadError);
     } finally { if (mounted.current && id === request.current) setLoading(false); }
   }
   useEffect(() => {
@@ -64,32 +69,32 @@ export function DiagnosticsSettings({ active, enabled, searchQuery = '' }: { act
     try {
       if (operation === 'toggle') {
         const next = await window.workspace.updateDiagnostics({ enabled: !status.enabled });
-        if (mounted.current) { setStatus(next); setNotice(next.enabled ? 'Diagnoseprotokoll aktiviert.' : 'Diagnoseprotokoll deaktiviert.'); }
+        if (mounted.current) { setStatus(next); setNotice(copy => next.enabled ? copy.enabled : copy.disabled); }
       } else if (operation === 'clear') {
         const next = await window.workspace.clearDiagnostics();
-        if (mounted.current) { setStatus(next); setNotice('Diagnoseprotokoll geleert.'); }
+        if (mounted.current) { setStatus(next); setNotice(copy => copy.cleared); }
       } else {
         const result = await window.workspace.exportDiagnostics();
-        if (mounted.current) setNotice(result.cancelled ? 'Export abgebrochen.' : result.fileName ? `Diagnoseprotokoll als „${result.fileName}“ exportiert.` : 'Diagnoseprotokoll exportiert.');
+        if (mounted.current) setNotice((copy, locale) => result.cancelled ? copy.cancelled : result.fileName ? (locale === 'de' ? `Diagnoseprotokoll als „${result.fileName}“ exportiert.` : `Diagnostic log exported to “${result.fileName}”.`) : copy.exported);
       }
     } catch {
-      if (mounted.current) setError(operation === 'toggle' ? 'Diagnoseeinstellung konnte nicht gespeichert werden. Der vorherige Zustand bleibt erhalten.' : operation === 'clear' ? 'Diagnoseprotokoll konnte nicht geleert werden.' : 'Diagnoseprotokoll konnte nicht exportiert werden.');
+      if (mounted.current) setError(copy => operation === 'toggle' ? copy.toggleError : operation === 'clear' ? copy.clearError : copy.exportError);
     } finally { busyRef.current = false; if (mounted.current) setBusy(undefined); }
   }
-  const summary = status ? `${status.enabled ? 'Ein' : 'Aus'} · ${status.entryCount.toLocaleString('de-DE')} ${status.entryCount === 1 ? 'Eintrag' : 'Einträge'} · ${bytes(status.sizeBytes)}` : loading ? 'Wird geladen …' : 'Status nicht verfügbar';
+  const summary = status ? `${status.enabled ? copy.on : copy.off} · ${status.entryCount.toLocaleString(locale)} ${status.entryCount === 1 ? copy.entry : copy.entries} · ${bytes(status.sizeBytes)}` : loading ? copy.loading : copy.unavailable;
   return <div className="diagnostics-settings">
     {(error || loadError) && <p className="diagnostics-feedback error" role="alert">{error || loadError}</p>}
     {notice && <p className="diagnostics-feedback" role="status">{notice}</p>}
     <details className="workspace-settings-group" hidden={!matches('logging')} open={searching ? searchGroups.logging : groups.logging}>
-      <summary onClick={event => { event.preventDefault(); toggleGroup('logging'); }}><span><strong>Diagnoseprotokoll</strong><small>{summary}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+      <summary onClick={event => { event.preventDefault(); toggleGroup('logging'); }}><span><strong>{copy.log}</strong><small>{summary}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
       <div className="workspace-settings-content">
-        <div className="setting-row workspace-setting-row"><div><label htmlFor="diagnostics-enabled">Diagnoseprotokoll aktivieren</label><p id="diagnostics-enabled-help">Zeichnet technische Abläufe und Fehler auf, ohne Nachrichteninhalte oder Zugangsdaten.</p></div><input id="diagnostics-enabled" className="setting-toggle" type="checkbox" checked={status?.enabled ?? false} disabled={!status || !!busy} aria-describedby="diagnostics-enabled-help" onChange={() => void perform('toggle')} /></div>
+        <div className="setting-row workspace-setting-row"><div><label htmlFor="diagnostics-enabled">{copy.enable}</label><p id="diagnostics-enabled-help">{copy.help}</p></div><input id="diagnostics-enabled" className="setting-toggle" type="checkbox" checked={status?.enabled ?? false} disabled={!status || !!busy} aria-describedby="diagnostics-enabled-help" onChange={() => void perform('toggle')} /></div>
         <div className="diagnostics-storage" aria-live="polite">
-          {status && <><span>{status.entryCount.toLocaleString('de-DE')} {status.entryCount === 1 ? 'Eintrag' : 'Einträge'} · {bytes(status.sizeBytes)}</span><span>Maximal {status.maxFiles} Dateien mit je {bytes(status.maxFileBytes)}. Ältere Einträge werden automatisch ersetzt.</span>{status.lastEventAt && <span>Letzter Eintrag: {new Date(status.lastEventAt).toLocaleString('de-DE')}</span>}</>}
-          {status?.lastError === 'storage_unavailable' && <p className="diagnostics-feedback error" role="alert">Das Diagnoseprotokoll konnte nicht geschrieben werden. Prüfe, ob das lokale App-Profil beschreibbar ist.</p>}
+          {status && <><span>{status.entryCount.toLocaleString(locale)} {status.entryCount === 1 ? copy.entry : copy.entries} · {bytes(status.sizeBytes)}</span><span>{locale === 'de' ? `Maximal ${status.maxFiles} Dateien mit je ${bytes(status.maxFileBytes)}. Ältere Einträge werden automatisch ersetzt.` : `Up to ${status.maxFiles} files of ${bytes(status.maxFileBytes)} each. Older entries are replaced automatically.`}</span>{status.lastEventAt && <span>{copy.lastEntry} {new Date(status.lastEventAt).toLocaleString(locale)}</span>}</>}
+          {status?.lastError === 'storage_unavailable' && <p className="diagnostics-feedback error" role="alert">{copy.storageError}</p>}
         </div>
-        <div className="diagnostics-actions"><button type="button" disabled={!status || !!busy} onClick={() => void perform('export')}><Download size={14} aria-hidden="true" />{busy === 'export' ? 'Wird exportiert …' : 'Protokoll exportieren'}</button><button type="button" disabled={!status || !!busy || !status.fileCount} onClick={() => void perform('clear')}><Trash2 size={14} aria-hidden="true" />{busy === 'clear' ? 'Wird geleert …' : 'Leeren'}</button><button type="button" disabled={!!busy || loading} onClick={() => void refresh(true)}><RefreshCw size={14} aria-hidden="true" />{loading ? 'Wird geladen …' : 'Aktualisieren'}</button></div>
-        <p className="diagnostics-help">Stelle den Fehler bei aktiviertem Protokoll nach und exportiere anschließend die Datei.</p>
+        <div className="diagnostics-actions"><button type="button" disabled={!status || !!busy} onClick={() => void perform('export')}><Download size={14} aria-hidden="true" />{busy === 'export' ? copy.exporting : copy.export}</button><button type="button" disabled={!status || !!busy || !status.fileCount} onClick={() => void perform('clear')}><Trash2 size={14} aria-hidden="true" />{busy === 'clear' ? copy.clearing : copy.clear}</button><button type="button" disabled={!!busy || loading} onClick={() => void refresh(true)}><RefreshCw size={14} aria-hidden="true" />{loading ? copy.loading : copy.refresh}</button></div>
+        <p className="diagnostics-help">{copy.reproduce}</p>
       </div>
     </details>
   </div>;

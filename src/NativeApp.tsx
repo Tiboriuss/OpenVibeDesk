@@ -1,6 +1,7 @@
+import { formDetail } from './form-feedback';
 import { useEffect, useRef, useState } from 'react';
 import { LocaleProvider, uiText, useUiLocale } from './locale';
-import { resolveUiLocale } from '../shared/locale';
+import { defaultUiLocale } from '../shared/locale';
 import { X } from 'lucide-react';
 import { OvdBar } from './OvdBar';
 import { ChatView } from './ChatView';
@@ -11,6 +12,7 @@ import { SettingsView } from './SettingsView';
 import { moduleViews, useWorkspaceModules, workspaceNavigation } from './module-registry';
 import type { RendererWorkspaceState } from '../shared/model';
 import { MAX_COMPOSER_TEXT } from '../shared/chat-composer';
+import { assistantText } from './assistant-copy';
 import { useChatComposer } from './useChatComposer';
 import type { UiAction } from '../shared/actions';
 import { MAX_MODULE_REFERENCES, moduleReferenceInput, moduleReferenceKey, moduleReferenceSummarySchema, type ModuleReferenceInput } from '../shared/references';
@@ -31,13 +33,14 @@ export function NativeApp() {
     window.workspace.loadState().then(value => { if (!receivedUpdate) setState(value); }).catch(err => { if (!receivedUpdate) setError(String(err)); });
     return () => { receivedUpdate = true; unsubscribe(); };
   }, []);
-  const locale = state?.locale ?? resolveUiLocale('system', navigator.languages);
+  const locale = state?.locale ?? defaultUiLocale;
   return <LocaleProvider locale={locale}><NativePanel state={state} error={error} setError={setError} /></LocaleProvider>;
 }
 
 function NativePanel({ state, error, setError }: { state: RendererWorkspaceState | null; error: string; setError: (value: string) => void }) {
   const locale = useUiLocale();
   const copy = uiText[locale];
+  const labels = assistantText[locale];
   const saveFeedback = useWorkspaceSaveFeedback();
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention(view === 'dock');
@@ -68,7 +71,7 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
   const editable = (id?: string): id is string => !!id && !!composer.current(id) && awaitingAcceptance.current?.sessionId !== id;
   function setPrompt(text: string) {
     if (!editable(sessionId)) return;
-    if (text.length > MAX_COMPOSER_TEXT && text.length >= prompt.length) { setChatError('Der Entwurf ist zu lang. Bitte kürze den Text.'); return; }
+    if (text.length > MAX_COMPOSER_TEXT && text.length >= prompt.length) { setChatError(labels.draftTooLong); return; }
     composer.edit(sessionId, { text }, composer.snapshot);
   }
   function setSessionRef(value?: string) {
@@ -101,20 +104,20 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
     if (!editable(target)) return;
     const key = moduleReferenceKey(reference), current = composer.current(target)?.content.references ?? [];
     if (current.some(item => moduleReferenceKey(item) === key) || referenceRequests.current.has(key)) return;
-    if (current.length + referenceRequests.current.size >= MAX_MODULE_REFERENCES) { setReferenceError(`Du kannst höchstens ${MAX_MODULE_REFERENCES} Modulreferenzen gleichzeitig hinzufügen.`); return; }
+    if (current.length + referenceRequests.current.size >= MAX_MODULE_REFERENCES) { setReferenceError(labels.referenceLimit(MAX_MODULE_REFERENCES)); return; }
     const token = Symbol(); referenceRequests.current.set(key, token); setReferencesLoading(true); setReferenceError('');
     try {
       const summary = moduleReferenceSummarySchema.parse(await window.workspace.getModuleReference(moduleReferenceInput(reference)));
-      if (moduleReferenceKey(summary) !== key) throw new Error('Die Referenz gehört nicht zur ausgewählten Ressource.');
+      if (moduleReferenceKey(summary) !== key) throw new Error(labels.wrongReference);
       if (referenceRequests.current.get(key) === token && activeSessionId.current === target && editable(target)) {
         const selected = composer.current(target)?.content.references ?? [];
         if (!selected.some(item => moduleReferenceKey(item) === key)) {
-          if (selected.length >= MAX_MODULE_REFERENCES) throw new Error(`Du kannst höchstens ${MAX_MODULE_REFERENCES} Modulreferenzen gleichzeitig hinzufügen.`);
+          if (selected.length >= MAX_MODULE_REFERENCES) throw new Error(labels.referenceLimit(MAX_MODULE_REFERENCES));
           composer.edit(target, { references: [...selected, summary] });
         }
       }
     } catch (err) {
-      if (referenceRequests.current.get(key) === token && activeSessionId.current === target) setReferenceError(err instanceof Error ? err.message : 'Die Referenz konnte nicht geladen werden.');
+      if (referenceRequests.current.get(key) === token && activeSessionId.current === target) setReferenceError(formDetail(err, locale) || labels.referenceFailed);
     } finally {
       if (referenceRequests.current.get(key) === token) { referenceRequests.current.delete(key); setReferencesLoading(referenceRequests.current.size > 0); }
     }
@@ -131,13 +134,13 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
       const reference = await window.workspace.getMailReference(id);
       if (version === emailRequestVersion.current && activeSessionId.current === targetSession) composer.edit(targetSession, { emailSummary: reference });
     } catch (err) {
-      if (version === emailRequestVersion.current && activeSessionId.current === targetSession) setEmailError(err instanceof Error ? err.message : 'Die Mail konnte nicht als Kontext angehängt werden.');
+      if (version === emailRequestVersion.current && activeSessionId.current === targetSession) setEmailError(formDetail(err, locale) || labels.emailFailed);
     } finally { if (version === emailRequestVersion.current) setEmailLoading(false); }
   }
   async function action(value: UiAction) { try { await window.workspace.dispatchAction(value); setError(''); } catch (err) { setError(String(err)); } }
   async function sendChat() {
     if (!sessionId || locked || sending || awaitingAcceptance.current || emailLoading || referencesLoading || !prompt.trim() || composer.issue) return;
-    if (prompt.trim().length > 20_000) { setChatError('Eine Nachricht darf höchstens 20.000 Zeichen enthalten. Dein Entwurf bleibt erhalten.'); return; }
+    if (prompt.trim().length > 20_000) { setChatError(labels.messageLimit((20_000).toLocaleString(locale))); return; }
     const targetSession = sessionId, requestId = crypto.randomUUID();
     awaitingAcceptance.current = { id: requestId, sessionId: targetSession };
     setPreparingSession(targetSession); setSending(true); setChatError('');
@@ -145,13 +148,13 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
       const { content, revision } = await composer.settle(targetSession);
       // Send only the selection shown at the user's click. The host verifies
       // this revision again after reference resolution, at durable acceptance.
-      if (revision !== composer.snapshot?.revision) throw new Error('Der Entwurf wurde inzwischen geändert. Bitte prüfe ihn vor dem Senden.');
+      if (revision !== composer.snapshot?.revision) throw new Error(labels.draftChanged);
       await window.workspace.sendChat(content.text.trim(), content.emailSummary?.id, {
         tier, sessionId: targetSession, clientRequestId: requestId, composerRevision: revision,
         sessionRefId: content.sessionRefId, references: content.references?.map(moduleReferenceInput)
       });
     } catch (err) {
-      if (activeSessionId.current === targetSession) setChatError(err instanceof Error ? err.message : String(err));
+      if (activeSessionId.current === targetSession) setChatError(formDetail(err, locale) || labels.sendFailed);
     } finally {
       awaitingAcceptance.current = undefined; setPreparingSession(undefined); setSending(false);
     }
@@ -169,14 +172,14 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
     if (sending || !sessionId) return;
     setSending(true); setChatError('');
     try { await window.workspace.reformulateChat(id, { tier, sessionId }); }
-    catch (err) { setChatError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setChatError(formDetail(err, locale) || labels.sendFailed); }
     finally { setSending(false); }
   }
   async function continueMessage(id: string) {
     if (sending || !sessionId) return;
     setSending(true); setChatError('');
     try { await window.workspace.continueChat(id, { tier, sessionId }); }
-    catch (err) { setChatError(err instanceof Error ? err.message : String(err)); }
+    catch (err) { setChatError(formDetail(err, locale) || labels.sendFailed); }
     finally { setSending(false); }
   }
   if (view === 'dock') {

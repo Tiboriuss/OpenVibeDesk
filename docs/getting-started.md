@@ -71,13 +71,13 @@ A second launch reuses the existing app instance, so close the previous process 
 
 ### Choose the interface language
 
-Open **Settings → Appearance → Interface language** (**Einstellungen → Darstellung → Oberflächensprache**) and choose **System**, **Deutsch** or **English**. Open windows update immediately. **System** uses the first supported language in your operating system’s preferred list and falls back to German. You can also ask the Assistant to change the interface language.
+OVD starts in English. Open **Settings → Appearance → Interface language** (**Einstellungen → Darstellung → Oberflächensprache**) and choose **System**, **Deutsch** or **English**. Open windows update immediately. **System** uses the first supported language in your operating system’s preferred list and falls back to English. You can also ask the Assistant to change the interface language.
 
-The settings navigation, chat list and workspace recovery controls support both languages. Some forms and module views still use their original labels. Speech recognition has its own [language setting](#enable-speech-input).
+Chat, session management, host settings and the OVD-Bar use the selected language. Each module supplies its own translations. Speech recognition has its own [language setting](#enable-speech-input).
 
 ### Arrange the workspace
 
-Open module windows from the OVD-Bar. Its **…** menu provides common size, orientation and placement choices; **OVD-Bar anpassen …** opens the complete settings. Under **Settings → OVD-Bar**, choose a vertical or horizontal layout, size, background opacity, foreground behavior and optional idle collapse. Drag its grip for free placement. **Einträge & Reihenfolge** sets the order of available entries.
+Open module windows from the OVD-Bar. Its **…** menu provides common size, orientation and placement choices; **Customize OVD-Bar…** opens the complete settings. Under **Settings → OVD-Bar**, choose a vertical or horizontal layout, size, background opacity, foreground behavior and optional idle collapse. Drag its grip for free placement. **Items and order** sets the order of available entries.
 
 The Assistant can make the same changes, for example “Make the OVD-Bar horizontal at the bottom” or “Move Files before Mail.” Position and preferences survive restart. See the [OVD-Bar guide](ovd-bar.md) for keyboard use and display behavior.
 
@@ -96,7 +96,7 @@ API keys and ChatGPT OAuth credentials use the local encrypted credential store.
 
 ### Enable speech input
 
-Expand **Spracheingabe** under **KI & Verbindung**, enable it, and select a provider and **Live** or **Nach Aufnahme** mode. Save its own transcription URL, model/deployment and API key. Speech and chat providers are independent; a ChatGPT sign-in does not configure an audio API connection.
+Expand **Voice input** under **AI & connection**, enable it and select a provider. Choose **Live** or **After recording** for transcription. Save its own transcription URL, model/deployment and API key. Speech and chat providers are independent; a ChatGPT sign-in does not configure an audio API connection.
 
 Use the microphone in Chat, speak, and click Stop. The final transcript is inserted into the message draft for review and editing. Nothing is sent automatically. See [Speech input](speech-input.md) for provider compatibility, microphone permissions and cancellation.
 
@@ -108,7 +108,7 @@ You can also ask the Assistant to prepare text for a specific chat. Open that ch
 
 ### Reformulate an answer
 
-Use **Reformulate answer** (**Antwort neu formulieren**) beside an assistant answer to create a new branch from its saved results. The branch is marked **Reformulated · no actions** (currently **Neu formuliert · keine Aktionen**). OVD sends the recorded context to the selected model to rewrite the answer; it does not run tools or reread source mail, files or integrations. **Without confirmations** does not change this behavior.
+Use **Reformulate answer** (**Antwort neu formulieren**) beside an assistant answer to create a new branch from its saved results. The branch is marked **Reformulated · no actions** (German: **Neu formuliert · keine Aktionen**). OVD sends the recorded context to the selected model to rewrite the answer; it does not run tools or reread source mail, files or integrations. **Without confirmations** does not change this behavior.
 
 New answers retain bounded result evidence locally for this purpose. For an older answer without usable evidence, OVD explains that it cannot safely reformulate it and leaves the original chat intact. There is no automatic retry of the original task. Your unsent text and reference selections remain with their existing chat while you inspect the branch.
 
@@ -140,7 +140,7 @@ Use the Mail window to browse folders and messages. Drag a message into chat to 
 
 When a message has a usable HTML alternative, the Mail reader displays it automatically. Use **HTML** or **Text** in the reading pane to switch views. Messages without HTML use text; a partially loaded view is marked accordingly. This does not mark the message read.
 
-External images start blocked. Select **Load external images** (currently **Externe Bilder laden**) to show them for that message, or **Hide external images** (**Externe Bilder ausblenden**) to block them again. Loading contacts external servers and may reveal your IP address and access time. Embedded supported raster images are handled separately. The choice applies to the loaded message in the current session rather than becoming a permanent account setting.
+External images start blocked. Select **Load external images** (German: **Externe Bilder laden**) to show them for that message, or **Hide external images** (**Externe Bilder ausblenden**) to block them again. Loading contacts external servers and may reveal your IP address and access time. Embedded supported raster images are handled separately. The choice applies to the loaded message in the current session rather than becoming a permanent account setting.
 
 The assistant can perform the same actions, for example: “Show this email as HTML,” “Switch to the text view,” or “Load the external images in this message.” Image loading follows your saved confirmation mode. Mail links open in the default external application after an intentional click. The reader removes active content and limits sender CSS, so complex layouts may differ from the sender's original. For details, see [HTML mail behavior](mail-design.md#html-email).
 
@@ -148,7 +148,7 @@ For a truncated preview, select **Vollständigen Text lesen** to read the underl
 
 ### Configure optional modules and MCP
 
-Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. The Assistant is required; Mail, Files and MCP are included optional modules. Enable or disable them here. Arrange their available navigation entries under **OVD-Bar → Entries & order** (**OVD-Bar → Einträge & Reihenfolge**). The [OVD-Bar guide](ovd-bar.md) covers orientation, size, placement, background opacity and optional idle collapse.
+Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. The Assistant is required; Mail, Files and MCP are included optional modules. Enable or disable them here. Arrange their available navigation entries under **OVD-Bar → Items and order** (**OVD-Bar → Einträge & Reihenfolge**). The [OVD-Bar guide](ovd-bar.md) covers orientation, size, placement, background opacity and optional idle collapse.
 
 #### Install from a module repository
 

@@ -6,10 +6,10 @@ Speech input turns microphone audio into editable text in the Chat composer. Its
 
 ## Configure speech input
 
-Open **Settings → KI & Verbindung → Spracheingabe**, or click the microphone in Chat before speech input is configured.
+Open **Settings → AI & connection → Voice input**, or click the microphone in Chat before speech input is configured.
 
 1. Enable speech input and select its provider.
-2. Choose **Live** or **Nach Aufnahme**, according to the provider's capabilities.
+2. Choose **Live** or **After recording**, according to the provider's capabilities.
 3. Enter the complete transcription endpoint, authentication method and API key. Select a transcription model or Azure deployment where required.
 4. Optionally specify the language and microphone, then save.
 
@@ -28,9 +28,9 @@ ChatGPT sign-in currently does not include access to the transcription API. It t
 | Azure OpenAI / Foundry | With a suitable Realtime deployment | With a suitable audio-transcription deployment | Enter the complete deployment endpoint, including its API version where required; API-key authentication is available. |
 | DeepSeek | No | Yes | Uses the dedicated `/v1/tools/asr` endpoint and file upload; it does not use the chat-completions endpoint. |
 
-**Live** starts microphone capture without waiting for the provider connection. Until the WebSocket session is ready, OVD buffers audio in memory and shows **Aufnahme läuft · Verbinden …**. When ready, it sends the buffered audio in order and continues streaming. The preview updates as the provider returns partial or completed segments. Realtime protocols differ: use **Standard** for the current GA protocol or **Legacy / Beta** according to your endpoint. Audio is committed at pauses and in bounded intervals, so a provider that only returns completed segments may update less frequently than one that streams partial text.
+**Live** starts microphone capture without waiting for the provider connection. Until the WebSocket session is ready, OVD buffers audio in memory and shows **Recording · Connecting…**. When ready, it sends the buffered audio in order and continues streaming. The preview updates as the provider returns partial or completed segments. Realtime protocols differ: use **Standard** for the current GA protocol or **Legacy / Beta** according to your endpoint. Audio is committed at pauses and in bounded intervals, so a provider that only returns completed segments may update less frequently than one that streams partial text.
 
-**Nach Aufnahme** keeps audio in memory while recording and uploads a single WAV file after Stop. There is no partial transcript during recording. This mode is distinct from streaming a response to an already completed audio upload.
+**After recording** keeps audio in memory while recording and uploads a single WAV file after Stop. There is no partial transcript during recording. This mode is distinct from streaming a response to an already completed audio upload.
 
 Use a complete `wss://` URL for Live and a complete `https://` URL for After recording. Unencrypted `ws://` and `http://` endpoints are accepted only on localhost. Endpoint redirects are not followed; enter the final URL. Embedded URL credentials are not supported.
 
@@ -43,7 +43,7 @@ Use a complete `wss://` URL for Live and a complete `https://` URL for After rec
 
 Sending is disabled while recording or transcription is active. Switching chat sessions or closing the Chat window cancels its active recording. Changing saved speech settings also cancels a recording made with the previous configuration. Only one recording can run at a time.
 
-If transcription fails after audio has been captured, OVD can retain that recording in memory. **Aufnahme erneut transkribieren** explicitly reconnects and transcribes the retained recording; it does not open the microphone again. OVD never automatically replays audio after a connection failure. Available partial text remains a preview and can be accepted explicitly; an incomplete transcript is not silently treated as a successful final result.
+If transcription fails after audio has been captured, OVD can retain that recording in memory. **Retry transcription** explicitly reconnects and transcribes the retained recording; it does not open the microphone again. OVD never automatically replays audio after a connection failure. Available partial text remains a preview and can be accepted explicitly; an incomplete transcript is not silently treated as a successful final result.
 
 Cancelling or dismissing the failed recording discards its retained audio. Starting another recording, changing saved speech settings, switching chat sessions or closing the Chat window also discards it. Retained recordings do not survive an application restart.
 

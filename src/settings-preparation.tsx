@@ -1,3 +1,5 @@
+import { preparationText } from './preparation-copy';
+import { useUiLocale } from './locale';
 import { useEffect, useRef, useState } from 'react';
 import { agentSettingsPatchSchema, defaultAgentSettings } from '../shared/agent-settings';
 import { MAIL_POLL_INTERVALS } from '../shared/mail-preferences';
@@ -9,7 +11,6 @@ import './settings-preparation.css';
 export type SettingsSuggestion = SettingsPreparation & { token: number };
 type SafeValue = string | number | boolean;
 const stringLimits: Record<string, number> = { name: 120, senderName: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
-const labels: Record<string, string> = { enabled: 'Aktiviert', mode: 'Transkription', endpoint: 'Transkriptions-URL', model: 'Modell / Deployment', language: 'Sprache', microphoneId: 'Mikrofon', realtimeProtocol: 'Realtime-Protokoll', title: 'Name', url: 'Repository-URL', sourceId: 'Quelle', name: 'Kontoname', senderName: 'Absendername', signature: 'Signatur', pollIntervalSeconds: 'Abrufintervall (Sekunden)', email: 'E-Mail-Adresse', host: 'Server', port: 'Port', security: 'Verschlüsselung', username: 'Benutzername', useImapCredentials: 'IMAP-Zugangsdaten verwenden', provider: 'KI-Anbieter', protocol: 'Schnittstelle', authMode: 'Anmeldeart', apiVersion: 'Azure API-Version', baseUrl: 'KI-Endpunkt', smartModel: 'Intelligentes Modell / Deployment', simpleModel: 'Einfaches Modell / Deployment', smartThinking: 'Thinking · Intelligent', simpleThinking: 'Thinking · Einfach', workspaceTools: 'Workspace-Werkzeuge', confirmationMode: 'Bestätigungen', maxToolRounds: 'Werkzeugrunden', maxToolCalls: 'Werkzeugaufrufe', timeoutSeconds: 'Maximale Laufzeit (Sekunden)', contextTokenBudget: 'Gesamtkontext (Tokens, geschätzt)', outputTokenReserve: 'Antwortreserve (Tokens)', maxActiveTools: 'Gleichzeitig geladene Werkzeuge', toolSchemaBudget: 'Werkzeugbeschreibungen (Zeichen)', historyMessageLimit: 'Ältere Nachrichten', historyCharBudget: 'Verlauf (Zeichen)', requestTimeoutSeconds: 'Anbieterwartezeit (Sekunden)', transportRetries: 'Wiederholungen bei Übertragungsfehlern' };
 
 /** Only ordinary configuration fields reach the forms; secret fields are never copied. */
 export function preparationValues(suggestion: SettingsSuggestion): Record<string, SafeValue> {
@@ -67,7 +68,10 @@ export function useSettingsPreparation(suggestion: SettingsSuggestion | undefine
 }
 
 export function SettingsPreparationNotice({ suggestion, blocked, onApply, onDismiss }: { suggestion?: SettingsSuggestion; blocked: boolean; onApply(): void; onDismiss(): void }) {
+  const locale = useUiLocale();
+  const copy = preparationText[locale];
   if (!suggestion) return null;
+  const labels: Record<string, string> = { ...copy, title: 'Name', host: 'Server', port: 'Port' };
   const values = preparationValues(suggestion);
-  return <div className="settings-preparation" role="status"><strong>Vorschlag des Assistenten wartet</strong><p>{blocked ? 'Deine vorhandenen Eingaben bleiben erhalten. Speichere oder verwerfe sie zuerst; übernimm anschließend den Vorschlag.' : 'Du kannst den vorbereiteten Vorschlag jetzt in das Formular übernehmen.'}</p>{Object.keys(values).length > 0 && <dl>{Object.entries(values).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'confirmationMode' ? value === 'never' ? 'Ohne Abfragen' : 'Mit Bestätigungen' : typeof value === 'boolean' ? value ? 'Ein' : 'Aus' : String(value)}</dd></div>)}</dl>}<div><button type="button" disabled={blocked} onClick={onApply}>Vorschlag übernehmen</button><button type="button" onClick={onDismiss}>Vorschlag schließen</button></div></div>;
+  return <div className="settings-preparation" role="status"><strong>{copy.waiting}</strong><p>{blocked ? copy.unsaved : copy.ready}</p>{Object.keys(values).length > 0 && <dl>{Object.entries(values).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'confirmationMode' ? value === 'never' ? copy.without : copy.with : typeof value === 'boolean' ? value ? copy.on : copy.off : typeof value === 'number' && key !== 'port' ? value.toLocaleString(locale) : String(value)}</dd></div>)}</dl>}<div><button type="button" disabled={blocked} onClick={onApply}>{copy.apply}</button><button type="button" onClick={onDismiss}>{copy.dismiss}</button></div></div>;
 }

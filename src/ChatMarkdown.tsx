@@ -3,9 +3,12 @@ import { Check, Copy, ImageOff } from 'lucide-react';
 import ReactMarkdown, { type Components, type UrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getExternalChatUrl } from '../shared/chat-links';
+import { useUiLocale } from './locale';
+import { markdownText } from './assistant-copy';
 import './chat-markdown.css';
 
-type MarkdownControls = { prefix: string; copied?: string; onCopy(id: string, text: string): Promise<void>; onLinkError(message: string): void };
+type LinkError = { kind: 'missingSection' } | { kind: 'linkFailed'; href: string };
+type MarkdownControls = { prefix: string; copied?: string; onCopy(id: string, text: string): Promise<void>; onLinkError(error?: LinkError): void };
 const MarkdownContext = createContext<MarkdownControls | null>(null);
 
 // Only generated Markdown nodes reach this tree; raw HTML is never parsed.
@@ -43,55 +46,62 @@ const transformUrl: UrlTransform = (url, key) => {
 };
 
 function MarkdownLink({ href, children, node: _node, ...props }: React.ComponentProps<'a'> & { node?: unknown }) {
+  const labels = markdownText[useUiLocale()];
   const controls = useContext(MarkdownContext);
-  if (!href) return <span title="Dieses Linkziel wird nicht unterstützt.">{children}</span>;
+  if (!href) return <span title={labels.unsupported}>{children}</span>;
   const local = href.startsWith('#');
   const open = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.type === 'auxclick' && event.button !== 1) return;
     event.preventDefault();
-    controls?.onLinkError('');
+    controls?.onLinkError();
     if (local) {
       const message = event.currentTarget.closest('.chat-markdown');
       const fragment = href.slice(1), prefix = controls?.prefix ?? '';
       let id = fragment;
       try { id = fragment.startsWith(prefix) ? prefix + decodeURIComponent(fragment.slice(prefix.length)) : decodeURIComponent(fragment); } catch { /* Keep malformed fragment literal. */ }
       const destination = document.getElementById(href.slice(1)) ?? document.getElementById(id);
-      if (!destination || !message?.contains(destination)) { controls?.onLinkError('Der verlinkte Abschnitt ist in dieser Nachricht nicht vorhanden.'); return; }
+      if (!destination || !message?.contains(destination)) { controls?.onLinkError({ kind: 'missingSection' }); return; }
       destination.tabIndex = -1;
       destination.focus({ preventScroll: true });
       destination.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       return;
     }
-    void window.workspace.openExternalLink(href).catch(() => controls?.onLinkError(`Der Link konnte nicht geöffnet werden. Ziel: ${href}`));
+    void window.workspace.openExternalLink(href).catch(() => controls?.onLinkError({ kind: 'linkFailed', href }));
   };
-  return <a {...props} href={href} target={local ? undefined : '_blank'} title={local ? props.title || 'Zu diesem Abschnitt' : [props.title, href].filter(Boolean).join('\n')} rel={local ? undefined : 'noopener noreferrer'} onClick={open} onAuxClick={open}>{children}</a>;
+  return <a {...props} href={href} target={local ? undefined : '_blank'} title={local ? props.title || labels.jump : [props.title, href].filter(Boolean).join('\n')} rel={local ? undefined : 'noopener noreferrer'} onClick={open} onAuxClick={open}>{children}</a>;
 }
 
 function MarkdownImage({ src, alt, title }: React.ComponentProps<'img'>) {
+  const labels = markdownText[useUiLocale()];
   const [loadedSource, setLoadedSource] = useState<string>();
   const [failedSource, setFailedSource] = useState<string>();
   const source = typeof src === 'string' ? src : undefined;
   const allowedSource = source && /^https?:/i.test(source) ? source : undefined;
   let host = '';
   if (allowedSource) { try { host = new URL(allowedSource).host; } catch { /* The URL transform already rejected malformed URLs. */ } }
-  if (allowedSource && loadedSource === allowedSource && failedSource !== allowedSource) return <img className="markdown-image" src={allowedSource} alt={alt || 'Bild'} title={title} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedSource(allowedSource)}/>;
-  return <span className="markdown-image-placeholder"><ImageOff size={17} aria-hidden="true"/><span><strong>{alt || 'Bild'}</strong><small>{failedSource === allowedSource && allowedSource ? 'Bild konnte nicht geladen werden.' : host || 'Bildquelle wird nicht unterstützt.'}</small></span>{allowedSource && <button type="button" onClick={event => { event.preventDefault(); event.stopPropagation(); setFailedSource(undefined); setLoadedSource(allowedSource); }}>{failedSource === allowedSource ? 'Erneut laden' : 'Bild laden'}</button>}</span>;
+  if (allowedSource && loadedSource === allowedSource && failedSource !== allowedSource) return <img className="markdown-image" src={allowedSource} alt={alt || labels.image} title={title} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedSource(allowedSource)}/>;
+  return <span className="markdown-image-placeholder"><ImageOff size={17} aria-hidden="true"/><span><strong>{alt || labels.image}</strong><small>{failedSource === allowedSource && allowedSource ? labels.failedImage : host || labels.unsupportedImage}</small></span>{allowedSource && <button type="button" onClick={event => { event.preventDefault(); event.stopPropagation(); setFailedSource(undefined); setLoadedSource(allowedSource); }}>{failedSource === allowedSource ? labels.retry : labels.loadImage}</button>}</span>;
 }
 
 function MarkdownCode({ children }: { children?: ReactNode }) {
+  const labels = markdownText[useUiLocale()];
   const controls = useContext(MarkdownContext);
   const id = useId(), code = useRef<HTMLPreElement>(null);
-  return <div className="code-block"><button type="button" title="Code kopieren" aria-label="Code kopieren" onClick={() => void controls?.onCopy(id, code.current?.textContent ?? '')}>{controls?.copied === id ? <><Check size={12} aria-hidden="true"/>Kopiert</> : <><Copy size={12} aria-hidden="true"/>Kopieren</>}</button><pre ref={code} tabIndex={0} aria-label="Codeblock">{children}</pre></div>;
+  return <div className="code-block"><button type="button" title={labels.copyCode} aria-label={labels.copyCode} onClick={() => void controls?.onCopy(id, code.current?.textContent ?? '')}>{controls?.copied === id ? <><Check size={12} aria-hidden="true"/>{labels.copied}</> : <><Copy size={12} aria-hidden="true"/>{labels.copy}</>}</button><pre ref={code} tabIndex={0} aria-label={labels.codeBlock}>{children}</pre></div>;
 }
 
-function MarkdownTable({ children }: { children?: ReactNode }) { return <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="Tabelle, bei Bedarf horizontal scrollbar"><table>{children}</table></div>; }
+function MarkdownTable({ children }: { children?: ReactNode }) {
+  const labels = markdownText[useUiLocale()];
+  return <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label={labels.table}><table>{children}</table></div>;
+}
 
 // Stable component identities preserve keyboard focus and feedback as the response streams.
 const components: Components = { a: MarkdownLink, img: MarkdownImage, pre: MarkdownCode, table: MarkdownTable };
 const remarkPlugins = [remarkGfm];
 
 export function ChatMarkdown({ text, messageId, copied, onCopy }: { text: string; messageId: string; copied?: string; onCopy(id: string, text: string): Promise<void> }) {
-  const [linkError, setLinkError] = useState('');
+  const labels = markdownText[useUiLocale()];
+  const [linkError, setLinkError] = useState<LinkError>();
   const prefix = `chat-${encodeURIComponent(messageId)}-`;
-  return <MarkdownContext.Provider value={{ prefix, copied, onCopy, onLinkError: setLinkError }}><div className="message-text chat-markdown"><ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={[[namespaceAnchors, { prefix }]]} remarkRehypeOptions={{ footnoteLabel: 'Fußnoten', footnoteBackLabel: (index, count) => `Zurück zur Fußnotenreferenz ${index + 1}${count > 1 ? `-${count}` : ''}` }} urlTransform={transformUrl} components={components}>{text}</ReactMarkdown>{linkError && <div className="markdown-link-error" role="alert">{linkError}</div>}</div></MarkdownContext.Provider>;
+  return <MarkdownContext.Provider value={{ prefix, copied, onCopy, onLinkError: setLinkError }}><div className="message-text chat-markdown"><ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={[[namespaceAnchors, { prefix }]]} remarkRehypeOptions={{ footnoteLabel: labels.footnotes, footnoteBackLabel: (index, count) => `${labels.backFootnote} ${index + 1}${count > 1 ? `-${count}` : ''}` }} urlTransform={transformUrl} components={components}>{text}</ReactMarkdown>{linkError && <div className="markdown-link-error" role="alert">{labels[linkError.kind]}{linkError.kind === 'linkFailed' && ` ${linkError.href}`}</div>}</div></MarkdownContext.Provider>;
 }

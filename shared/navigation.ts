@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { UiLocale } from './locale';
+import { defaultUiLocale, type UiLocale } from './locale';
 import type { UiAction } from './actions';
 import type { ModuleInfo } from './modules';
 
@@ -34,7 +34,7 @@ export function localizedCoreNavigation(locale: UiLocale): readonly NavigationEn
   return locale === 'en' ? coreNavigationEntries.map(item => item.id === 'settings' ? { ...item, title: 'Settings' } : item) : coreNavigationEntries;
 }
 
-export function getNavigationEntries(modules: readonly ModuleInfo[], includeUnavailable = false, locale: UiLocale = 'de'): NavigationEntry[] {
+export function getNavigationEntries(modules: readonly ModuleInfo[], includeUnavailable = false, locale: UiLocale = defaultUiLocale): NavigationEntry[] {
   return [...localizedCoreNavigation(locale), ...modules.filter(module => module.manifest && (includeUnavailable || module.status === 'ready')).flatMap(module => (module.manifest?.contributions.navigation ?? []).filter(item => module.manifest!.contributions.views.some(view => view.id === item.view)).map(item => ({
     id: `${module.id}:${item.id}`, title: item.title, icon: item.icon ?? 'grid', order: item.order ?? 100,
     moduleId: module.id, moduleTitle: module.title, available: module.status === 'ready'

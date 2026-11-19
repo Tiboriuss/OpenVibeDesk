@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { moduleReferenceInputSchema } from '../shared/references';
 import { useUiLocale } from './locale';
+import { formDetail } from './form-feedback';
 import './module-host.css';
+
+const messages = {
+  de: {
+    loading: 'Modulansicht wird geladen …', loadError: 'Modulansicht konnte nicht geladen werden.',
+    limit: 'Die Modulanfrage ist zu groß oder es laufen bereits zu viele Anfragen.',
+    ownReferences: 'Die Modulansicht darf nur eigene Referenzen an den Chat übergeben.',
+    referenceError: 'Die Referenz konnte nicht ausgewählt werden.', toolError: 'Die Modulfunktion ist fehlgeschlagen.'
+  },
+  en: {
+    loading: 'Loading module view…', loadError: 'Could not load the module view.',
+    limit: 'The module request is too large or too many requests are already running.',
+    ownReferences: 'A module view can only attach its own references to chat.',
+    referenceError: 'Could not select the reference.', toolError: 'The module tool failed.'
+  }
+};
 
 /** External module HTML runs in an opaque iframe; only declared module commands cross the bridge. */
 export function ModuleViewHost({ moduleId, viewId, title }: { moduleId: string; viewId: string; title: string }) {
@@ -34,22 +50,22 @@ export function ModuleViewHost({ moduleId, viewId, title }: { moduleId: string; 
       const respond = (result: unknown) => { if (active && source === frame.current?.contentWindow) source.postMessage({ type: 'ovd:result', requestId: value.requestId, ...result as object }, '*'); };
       let size: number;
       try { size = JSON.stringify(value.type === 'ovd:reference' ? value.reference : value.args ?? {}).length; } catch { return; }
-      if (size > 16000 || inFlight.current.size >= 8 || inFlight.current.has(value.requestId)) { respond({ ok: false, error: 'Die Modulanfrage ist zu groß oder es laufen bereits zu viele Anfragen.' }); return; }
+      if (size > 16000 || inFlight.current.size >= 8 || inFlight.current.has(value.requestId)) { respond({ ok: false, error: messages[currentLocale.current].limit }); return; }
       if (value.type === 'ovd:reference') {
         const reference = moduleReferenceInputSchema.safeParse(value.reference);
-        if (!reference.success || reference.data.moduleId !== moduleId) { respond({ ok: false, error: 'Die Modulansicht darf nur eigene Referenzen an den Chat übergeben.' }); return; }
+        if (!reference.success || reference.data.moduleId !== moduleId) { respond({ ok: false, error: messages[currentLocale.current].ownReferences }); return; }
         inFlight.current.add(value.requestId);
-        void window.workspace.referenceModuleResource(moduleId, reference.data).then(() => respond({ ok: true, result: { selected: true } })).catch(reason => respond({ ok: false, error: reason instanceof Error ? reason.message : 'Die Referenz konnte nicht ausgewählt werden.' })).finally(() => inFlight.current.delete(value.requestId as string));
+        void window.workspace.referenceModuleResource(moduleId, reference.data).then(() => respond({ ok: true, result: { selected: true } })).catch(reason => respond({ ok: false, error: formDetail(reason, currentLocale.current) || messages[currentLocale.current].referenceError })).finally(() => inFlight.current.delete(value.requestId as string));
         return;
       }
       if (typeof value.tool !== 'string' || !value.tool || value.tool.length > 128) return;
       inFlight.current.add(value.requestId);
-      void window.workspace.invokeModuleTool(moduleId, value.tool, value.args ?? {}).then(result => respond({ ok: true, result })).catch(reason => respond({ ok: false, error: reason instanceof Error ? reason.message : 'Die Modulfunktion ist fehlgeschlagen.' })).finally(() => inFlight.current.delete(value.requestId as string));
+      void window.workspace.invokeModuleTool(moduleId, value.tool, value.args ?? {}).then(result => respond({ ok: true, result })).catch(reason => respond({ ok: false, error: formDetail(reason, currentLocale.current) || messages[currentLocale.current].toolError })).finally(() => inFlight.current.delete(value.requestId as string));
     };
     window.addEventListener('message', listener);
     return () => { active = false; window.removeEventListener('message', listener); inFlight.current.clear(); };
   }, [moduleId, viewId]);
-  if (error) return <div className="module-host-status" role="alert">{error === 'load' ? locale === 'en' ? 'Could not load the module view.' : 'Modulansicht konnte nicht geladen werden.' : error}</div>;
-  if (!ready) return <div className="module-host-status" role="status">{locale === 'en' ? 'Loading module view…' : 'Modulansicht wird geladen …'}</div>;
+  if (error) return <div className="module-host-status" role="alert">{error === 'load' ? messages[locale].loadError : formDetail(error, locale)}</div>;
+  if (!ready) return <div className="module-host-status" role="status">{messages[locale].loading}</div>;
   return <iframe className="module-view-host" ref={frame} onLoad={shareLocale} title={title} sandbox="allow-scripts" referrerPolicy="no-referrer" src={`ovd-module://view/${encodeURIComponent(moduleId)}/${encodeURIComponent(viewId)}`} />;
 }

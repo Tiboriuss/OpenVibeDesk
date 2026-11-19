@@ -3,6 +3,7 @@ import { Check, LoaderCircle, Mic, RefreshCw, Square, X } from 'lucide-react';
 import type { SpeechPublicSettings, SpeechSessionEvent } from '../shared/speech';
 import { startSpeechCapture, type SpeechCapture } from './speech-capture';
 import { useUiLocale } from './locale';
+import { speechProblemText, voiceText } from './voice-copy';
 import { speechText } from './speech-copy';
 import './speech-input.css';
 
@@ -14,6 +15,7 @@ export interface SpeechPreviewState {
   connectionPending?: boolean;
   canRetry?: boolean;
   error?: string;
+  errorKey?: keyof typeof voiceText.en;
 }
 const idle: SpeechPreviewState = { status: 'idle', mode: 'live', text: '', elapsed: 0 };
 interface Recording {
@@ -29,17 +31,19 @@ interface Recording {
   canRetry?: boolean;
 }
 
-function errorMessage(reason: unknown): string {
+function speechFailure(reason: unknown): Pick<SpeechPreviewState, 'error' | 'errorKey'> {
   if (reason instanceof DOMException) {
-    if (reason.name === 'NotAllowedError' || reason.name === 'SecurityError') return 'Mikrofonzugriff nicht erlaubt. Bitte in den Systemeinstellungen freigeben.';
-    if (reason.name === 'NotFoundError' || reason.name === 'OverconstrainedError') return 'Das ausgewählte Mikrofon ist nicht verfügbar. Bitte ein anderes auswählen.';
-    if (reason.name === 'NotReadableError') return 'Das Mikrofon kann gerade nicht verwendet werden.';
+    if (reason.name === 'NotAllowedError' || reason.name === 'SecurityError') return { errorKey: 'permissionDenied' };
+    if (reason.name === 'NotFoundError' || reason.name === 'OverconstrainedError') return { errorKey: 'deviceMissing' };
+    if (reason.name === 'NotReadableError') return { errorKey: 'deviceBusy' };
   }
   const message = (reason instanceof Error ? reason.message : String(reason)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '').replace(/[\r\n]+/g, ' ').trim();
-  return message.slice(0, 300) || 'Die Spracheingabe ist fehlgeschlagen. Bitte erneut versuchen.';
+  return message ? { error: message.slice(0, 300) } : { errorKey: 'failed' };
 }
 
 export function SpeechPreview({ value }: { value: SpeechPreviewState }) {
+  const locale = useUiLocale();
+  const labels = voiceText[locale];
   const transcript = useRef<HTMLParagraphElement>(null);
   const follow = useRef(true);
   useLayoutEffect(() => {
@@ -47,12 +51,12 @@ export function SpeechPreview({ value }: { value: SpeechPreviewState }) {
     if (follow.current && transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
   }, [value.text, value.status]);
   if (value.status === 'idle') return null;
-  const recordingLabel = value.connectionPending ? 'Aufnahme läuft · Verbinden …' : value.mode === 'live' ? 'Live' : 'Aufnahme';
-  const label = value.status === 'connecting' ? 'Mikrofon starten …' : value.status === 'transcribing' ? value.connectionPending ? 'Verbinden · Aufnahme beendet …' : 'Wird transkribiert …' : value.status === 'failed' ? value.canRetry ? 'Aufnahme für erneuten Versuch behalten' : 'Spracheingabe unterbrochen' : `${recordingLabel} · ${Math.floor(value.elapsed / 60)}:${String(value.elapsed % 60).padStart(2, '0')}`;
-  return <div className={`speech-preview ${value.status}`} aria-label="Spracherkennung">
-    <div className="speech-preview-heading" role="status">{value.status === 'recording' ? <span className="speech-recording-dot" aria-hidden="true"/> : value.status !== 'failed' ? <LoaderCircle size={12} className="speech-spinner" aria-hidden="true"/> : null}<span aria-hidden="true">{label}</span><span className="sr-only">{value.status === 'recording' ? value.connectionPending ? 'Aufnahme läuft. Verbindung wird aufgebaut.' : 'Aufnahme läuft.' : label}</span></div>
-    {value.text && <p ref={transcript} className="speech-preview-text" tabIndex={0} aria-label="Erkannter Text" onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 16; }}>{value.text}</p>}
-    {value.error && <p className="speech-input-error" role="alert">{value.error}</p>}
+  const recordingLabel = value.connectionPending ? labels.recordConnecting : value.mode === 'live' ? 'Live' : labels.recording;
+  const label = value.status === 'connecting' ? labels.starting : value.status === 'transcribing' ? value.connectionPending ? labels.waiting : labels.transcribing : value.status === 'failed' ? value.canRetry ? labels.retained : labels.interrupted : `${recordingLabel} · ${Math.floor(value.elapsed / 60)}:${String(value.elapsed % 60).padStart(2, '0')}`;
+  return <div className={`speech-preview ${value.status}`} aria-label={labels.speechRecognition}>
+    <div className="speech-preview-heading" role="status">{value.status === 'recording' ? <span className="speech-recording-dot" aria-hidden="true"/> : value.status !== 'failed' ? <LoaderCircle size={12} className="speech-spinner" aria-hidden="true"/> : null}<span aria-hidden="true">{label}</span><span className="sr-only">{value.status === 'recording' ? value.connectionPending ? labels.liveConnecting : labels.liveRecording : label}</span></div>
+    {value.text && <p ref={transcript} className="speech-preview-text" tabIndex={0} aria-label={labels.transcript} onScroll={event => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 16; }}>{value.text}</p>}
+    {(value.errorKey || value.error) && <p className="speech-input-error" role="alert">{value.errorKey ? labels[value.errorKey] : speechProblemText(value.error!, locale)}</p>}
   </div>;
 }
 
@@ -65,7 +69,10 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
   onBusyChange(busy: boolean): void;
   onPreview(value: SpeechPreviewState): void;
 }) {
-  const copy = speechText[useUiLocale()];
+  const locale = useUiLocale();
+  const currentLocale = useRef(locale);
+  currentLocale.current = locale;
+  const copy = speechText[locale];
   const [settings, setSettings] = useState<SpeechPublicSettings>();
   const [view, setView] = useState(idle);
   const [loadingSettings, setLoadingSettings] = useState(true);
@@ -104,7 +111,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
   function fail(recording: Recording, reason: unknown) {
     if (active.current !== recording || recording.canRetry) return;
     release(recording, true);
-    update({ ...viewRef.current, status: 'failed', canRetry: false, error: errorMessage(reason) });
+    update({ ...viewRef.current, status: 'failed', canRetry: false, ...speechFailure(reason) });
   }
   function receive(event: SpeechSessionEvent) {
     const recording = active.current;
@@ -119,7 +126,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
     if (event.status === 'completed') {
       release(recording, false);
       const text = event.text.trim();
-      update(text ? idle : { ...idle, status: 'failed', error: 'Keine Sprache erkannt.' });
+      update(text ? idle : { ...idle, status: 'failed', errorKey: 'noSpeech' });
       if (text) callbacks.current.onTranscript(text);
     } else if (event.status === 'failed') {
       update({ ...viewRef.current, text: event.text || viewRef.current.text });
@@ -129,8 +136,8 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
         recording.canRetry = true; recording.stopping = true;
         closeMicrophone(recording);
         callbacks.current.onBusyChange(false);
-        update({ ...viewRef.current, status: 'failed', canRetry: true, error: errorMessage(event.error || 'Die Sprachverbindung wurde unterbrochen.') });
-      } else fail(recording, event.error || 'Die Sprachverbindung wurde unterbrochen.');
+        update({ ...viewRef.current, status: 'failed', canRetry: true, ...(event.error ? speechFailure(event.error) : { errorKey: 'connectionLost' }) });
+      } else fail(recording, event.error || new Error(voiceText[currentLocale.current].connectionLost));
     } else if (event.status === 'cancelled') {
       release(recording, false); update(idle);
     } else {
@@ -156,7 +163,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
     const offEvents = window.workspace.onSpeechEvent(receive);
     void window.workspace.getSpeechSettings().then(value => {
       if (mounted.current && !settingsChanged) setSettings(value);
-    }, reason => { if (mounted.current) update({ ...idle, status: 'failed', error: errorMessage(reason) }); }).finally(() => { if (mounted.current) setLoadingSettings(false); });
+    }, reason => { if (mounted.current) update({ ...idle, status: 'failed', ...speechFailure(reason) }); }).finally(() => { if (mounted.current) setLoadingSettings(false); });
     return () => {
       if (active.current) release(active.current, true);
       callbacks.current.onPreview(idle);
@@ -168,7 +175,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
 
   async function openSettings() {
     try { await window.workspace.openSpeechSettings(); }
-    catch (reason) { update({ ...idle, status: 'failed', error: errorMessage(reason) }); }
+    catch (reason) { update({ ...idle, status: 'failed', ...speechFailure(reason) }); }
   }
   async function start() {
     if (disabled || loadingSettings || active.current && !active.current.canRetry) return;
@@ -190,7 +197,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
       else if (session.status === 'transcribing') receive({ id: session.id, status: 'transcribing', text: '' });
       if (active.current !== recording || recording.canRetry || recording.stopping) return;
       recording.capture = await startSpeechCapture({
-        microphoneId: settings.microphoneId, signal: recording.controller.signal,
+        locale, microphoneId: settings.microphoneId, signal: recording.controller.signal,
         onChunk: async pcm => {
           if (recording.autoFinalizing || recording.canRetry) return;
           try { await window.workspace.appendSpeech(session.id, pcm); }
@@ -229,7 +236,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
     const recording: Recording = { scope, controller: new AbortController(), stopping: true, providerReady: false };
     active.current = recording; pendingEvents.current.clear();
     callbacks.current.onBusyChange(true);
-    update({ ...viewRef.current, status: 'transcribing', connectionPending: true, canRetry: false, text: '', error: undefined });
+    update({ ...viewRef.current, status: 'transcribing', connectionPending: true, canRetry: false, text: '', error: undefined, errorKey: undefined });
     try {
       const session = await window.workspace.retrySpeech(previous.id);
       recording.id = session.id;

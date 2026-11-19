@@ -1,4 +1,5 @@
-import type { UiLocale } from '../shared/locale';
+import { chatHostText } from '../shared/chat-host-text';
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 import { createHash } from 'node:crypto';
 import type { ChatSession, ChatSessionPage, ChatSessionSummary, RendererWorkspaceState, WindowKind, WorkspaceState } from '../shared/model';
 
@@ -6,23 +7,27 @@ export type WorkspaceView = WindowKind | 'dock' | 'module';
 const PAGE_SIZE = 100;
 const EMPTY: never[] = [];
 
-export function listChatSessions(state: WorkspaceState, query = '', offset = 0, limit = 50, expectedRevision?: string): ChatSessionPage {
+function sessionTitle(session: ChatSession, locale: UiLocale): string {
+  return session.placeholderTitle ? chatHostText[locale].newChat : session.title;
+}
+
+export function listChatSessions(state: WorkspaceState, query = '', offset = 0, limit = 50, expectedRevision?: string, locale: UiLocale = defaultUiLocale): ChatSessionPage {
   const search = query.trim().toLocaleLowerCase();
-  const matches = state.sessions.filter(session => !search || session.title.toLocaleLowerCase().includes(search) || session.messages.some(message => message.text.toLocaleLowerCase().includes(search)))
+  const matches = state.sessions.filter(session => !search || sessionTitle(session, locale).toLocaleLowerCase().includes(search) || session.messages.some(message => message.text.toLocaleLowerCase().includes(search)))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
   // Anchor list membership/order rather than streaming timestamps: a tool's own
   // status updates must not invalidate its next page while its list position stays put.
   const revision = createHash('sha256').update(JSON.stringify([search, matches.map(session => [session.id, session.title, session.messages.length])])).digest('hex').slice(0, 24);
-  if (expectedRevision && expectedRevision !== revision) throw new Error('Die Chatliste hat sich geändert. Bitte die erste Seite neu laden.');
-  if (offset > matches.length) throw new Error('Diese Position liegt außerhalb der Chatliste.');
+  if (expectedRevision && expectedRevision !== revision) throw new Error(chatHostText[locale].staleList);
+  if (offset > matches.length) throw new Error(chatHostText[locale].outsideList);
   const hasMore = offset + limit < matches.length;
-  return { sessions: matches.slice(offset, offset + limit).map(sessionSummary), total: matches.length, offset, revision, hasMore, complete: !hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+  return { sessions: matches.slice(offset, offset + limit).map(session => sessionSummary(session, locale)), total: matches.length, offset, revision, hasMore, complete: !hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
 }
 
-function sessionSummary(session: ChatSession): ChatSessionSummary {
+function sessionSummary(session: ChatSession, locale: UiLocale): ChatSessionSummary {
   let preview = '';
   for (let index = session.messages.length - 1; index >= 0; index--) if (session.messages[index].id !== 'welcome') { preview = session.messages[index].text.slice(0, 100); break; }
-  return { id: session.id, title: session.title, updatedAt: session.updatedAt, messageCount: session.messages.length, preview };
+  return { id: session.id, title: sessionTitle(session, locale), updatedAt: session.updatedAt, messageCount: session.messages.length, preview };
 }
 
 /** Renderer projections never replace the authoritative state used by tools/storage. */
@@ -64,7 +69,7 @@ export class WorkspaceViewProjector {
     }
     if (active) {
       // References need identity/title, never the other conversations' contents.
-      value.sessions = state.sessions.map(({ id, title, createdAt, updatedAt, historyStart }) => ({ id, title, createdAt, updatedAt, historyStart, messages: EMPTY }));
+      value.sessions = state.sessions.map(session => ({ id: session.id, title: sessionTitle(session, locale), createdAt: session.createdAt, updatedAt: session.updatedAt, historyStart: session.historyStart, messages: EMPTY }));
       value.chat = active.messages.slice(this.start);
       value.ai = state.ai;
       value.presentation = { ...value.presentation, chatStart: this.start, chatTotal: active.messages.length,

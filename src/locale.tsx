@@ -1,7 +1,7 @@
 import { createContext, useContext, useLayoutEffect, type ReactNode } from 'react';
-import type { UiLocale } from '../shared/locale';
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 
-const LocaleContext = createContext<UiLocale>('de');
+const LocaleContext = createContext<UiLocale>(defaultUiLocale);
 
 export function LocaleProvider({ locale, children }: { locale: UiLocale; children: ReactNode }) {
   useLayoutEffect(() => { document.documentElement.lang = locale; }, [locale]);

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useState, type ComponentType } from 'react';
 import { Archive, Bot, Calendar, FilePlus2, FileText, Folder, FolderClock, Grid2X2, Mail, Package, Settings, type LucideIcon } from 'lucide-react';
 import { ModuleViewHost } from './ModuleViewHost';
 import { uiText, useUiLocale } from './locale';
-import type { UiLocale } from '../shared/locale';
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 import type { ModuleInfo } from '../shared/modules';
 import type { WindowKind, WorkspaceState } from '../shared/model';
 import type { UiAction } from '../shared/actions';
@@ -85,7 +85,7 @@ export interface WorkspaceNavigationEntry {
   id: string; title: string; icon?: string; order: number; moduleId: string; moduleTitle: string; action?: UiAction; view?: string;
 }
 /** Settings and the live app navigation use the same available entries and order. */
-export function workspaceNavigation(modules: ModuleInfo[], savedOrder?: readonly string[], locale: UiLocale = 'de'): WorkspaceNavigationEntry[] {
+export function workspaceNavigation(modules: ModuleInfo[], savedOrder?: readonly string[], locale: UiLocale = defaultUiLocale): WorkspaceNavigationEntry[] {
   const entries: WorkspaceNavigationEntry[] = [
     ...localizedCoreNavigation(locale).map(item => ({ ...item, moduleTitle: 'OpenVibeDesk' })),
     ...moduleNavigation(modules).map(item => ({ ...item, id: `${item.moduleId}:${item.id}`, moduleTitle: modules.find(module => module.id === item.moduleId)?.title ?? item.moduleId, order: item.order ?? 100 }))

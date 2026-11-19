@@ -31,7 +31,7 @@ export function SessionsView({ state, onCreate, onOpen, onRename, onReference }:
         .finally(() => { if (version === requestVersion.current) setLoading(false); });
     }, 150);
     return () => { clearTimeout(timer); requestVersion.current++; };
-  }, [search, state.presentation?.sessionRevision]);
+  }, [search, state.presentation?.sessionRevision, locale]);
   async function loadMore() {
     if (loading || page.nextOffset === undefined) return;
     const version = requestVersion.current;

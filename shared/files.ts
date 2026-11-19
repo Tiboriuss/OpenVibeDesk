@@ -24,11 +24,11 @@ export interface FileOpenResult extends FileNavigationTarget { opened: true; }
 export interface FileListingPage {
   path: string; root: string; parentPath?: string; entries: FileEntry[];
   total: number; hasMore: boolean; nextCursor?: string; complete: boolean;
-  revision: string; observedAt: string; warning?: string;
+  revision: string; observedAt: string; warning?: string; skippedEntries?: number;
 }
 export interface FileReadResult {
   id: string; name: string; path: string; size: number; modifiedAt: string;
-  readable: boolean; format: 'text' | 'metadata_only'; reason?: string; text?: string;
+  readable: boolean; format: 'text' | 'metadata_only'; reason?: string; reasonCode?: 'unsupportedFormat' | 'tooLarge' | 'unsupportedEncoding'; text?: string;
   textOffset: number; textEnd: number; textLength: number; revision: string;
   hasMore: boolean; nextCursor?: string; complete: boolean; observedAt: string;
 }

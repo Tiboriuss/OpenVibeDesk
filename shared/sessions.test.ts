@@ -82,6 +82,6 @@ describe('chat sessions', () => {
     const branch = forkSession(state, 'u');
     expect(branch.state.sessions[0].historyStart).toBe(0);
     const streaming = updateSessionMessages(state, id, ms => ms.map(m => m.id === 'a' ? { ...m, status: 'streaming' } : m));
-    expect(() => forkSession(streaming, 'u')).toThrow('laufende Antwort');
+    expect(() => forkSession(streaming, 'u')).toThrow('current reply');
   });
 });

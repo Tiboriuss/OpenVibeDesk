@@ -9,6 +9,7 @@ import { OvdBarSettings } from './OvdBarSettings';
 import { coreSettingsCategories, settingsEntries, matchesSettingsEntry, type SettingsCategoryId, type SettingsCategory, type SettingsEntry } from './settings-registry';
 import { uiText, useUiLocale } from './locale';
 import { settingsText } from './settings-copy';
+import { formDetail, useFormFeedback } from './form-feedback';
 import type { LanguagePreference } from '../shared/locale';
 import { defaultSettings } from '../shared/settings';
 import type { Settings as WorkspaceSettings } from '../shared/model';
@@ -62,9 +63,9 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention();
   const [moduleBusy, setModuleBusy] = useState<string>();
-  const [moduleError, setModuleError] = useState('');
+  const [moduleError, setModuleError] = useFormFeedback(copy, locale);
   const [eventStatus, setEventStatus] = useState<ModuleEventStatus[]>([]);
-  const [eventStatusError, setEventStatusError] = useState('');
+  const [eventStatusError, setEventStatusError] = useState(false);
   const eventRequest = useRef(0);
   const [visitedModuleSettings, setVisitedModuleSettings] = useState<Set<string>>(() => new Set());
   const contributedSettings = moduleSettings(moduleState.modules);
@@ -96,7 +97,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   async function toggleModule(id: string, enabled: boolean) {
     setModuleBusy(id); setModuleError('');
     try { await window.workspace.setModuleEnabled(id, enabled); }
-    catch (reason) { setModuleError(reason instanceof Error ? reason.message : copy.toggleFailed); }
+    catch (reason) { setModuleError((copy, locale) => formDetail(reason, locale) || copy.toggleFailed); }
     finally { setModuleBusy(undefined); }
   }
   const searching = search.trim().length > 0;
@@ -109,8 +110,8 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
     const request = ++eventRequest.current;
     try {
       const result = await window.workspace.getModuleEventStatus();
-      if (request === eventRequest.current) { setEventStatus(result); setEventStatusError(''); }
-    } catch { if (request === eventRequest.current) setEventStatusError(copy.eventsFailed); }
+      if (request === eventRequest.current) { setEventStatus(result); setEventStatusError(false); }
+    } catch { if (request === eventRequest.current) setEventStatusError(true); }
   }
   useEffect(() => {
     if (!moduleSettingsVisible) return;
@@ -122,7 +123,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   async function setSubscriptions(moduleId: string, topics: string[]) {
     setModuleBusy(moduleId); setModuleError(''); eventRequest.current++;
     try { await window.workspace.setModuleEventSubscriptions(moduleId, topics); await refreshEventStatus(); }
-    catch (reason) { setModuleError(reason instanceof Error ? reason.message : copy.subscriptionsFailed); }
+    catch (reason) { setModuleError((copy, locale) => formDetail(reason, locale) || copy.subscriptionsFailed); }
     finally { setModuleBusy(undefined); }
   }
   const anyResults = entries.some(entry => matchesSettingsEntry(entry, search, categories));
@@ -191,7 +192,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         {searching && <h3 className="settings-result-category">{categoryTitle('display')}</h3>}
         <div className="workspace-settings-group language-setting" hidden={!matches('display.language')}>
           <label htmlFor="interface-language">{copy.language}</label>
-          <select ref={languageSelect} id="interface-language" value={settings.language ?? 'system'} onChange={event => void updateAppearance('language', event.target.value as LanguagePreference)}>
+          <select ref={languageSelect} id="interface-language" value={settings.language ?? defaultSettings.language} onChange={event => void updateAppearance('language', event.target.value as LanguagePreference)}>
             <option value="system">{copy.system}</option><option lang="de" value="de">Deutsch</option><option lang="en" value="en">English</option>
           </select>
           {appearanceError === 'language' && <p className="settings-feedback error" role="alert">{copy.languageSaveFailed}</p>}
@@ -217,12 +218,12 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         <summary onClick={event => { event.preventDefault(); toggleGroup('installed'); }}><span><strong>{copy.installed}</strong><small>{moduleState.loading ? copy.loading : copy.moduleCount(moduleState.modules.filter(module => module.status === 'ready').length, moduleState.modules.length)}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
         <div className="installed-module-list">
         {moduleState.loading && <p role="status">{copy.loadingModules}</p>}
-        {eventStatusError && <p className="module-event-error" role="alert">{eventStatusError}</p>}
+        {eventStatusError && <p className="module-event-error" role="alert">{copy.eventsFailed}</p>}
         {moduleState.modules.map(module => {
           const runtimeError = module.status === 'invalid' && !!module.manifest;
           const canDisable = module.status === 'ready' || runtimeError;
           const statusLabel = runtimeError ? copy.moduleError : copy.status[module.status];
-          return <div className="module-management-row" key={module.id}><Package size={17} aria-hidden="true" /><div><div className="installed-module-heading"><strong>{module.title}</strong><span className="module-status">{statusLabel}{module.required && ` · ${copy.required}`}</span></div><details className="installed-module-details" open={searching || undefined}><summary>{copy.details}</summary><small>{module.id} · {module.version || copy.unknownVersion} · {module.source === 'builtin' ? copy.bundled : copy.additional}</small><p>{module.description}</p></details>{module.reason && <p className="installed-module-reason">{module.reason}</p>}{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && (['ready', 'disabled', 'approval_required'].includes(module.status) || runtimeError) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, !canDisable)}>{moduleBusy === module.id ? copy.changing : canDisable ? copy.disable : module.status === 'approval_required' ? copy.approve : copy.enable}</button>}</div>;
+          return <div className="module-management-row" key={module.id}><Package size={17} aria-hidden="true" /><div><div className="installed-module-heading"><strong>{module.title}</strong><span className="module-status">{statusLabel}{module.required && ` · ${copy.required}`}</span></div><details className="installed-module-details" open={searching || undefined}><summary>{copy.details}</summary><small>{module.id} · {module.version || copy.unknownVersion} · {module.source === 'builtin' ? copy.bundled : copy.additional}</small><p>{module.description}</p></details>{module.reason && <p className="installed-module-reason">{formDetail(module.reason, locale)}</p>}{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && (['ready', 'disabled', 'approval_required'].includes(module.status) || runtimeError) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, !canDisable)}>{moduleBusy === module.id ? copy.changing : canDisable ? copy.disable : module.status === 'approval_required' ? copy.approve : copy.enable}</button>}</div>;
         })}
         </div>
         </details>

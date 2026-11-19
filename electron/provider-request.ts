@@ -1,3 +1,4 @@
+import { ProviderDisplayError } from './provider-errors';
 import type { AgentSettings, AiConfig, ChatOptions } from '../shared/model';
 import { normalizeAgentSettings } from '../shared/agent-settings';
 import type { ProviderMessage, ResponseInputItem } from './stream';
@@ -6,14 +7,15 @@ export type ProviderRequestBudget = Pick<AgentSettings, 'contextTokenBudget' | '
 export interface ProviderRequestMeasurement { bytes: number; estimatedInputTokens: number; }
 
 /** A local conservative estimate, not a provider tokenizer or a billing count. */
-export class ContextBudgetError extends Error {
+export class ContextBudgetError extends ProviderDisplayError {
   readonly estimatedInputTokens: number;
   readonly inputTokenBudget: number;
   readonly contextTokenBudget: number;
   readonly outputTokenReserve: number;
   constructor(readonly observedBytes: number, budget: ProviderRequestBudget) {
     const inputTokenBudget = budget.contextTokenBudget - budget.outputTokenReserve;
-    super(`Das eingestellte Kontextbudget reicht für diese Anfrage nicht aus (${observedBytes.toLocaleString('de-DE')} geschätzte Eingabetokens, Budget ${inputTokenBudget.toLocaleString('de-DE')}). Verkürze den Auftrag oder passe das Kontextbudget in den Agent-Einstellungen an. Bereits ausgeführte Aktionen werden nicht wiederholt.`);
+    super(`Das eingestellte Kontextbudget reicht für diese Anfrage nicht aus (${observedBytes.toLocaleString('de-DE')} geschätzte Eingabetokens, Budget ${inputTokenBudget.toLocaleString('de-DE')}). Verkürze den Auftrag oder passe das Kontextbudget in den Agent-Einstellungen an. Bereits ausgeführte Aktionen werden nicht wiederholt.`,
+      `This request exceeds the context budget (${observedBytes.toLocaleString('en')} estimated input tokens, budget ${inputTokenBudget.toLocaleString('en')}). Shorten the request or change the budget in Agent settings. Completed actions will not be repeated.`);
     this.name = 'ContextBudgetError';
     this.estimatedInputTokens = observedBytes;
     this.inputTokenBudget = inputTokenBudget;

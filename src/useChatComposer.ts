@@ -1,3 +1,5 @@
+import { useUiLocale } from './locale';
+import { assistantText } from './assistant-copy';
 import { useEffect, useReducer, useRef } from 'react';
 import type { ChatComposerContent, ChatComposerLegacyReceipt, ChatComposerSnapshot } from '../shared/chat-composer';
 import { importLegacyChatComposer } from './legacyChatComposer';
@@ -14,6 +16,7 @@ type Entry = {
 };
 
 export function useChatComposer(sessionId?: string) {
+  const locale = useUiLocale();
   const entries = useRef(new Map<string, Entry>());
   const activeId = useRef(sessionId);
   activeId.current = sessionId;
@@ -147,7 +150,7 @@ export function useChatComposer(sessionId?: string) {
   async function settle(id: string) {
     const value = entry(id);
     await Promise.all(value.writes);
-    if (!value.ready || value.issue || !value.host) throw new Error('Der aktuelle Entwurf konnte noch nicht übernommen werden.');
+    if (!value.ready || value.issue || !value.host) throw new Error(assistantText[locale].draftPending);
     return value.host;
   }
 

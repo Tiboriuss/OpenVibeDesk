@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#connect-an-ai-provider) · [Architecture](architecture.md#llm-and-mcp-pipeline)
 
-Configure the Assistant under **Settings → AI & connection** (**Einstellungen → KI & Verbindung**). The **Chat** group contains the connection, models and workspace access, with its own **Chat-Einstellungen speichern** button. The peer **Spracheingabe** group saves independently. OVD keeps one active chat connection with two model slots: **Intelligent** and **Simple**. Each slot has its own Thinking setting. Provider selection configures the connection; modules and their tools remain part of the same OVD workspace.
+Configure the Assistant under **Settings → AI & connection** (**Einstellungen → KI & Verbindung**). The **Chat** group contains the connection, models and workspace access, with its own **Save chat settings** button. The peer **Voice input** group saves independently. OVD keeps one active chat connection with two model slots: **Smart** and **Standard**. Each slot has its own Thinking setting. Provider selection configures the connection; modules and their tools remain part of the same OVD workspace.
 
 This guide describes the current checkout. An older installed release may not yet contain these provider controls.
 
@@ -15,18 +15,18 @@ This guide describes the current checkout. An older installed release may not ye
 
 ## Speech input
 
-Chat and speech use separate configurations. **Spracheingabe** under **KI & Verbindung** supports Realtime transcription or a recorded-audio upload, depending on the speech service. It has its own endpoint, authentication and model, with no automatic reuse of chat keys or ChatGPT tokens. A service supporting chat completions does not necessarily support audio. See [Speech input](speech-input.md) for the implemented protocols and provider setup.
+Chat and speech use separate configurations. **Voice input** under **AI & connection** supports Realtime transcription or a recorded-audio upload, depending on the speech service. It has its own endpoint, authentication and model, with no automatic reuse of chat keys or ChatGPT tokens. A service supporting chat completions does not necessarily support audio. See [Speech input](speech-input.md) for the implemented protocols and provider setup.
 
 ## OpenAI API
 
-1. Select **OpenAI** under **Verbindung**.
-2. Enter `https://api.openai.com/v1` as **Endpunkt-URL** and use **Bearer-Token** authentication.
-3. Enter your API key and choose the **Schnittstelle** required by the model: **Chat Completions** or **Responses API**.
-4. Save the connection. Under **Modelle**, load the list or enter the intelligent/simple model IDs manually, then save.
+1. Select **OpenAI** under **Connection**.
+2. Enter `https://api.openai.com/v1` as **Endpoint URL** and use **Bearer token** authentication.
+3. Enter your API key and choose the **API protocol** required by the model: **Chat Completions** or **Responses API**.
+4. Save the connection. Under **Models**, load the list or enter the intelligent/simple model IDs manually, then save.
 
 The Responses adapter supports streamed text and function calls through the same OVD agent loop. It sends stateless requests with `store: false`; OVD supplies the needed conversation and tool results. Encrypted reasoning continuation is retained only within the active run, not saved in chat/evidence or carried into a separate user request. Selecting a Responses-only model while using Chat Completions will fail; choose the matching interface. An API key connection and a ChatGPT plan connection have different authentication and account access.
 
-The Thinking selection is model-specific. **Aus** omits the optional reasoning setting; it does not promise that the model performs no internal reasoning. Start with **Aus** if the provider rejects an unsupported setting. See the official [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) and [function calling](https://developers.openai.com/api/docs/guides/function-calling) documentation for model/API behavior.
+The Thinking selection is model-specific. **Off** omits the optional reasoning setting; it does not promise that the model performs no internal reasoning. Start with **Off** if the provider rejects an unsupported setting. See the official [Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) and [function calling](https://developers.openai.com/api/docs/guides/function-calling) documentation for model/API behavior.
 
 ## Azure AI Foundry and Azure OpenAI
 
@@ -40,14 +40,14 @@ The Thinking selection is model-specific. **Aus** omits the optional reasoning s
    ```
 
    The corresponding `https://your-resource.services.ai.azure.com/openai/v1` format is also supported. A bare resource URL is normalized to `/openai/v1`. A Foundry project URL or portal URL is not a model endpoint.
-3. Use **API-Schlüssel (api-key)**, the Azure preset's default, and enter the resource key.
+3. Use **API key (api-key header)**, the Azure preset's default, and enter the resource key.
 4. Select **Responses API** or **Chat Completions** according to the deployed model's supported interface. The shared `/openai/v1` base path alone does not make every model support both.
 5. Enter your deployment's **name**, rather than assuming the public model catalog ID is correct. The two slots can use the same deployment or two different deployments on this resource.
 6. Save. Try an ordinary chat request, then a small Workspace task if the deployment supports tool calling.
 
 For example, if a model was deployed under `workshop-assistant`, enter `workshop-assistant` in the model field even if its underlying model has another name. OVD puts this value in the API's `model` field. A `/models` response may describe catalog models rather than usable deployments; manual deployment entry remains available when discovery is unavailable or unsuitable.
 
-The v1 API normally needs no dated **Azure API-Version**. These endpoint and deployment rules follow Microsoft's [v1 API guidance](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle); the [Chat Completions reference](https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat) documents Azure's `api-key` authentication.
+The v1 API normally needs no dated **Azure API version**. These endpoint and deployment rules follow Microsoft's [v1 API guidance](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle); the [Chat Completions reference](https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat) documents Azure's `api-key` authentication.
 
 ### Existing deployment URLs
 
@@ -59,32 +59,32 @@ https://your-resource.openai.azure.com/openai/deployments/workshop-assistant/cha
 
 Saving extracts the completion route and API version into their connection fields. A full v1 `/responses` URL similarly selects the Responses interface. Classic `/openai/deployments/<name>` paths use Chat Completions and a dated API version; the default is `2024-10-21` if none was supplied. Both model slots must target the deployment named in that path. Use the v1 resource URL for different deployments or Responses.
 
-The optional **Azure API-Version** field appears for a classic deployment URL or an existing version value. If both the URL and the field specify a version, they must agree. OVD does not discover Azure resources through the management API or manage deployments. Microsoft Entra browser sign-in and automatic token refresh are not implemented; the authentication selector controls the supplied credential's request header.
+The optional **Azure API version** field appears for a classic deployment URL or an existing version value. If both the URL and the field specify a version, they must agree. OVD does not discover Azure resources through the management API or manage deployments. Microsoft Entra browser sign-in and automatic token refresh are not implemented; the authentication selector controls the supplied credential's request header.
 
 ## Compatible gateways and local models
 
-Choose **OpenAI-kompatibel / lokaler Anbieter** and enter the service's documented OpenAI-compatible base URL. For example, a local service might expose `http://localhost:1234/v1`; the address and model IDs depend on that service. OVD accepts HTTP only for loopback addresses. Remote endpoints require HTTPS, and redirects are rejected.
+Choose **OpenAI-compatible or local provider** and enter the service's documented OpenAI-compatible base URL. For example, a local service might expose `http://localhost:1234/v1`; the address and model IDs depend on that service. OVD accepts HTTP only for loopback addresses. Remote endpoints require HTTPS, and redirects are rejected.
 
-Choose the supported protocol and authentication: **Bearer-Token**, **API-Schlüssel (api-key)** or **Ohne Anmeldung**. The latter sends no credential header. A native provider API with a different request/stream format does not become compatible merely by entering its URL; it needs an OpenAI-compatible gateway or a dedicated adapter.
+Choose the supported protocol and authentication: **Bearer token**, **API key (api-key header)** or **None**. The latter sends no credential header. A native provider API with a different request/stream format does not become compatible merely by entering its URL; it needs an OpenAI-compatible gateway or a dedicated adapter.
 
-Save the connection before refreshing the model list. An unavailable list does not prevent manual model entry. Ordinary chat needs streamed text; Workspace tools also need complete function calling with the offered schemas. Turn off **Workspace-Werkzeuge** for a model that supports text but not tools.
+Save the connection before refreshing the model list. An unavailable list does not prevent manual model entry. Ordinary chat needs streamed text; Workspace tools also need complete function calling with the offered schemas. Turn off **Workspace tools** for a model that supports text but not tools.
 
 ## Sign in with ChatGPT
 
 The **ChatGPT** provider connects directly through the official [Sign in with ChatGPT flow for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source). OVD opens your system browser for OAuth authorization and then calls `https://api.openai.com/v1/responses` itself. No separate CLI, agent runtime or API key is needed for this connection.
 
-1. Select **ChatGPT** under **Verbindung**.
+1. Select **ChatGPT** under **Connection**.
 2. Choose **Continue with ChatGPT**. The browser opens the OpenAI sign-in page.
 3. Choose the intended ChatGPT account/workspace and review the request to let OpenVibeDesk use your ChatGPT plan for eligible AI requests. Finish authorization in the browser.
 4. Return to OVD. It shows the connected account and whether ChatGPT plan usage was actually granted. An identity-only sign-in does not enable model requests.
-5. On the first plan-enabled connection, dismiss **Du verwendest deinen ChatGPT-Plan** after reviewing how to manage usage.
+5. On the first plan-enabled connection, dismiss **You’re using your ChatGPT plan** after reviewing how to manage usage.
 6. Save the AI settings, load the model list and choose your intelligent/simple models. The list belongs to the selected ChatGPT account; its choices may differ from an API-key account.
 
-While the browser flow is pending, **Anmeldung abbrechen** cancels the attempt. Existing active account credentials remain available if a new sign-in fails or is cancelled. **Konto hinzufügen** creates a separate registration, and an account selector appears when multiple saved connections exist. A saved disconnected account can be selected and reconnected with **Continue with ChatGPT**. Model choices are refreshed deliberately after changing accounts; OVD does not silently substitute another model.
+While the browser flow is pending, **Cancel sign-in** cancels the attempt. Existing active account credentials remain available if a new sign-in fails or is cancelled. **Add account** creates a separate registration, and an account selector appears when multiple saved connections exist. A saved disconnected account can be selected and reconnected with **Continue with ChatGPT**. Model choices are refreshed deliberately after changing accounts; OVD does not silently substitute another model.
 
-**Nutzung in ChatGPT verwalten** opens ChatGPT's usage settings. The Chat composer identifies when the ChatGPT provider is selected and links to the same usage controls. OpenAI determines account eligibility, available models and usage limits. A connected identity and a grant to use the plan are separate states; model requests require both. When plan usage is unavailable or a usage limit is reached, review the account's usage settings before deliberately trying again. OVD does not switch to a separately billed API connection automatically.
+**Manage usage in ChatGPT** opens ChatGPT's usage settings. The Chat composer identifies when the ChatGPT provider is selected and links to the same usage controls. OpenAI determines account eligibility, available models and usage limits. A connected identity and a grant to use the plan are separate states; model requests require both. When plan usage is unavailable or a usage limit is reached, review the account's usage settings before deliberately trying again. OVD does not switch to a separately billed API connection automatically.
 
-The local host keeps an opaque installation identity and the issued registration IDs across restarts. OAuth uses a fresh state, nonce and PKCE verifier for each attempt; the main process validates the callback and signed ID token before accepting the new account. Access, refresh and ID tokens stay in the local encrypted credential store. They are never returned to the settings renderer, put in chat context, copied from another app or sent to configurable provider endpoints. Refresh uses the same saved registration. **Abmelden** ends the selected renewable session and clears its locally stored credentials; the account's registration remains available for reconnecting.
+The local host keeps an opaque installation identity and the issued registration IDs across restarts. OAuth uses a fresh state, nonce and PKCE verifier for each attempt; the main process validates the callback and signed ID token before accepting the new account. Access, refresh and ID tokens stay in the local encrypted credential store. They are never returned to the settings renderer, put in chat context, copied from another app or sent to configurable provider endpoints. Refresh uses the same saved registration. **Sign out** ends the selected renewable session and clears its locally stored credentials; the account's registration remains available for reconnecting.
 
 This flow is an OpenAI preview for eligible open-source/local apps, rather than unrestricted access to every API endpoint or model. It uses streamed, stateless Responses requests with the context supplied in `input`. OVD groups its lazily selected functions according to the flow's supported tool format. The same OVD permissions, configured execution limits, operation journal and tool-free reformulation path apply. See [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) and [account/session behavior](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions) for the current service contract.
 
@@ -108,10 +108,10 @@ The Assistant can inspect public connection settings and prepare provider, inter
 | A classic Azure URL has no model list | Use its exact deployment name or switch to the v1 resource endpoint. |
 | ChatGPT browser sign-in was cancelled or failed | Start **Continue with ChatGPT** again. A new attempt uses a fresh state/PKCE verifier; existing active credentials are retained. |
 | ChatGPT is connected but plan use is unavailable | Check the selected account/workspace and granted permissions. Reconnect if needed; a successful identity sign-in alone does not grant model access. |
-| ChatGPT reports a usage limit | Open **Nutzung in ChatGPT verwalten**, review the plan/app limit and deliberately retry when available. |
+| ChatGPT reports a usage limit | Open **Manage usage in ChatGPT**, review the plan/app limit and deliberately retry when available. |
 | ChatGPT model list changed | Refresh the selected account's list and choose a permitted model. OVD does not reuse another account's catalog automatically. |
 | Tools fail but text works | Confirm that the selected model supports the chosen protocol's function calling and that Workspace tools are enabled. |
-| Responses reports contradictory output | Enable **Diagnoseprotokoll** on the affected computer before a new reproduction, then export the [diagnostic report](diagnostics.md). It identifies the exact parser conflict without copying text or credentials. Do not infer that every such error has the same cause. |
+| Responses reports contradictory output | Enable **Diagnostic log** on the affected computer before a new reproduction, then export the [diagnostic report](diagnostics.md). It identifies the exact parser conflict without copying text or credentials. Do not infer that every such error has the same cause. |
 
 HTTP transport checks use synthetic local endpoints and non-secret fixtures. They establish route/header handling and the exercised streaming/tool contracts, not compatibility with every Azure account, deployment, gateway or model. A real Azure deployment must be checked with its own resource and access configuration. No provider credentials or real mailbox mutations are required for the synthetic checks.
 

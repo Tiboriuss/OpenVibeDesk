@@ -1,3 +1,5 @@
+import { useUiLocale } from '../../../src/locale';
+import { mailText } from './mail-locale';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImapMailView } from './ImapMailView';
 import { MailQueryControls } from './MailQueryControls';
@@ -16,6 +18,8 @@ function readerBody(message: ImapMessage) {
 }
 
 export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
+  const locale = useUiLocale();
+  const copy = mailText[locale];
   const [mode, setMode] = useState<'loading' | 'real' | 'drafts'>('loading');
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([]);
   const [accountId, setAccountId] = useState('');
@@ -107,7 +111,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
         });
         setNextCursor(previous => previous?.uidValidity === page.messages[0]?.uidValidity ? previous : page.nextCursor);
       }).catch(() => {
-        if (mounted && listVersion.current === version && liveView.current.accountId === view.accountId && liveView.current.folder === view.folder) setError('Neue Postfachaktivität erkannt. Die Übersicht konnte nicht aktualisiert werden; bitte „Aktualisieren“ wählen.');
+        if (mounted && listVersion.current === version && liveView.current.accountId === view.accountId && liveView.current.folder === view.folder) setError(copy.inboxRefreshFailed);
       }).finally(() => { inboxRefreshBusy.current = false; });
     });
     return () => { mounted = false; unsubscribe(); };
@@ -129,7 +133,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
         setPendingOpen(undefined); setMessageId(undefined); setBodyLoading(undefined);
         setRefresh(++refreshVersion.current);
       }
-    }).catch(() => { if (mounted) { setAccountsLoaded(true); setError('Mailkonten konnten nicht geladen werden.'); setMode('real'); setPendingOpen(undefined); } });
+    }).catch(() => { if (mounted) { setAccountsLoaded(true); setError(copy.accountsFailed); setMode('real'); setPendingOpen(undefined); } });
     const unsubscribe = window.workspace.onMailAccountsChanged(() => load(true));
     const unsubscribeReal = window.workspace.onShowRealMail(request => {
       const version = request.refresh ? ++refreshVersion.current : refreshVersion.current;
@@ -154,7 +158,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
         ?? items.find(item => item.selectable && (item.specialUse?.toLowerCase() === '\\inbox' || item.path.toLowerCase() === 'inbox')) ?? items.find(item => item.selectable);
       setFolder(first?.path ?? '');
       if (!first) setLoading(false);
-    }).catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : 'Ordner konnten nicht geladen werden.'); setLoading(false); setPendingOpen(undefined); } });
+    }).catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : copy.foldersFailed); setLoading(false); setPendingOpen(undefined); } });
     return () => { active = false; };
   }, [accountId, refresh]);
 
@@ -165,7 +169,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
     let active = true;
     setLoading(true); setError(''); setMessages([]); setMessageId(undefined); setBodyLoading(undefined); setMessagesLoadedFor(undefined);
     void window.workspace.listMailMessages(accountId, folder).then(page => { if (active && listVersion.current === version) { setMessages(page.messages); setNextCursor(page.nextCursor); setMessagesLoadedFor({ accountId, folder }); setLoading(false); } })
-      .catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : 'Nachrichten konnten nicht geladen werden.'); setLoading(false); setPendingOpen(undefined); } });
+      .catch(reason => { if (active) { setError(reason instanceof Error ? reason.message : copy.messagesFailed); setLoading(false); setPendingOpen(undefined); } });
     return () => { active = false; };
   }, [accountId, folder]);
 
@@ -183,7 +187,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
       });
       setNextCursor(page.nextCursor);
     } catch (reason) {
-      if (listVersion.current === version) setError(reason instanceof Error ? reason.message : 'Ältere Nachrichten konnten nicht geladen werden.');
+      if (listVersion.current === version) setError(reason instanceof Error ? reason.message : copy.olderFailed);
     } finally {
       if (listVersion.current === version) { loadMoreBusy.current = false; setLoadingMore(false); }
     }
@@ -222,14 +226,14 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
         setSearchResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? metadata : item) } : current);
         setQueryResults(current => current ? { ...current, messages: current.messages.map(item => item.id === id ? metadata : item) } : current);
       }
-    }).catch(reason => { if (version === bodyRequestVersion.current && currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) setError(reason instanceof Error ? reason.message : 'Nachricht konnte nicht geladen werden.'); })
+    }).catch(reason => { if (version === bodyRequestVersion.current && currentFolder.current.accountId === before.accountId && currentFolder.current.folder === before.folder) setError(reason instanceof Error ? reason.message : copy.messageFailed); })
       .finally(() => { if (version === bodyRequestVersion.current) setBodyLoading(current => current === id ? undefined : current); });
   };
   useEffect(() => {
     if (!pendingOpen || !accountsLoaded) return;
-    if (!accounts.some(account => account.id === pendingOpen.accountId)) { setError('Das Mailkonto ist nicht mehr eingerichtet.'); setPendingOpen(undefined); return; }
+    if (!accounts.some(account => account.id === pendingOpen.accountId)) { setError(copy.accountRemoved); setPendingOpen(undefined); return; }
     if (accountId !== pendingOpen.accountId || foldersLoadedFor !== accountId || foldersLoadedVersion !== pendingOpen.refreshVersion) return;
-    if (!folders.some(item => item.path === pendingOpen.folder && item.selectable)) { setError('Der zugehörige Mailordner ist nicht mehr verfügbar.'); setPendingOpen(undefined); return; }
+    if (!folders.some(item => item.path === pendingOpen.folder && item.selectable)) { setError(copy.folderRemoved); setPendingOpen(undefined); return; }
     if (folder !== pendingOpen.folder) { setFolder(pendingOpen.folder); return; }
     if (messagesLoadedFor?.accountId !== accountId || messagesLoadedFor.folder !== folder) return;
     if (!pendingOpen.messageId) { setMessageId(undefined); setBodyLoading(undefined); setPendingOpen(undefined); return; }
@@ -243,7 +247,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
         setMessages(previous => [...previous.filter(item => item.id !== message.id), message].sort((a, b) => b.uid - a.uid));
       }).catch(reason => {
         if (pendingLookup.current === key && currentFolder.current.accountId === target.accountId && currentFolder.current.folder === target.folder) {
-          setError(reason instanceof Error ? reason.message : 'Die Nachricht ist nicht mehr geladen.');
+          setError(reason instanceof Error ? reason.message : copy.messageGone);
           setPendingOpen(current => current === target ? undefined : current);
         }
       }).finally(() => { if (pendingLookup.current === key) pendingLookup.current = undefined; });
@@ -258,7 +262,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
     if (!query.trim()) { clearSearch(); return; }
     const version = ++searchVersion.current; setPendingSearchQuery(query.trim()); setSearchLoading(true); setQueryResults(undefined); setQueryRequest(undefined); setCountResult(undefined); setQueryBusy(false); setMode('real'); setError(''); setPendingOpen(undefined);
     try { const results = await window.workspace.searchMail({ query: query.trim(), ...(accountId ? { accountId } : {}), limit: 50 }); if (version === searchVersion.current) { setSearchResults(results); setMessageId(undefined); } }
-    catch (reason) { if (version === searchVersion.current) setError(reason instanceof Error ? reason.message : 'Die Postfachsuche ist fehlgeschlagen.'); }
+    catch (reason) { if (version === searchVersion.current) setError(reason instanceof Error ? reason.message : copy.searchFailed); }
     finally { if (version === searchVersion.current) setSearchLoading(false); }
   };
   const queryMail = async (request: MailQueryRequest) => {
@@ -284,7 +288,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
       const result = await window.workspace.queryMail({ ...queryRequest, cursor: queryResults.nextCursor });
       if (version !== searchVersion.current) return;
       setQueryResults(previous => previous ? { ...result, messages: [...new Map([...previous.messages, ...result.messages].map(message => [message.id, message])).values()].slice(0, 500) } : result);
-    } catch (reason) { if (version === searchVersion.current) setError(reason instanceof Error ? reason.message : 'Weitere Ergebnisse konnten nicht geladen werden.'); }
+    } catch (reason) { if (version === searchVersion.current) setError(reason instanceof Error ? reason.message : copy.moreFailed); }
     finally { if (version === searchVersion.current) setQueryLoadingMore(false); }
   };
   const changeRead = async (message: ImapMessage) => {
@@ -297,41 +301,41 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   const outgoingDrafts = orderedDrafts.filter(draft => draftCollection(draft) === 'outbox');
   const sentDrafts = orderedDrafts.filter(draft => draftCollection(draft) === 'sent');
   const draftStatus = (draft: Draft): string => {
-    if (!draft.deliveryStatus || draft.deliveryStatus === 'draft') return draft.deliveryError ? 'Entwurf · nicht gesendet' : 'Entwurf';
-    if (draft.deliveryStatus === 'sending') return 'Wird gesendet';
-    if (draft.deliveryStatus === 'uncertain') return 'Versand unklar';
-    const acceptance = draft.rejectedRecipients?.length ? 'Teilweise angenommen' : 'Gesendet';
-    const copy = draft.sentCopy;
-    const filing = !copy ? 'Ablage ungeprüft' : { pending: 'Ablage ausstehend', filing: 'Ablage läuft', filed: 'abgelegt', failed: 'Ablage fehlgeschlagen', uncertain: 'Ablage unklar' }[copy.status];
+    if (!draft.deliveryStatus || draft.deliveryStatus === 'draft') return draft.deliveryError ? copy.unsentDraft : copy.draft;
+    if (draft.deliveryStatus === 'sending') return copy.sendProgress;
+    if (draft.deliveryStatus === 'uncertain') return copy.sendUncertain;
+    const acceptance = draft.rejectedRecipients?.length ? copy.partiallyAccepted : copy.sent;
+    const sentCopy = draft.sentCopy;
+    const filing = !sentCopy ? copy.filingUnchecked : { pending: copy.filingPending, filing: copy.filingActive, filed: copy.copyFiled, failed: copy.filingFailed, uncertain: copy.filingUnknown }[sentCopy.status];
     return `${acceptance} · ${filing}`;
   };
   const draftRows = (items: Draft[], label: string) => <div className="local-drafts-list" aria-label={label}>
     {items.map(draft => <button type="button" key={draft.id} onClick={() => void window.workspace.setActiveDraft(draft.id).catch(reason => setError(String(reason)))}>
-      <span><strong>{draft.subject || '(Kein Betreff)'}</strong><small>{draft.to || 'Kein Empfänger'} · {accounts.find(account => account.id === draft.accountId)?.email || 'Kein Mailkonto'}</small></span>
+      <span><strong>{draft.subject || copy.noSubject}</strong><small>{draft.to || copy.missingTo} · {accounts.find(account => account.id === draft.accountId)?.email || copy.missingAccount}</small></span>
       <span className={`local-draft-status ${draftCollection(draft)}`}>{draftStatus(draft)}</span>
     </button>)}
   </div>;
-  const draftsView = <section className="local-drafts" aria-label="Lokale Entwürfe">
-    <header><h2>Lokale Entwürfe</h2></header>
-    {!editableDrafts.length ? <p className="local-drafts-empty">Keine ungesendeten Entwürfe.</p> : draftRows(editableDrafts, 'Ungesendete Entwürfe')}
+  const draftsView = <section className="local-drafts" aria-label={copy.localDrafts}>
+    <header><h2>{copy.localDrafts}</h2></header>
+    {!editableDrafts.length ? <p className="local-drafts-empty">{copy.noUnsent}</p> : draftRows(editableDrafts, copy.unsent)}
     {!!outgoingDrafts.length && <section className="local-drafts-group" aria-labelledby="local-outgoing-title">
-      <header><h3 id="local-outgoing-title">Versand &amp; Ablage <span>{outgoingDrafts.length}</span></h3></header>
-      {draftRows(outgoingDrafts, 'Offener Versand und Ablage')}
+      <header><h3 id="local-outgoing-title">{copy.outbox} <span>{outgoingDrafts.length}</span></h3></header>
+      {draftRows(outgoingDrafts, copy.pendingOutbox)}
     </section>}
     {!!sentDrafts.length && <details className="local-sent-history">
-      <summary>Versandverlauf <span>{sentDrafts.length}</span></summary>
-      {draftRows(sentDrafts, 'Abgeschlossene Sendungen')}
+      <summary>{copy.sentHistory} <span>{sentDrafts.length}</span></summary>
+      {draftRows(sentDrafts, copy.completedSends)}
     </details>}
     {error && <p className="imap-error" role="alert">{error}</p>}
   </section>;
 
   return <div className="mail-workspace">
     <div className="mail-workspace-content">
-      {mode === 'loading' ? <div className="mail-workspace-loading">Mailkonten werden geladen …</div> :
+      {mode === 'loading' ? <div className="mail-workspace-loading">{copy.accountsLoading}</div> :
         <ImapMailView accounts={accounts} folders={folders} messages={readerMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
           dateBasis={queryResults && (queryRequest?.sort ?? queryResults.request?.sort ?? 'received_desc').startsWith('received') ? 'received' : 'sent'}
           queryControls={<MailQueryControls accounts={accounts} folders={folders} accountId={accountId} folder={folder} hidden={mode === 'drafts'} busy={queryBusy || queryLoadingMore} summary={countResult ?? queryResults} onQuery={queryMail} onCount={countMail} onReset={clearSearch}/>}
-          searchState={queryResults ? { title: 'Mailabfrage', query: '', description: 'Kombinierte Serverfilter', total: queryResults.count, countExact: queryResults.countExact, complete: queryResults.complete, hasMore: queryResults.hasMore, scope: queryResults.scope, loading: queryBusy } : searchResults ? { query: searchResults.query, total: searchResults.total, hasMore: searchResults.hasMore, scope: searchResults.scope + (searchResults.foldersRemaining ? ` · ${searchResults.foldersRemaining} weitere Ordner nicht durchsucht` : '') + (searchResults.warnings?.length ? ' · Einige Ordner nicht erreichbar' : ''), loading: searchLoading } : searchLoading ? { query: pendingSearchQuery, total: 0, hasMore: false, scope: 'Postfachsuche läuft …', loading: true } : undefined}
+          searchState={queryResults ? { title: copy.mailQuery, query: '', description: copy.combinedFilters, total: queryResults.count, countExact: queryResults.countExact, complete: queryResults.complete, hasMore: queryResults.hasMore, scope: queryResults.scope, loading: queryBusy } : searchResults ? { query: searchResults.query, total: searchResults.total, hasMore: searchResults.hasMore, scope: searchResults.scope + (searchResults.foldersRemaining ? ` · ${copy.remainingFolders(searchResults.foldersRemaining)}` : '') + (searchResults.warnings?.length ? " " + copy.someUnreachable : ''), loading: searchLoading } : searchLoading ? { query: pendingSearchQuery, total: 0, hasMore: false, scope: copy.searchRunning, loading: true } : undefined}
           onSearch={query => void searchMail(query)} onClearSearch={clearSearch} focusVersion={focusVersion}
           loading={queryResults ? queryBusy : searchResults ? searchLoading : loading || searchLoading || queryBusy}
           loadingMore={queryResults ? queryLoadingMore : loadingMore}
@@ -341,7 +345,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
           onAccount={id => { clearSearch(); setPendingOpen(undefined); setMode('real'); setAccountId(id); }}
           onFolder={path => { clearSearch(); setPendingOpen(undefined); setMode('real'); setFolder(path); }}
           onSelect={id => { setPendingOpen(undefined); selectMessage(id); }}
-          onRefresh={() => { if (queryResults && queryRequest) { void queryMail({ ...queryRequest, cursor: undefined }).catch(reason => setError(reason instanceof Error ? reason.message : 'Die Abfrage konnte nicht aktualisiert werden.')); return; } if (searchResults) { void searchMail(searchResults.query); return; } setPendingOpen(undefined); refreshVersion.current++; setRefresh(refreshVersion.current); }}
+          onRefresh={() => { if (queryResults && queryRequest) { void queryMail({ ...queryRequest, cursor: undefined }).catch(reason => setError(reason instanceof Error ? reason.message : copy.queryRefreshFailed)); return; } if (searchResults) { void searchMail(searchResults.query); return; } setPendingOpen(undefined); refreshVersion.current++; setRefresh(refreshVersion.current); }}
           onSettings={openSettings} onCompose={accountId ? () => openDraft() : undefined} onReply={message => openDraft(message.id)} onToggleRead={changeRead}
           onDownloadAttachment={async (message, index) => { await window.workspace.downloadMailAttachment(message.id, index); }}
           onDisplay={async (id, patch) => { await window.workspace.setMailDisplay(id, patch); }} onOpenLink={(id, url) => window.workspace.openMailLink(id, url)}

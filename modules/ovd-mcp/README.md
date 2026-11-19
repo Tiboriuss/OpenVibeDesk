@@ -6,7 +6,7 @@
 
 ## Setup
 
-Add a server under **Settings → MCP** (currently **Einstellungen → MCP**):
+Add a server under **Settings → MCP** (German: **Einstellungen → MCP**):
 
 - **Stdio:** enter an executable, its individual arguments and an optional working directory. OVD launches it without an additional shell. Store credentials as secret environment values rather than putting them in command-line arguments. The process inherits the SDK's limited default environment plus the explicitly configured values, rather than OVD's entire environment.
 - **Streamable HTTP:** use HTTPS, or HTTP on `localhost`, `127.0.0.1` or `[::1]`. Select **No authentication**, **Bearer token**, or **OAuth · sign in in browser** (currently **Keine Anmeldung**, **Bearer-Token**, **OAuth · im Browser anmelden**). Credentials in the MCP URL, query parameters, fragments and redirects are rejected.

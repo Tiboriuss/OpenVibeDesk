@@ -6,7 +6,7 @@ The **OVD-Bar** is OVD's compact floating launcher for the Assistant, modules an
 
 ## Adjust the bar
 
-Open the bar's **…** menu and choose **OVD-Bar anpassen …**, or use **Settings → OVD-Bar**. Right-click and Shift+F10 open the same menu.
+Open the bar's **…** menu and choose **Customize OVD-Bar…**, or use **Settings → OVD-Bar**. Right-click and Shift+F10 open the same menu.
 
 | Control | Behavior |
 | --- | --- |
@@ -16,9 +16,9 @@ Open the bar's **…** menu and choose **OVD-Bar anpassen …**, or use **Settin
 | Opacity | Background opacity from 70% to 100%, default 96%. Icons and focus indicators remain opaque. |
 | Keep in front | Uses the existing always-on-top preference. Enabled by default. |
 | Collapse when idle | Optional; off by default. After 800ms without hover, focus or an open menu, the bar becomes a small reachable launcher. Hover or keyboard focus expands it; activating the launcher focuses its controls. |
-| Entries and order | Move the actual available entries with Up/Down controls. Disabled modules retain their saved position for reactivation. |
+| Items and order | Move the actual available entries with Up/Down controls. Disabled modules retain their saved position for reactivation. |
 
-The menu also offers common size, placement and background presets, and **OpenVibeDesk beenden** through the existing quit/save checks. Settings retain compact groups and searchable terms including “sidebar,” “dock,” “transparency” and “orientation.” Sliders commit at the end of pointer/keyboard adjustment or on blur; other controls save immediately. A failed settings save retains the edited value with a retry action. The reset action restores bar appearance/behavior defaults; entry order has its own reset.
+The menu also offers common size, placement and background presets, and **Quit OpenVibeDesk** through the existing quit/save checks. Settings retain compact groups and searchable terms including “sidebar,” “dock,” “transparency” and “orientation.” Sliders commit at the end of pointer/keyboard adjustment or on blur; other controls save immediately. A failed settings save retains the edited value with a retry action. The reset action restores bar appearance/behavior defaults; entry order has its own reset.
 
 The bar opens without taking focus from the current application. Its size is limited to the display work area. With many modules, only the navigation strip scrolls; the grip and menu stay reachable. Horizontal bars also accept vertical-wheel scrolling. Tab enters the toolbar; arrow keys follow its orientation, and Home/End reach the first entry/menu. The optional attention animation respects reduced motion. Where the renderer exposes reduced transparency or forced colors, those preferences override the decorative surface treatment.
 

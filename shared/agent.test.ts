@@ -137,7 +137,7 @@ describe('workspace agent integration', () => {
         else if (requests === 3) res.end(sse(call('follow-up-read', 'mail_search', '{"query":"Launch"}'), finishCalls));
         else res.end(sse(finishText(answer)));
       }));
-      const deps = { ...workspace(), onReplaceText: (text: string) => { visible = text; replacements++; }, onRecovery: () => { recoveries++; }, onProgress: (event: AgentDiagnosticEvent) => progress.push(event), onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async (_moduleId: string, name: string) => {
+      const deps = { ...workspace(), locale: 'de' as const, onReplaceText: (text: string) => { visible = text; replacements++; }, onRecovery: () => { recoveries++; }, onProgress: (event: AgentDiagnosticEvent) => progress.push(event), onToolEvent: (event: ToolEvent) => events.push(event), invokeModuleTool: async (_moduleId: string, name: string) => {
         invocations++; expect(visible).not.toContain('ERFOLGREICH');
         invoked.push(name);
         if (name === 'mail_search') { expect(recoveries).toBe(1); return { outcome: 'completed', hostOperation: { ...operationIds, policy: 'read', effect: 'none', status: 'completed', retryBlocked: false }, matches: [{ id: 'm1' }] }; }
@@ -280,8 +280,8 @@ describe('workspace agent integration', () => {
       expect(requests).toBe(4);
       expect(limits).toMatchObject([{ status: 'limit_reached', reason: 'tool_rounds', toolRounds: 3, toolCalls: 3, discoveryCalls: 3, actionCalls: 0, limit: 3, nextToolType: 'discovery' }]);
       expect(events).toHaveLength(3);
-      expect(visible).toContain('3 Werkzeugrunden');
-      expect(visible).toContain('Statusangaben bleiben erhalten');
+      expect(visible).toContain('Tool round limit reached (3)');
+      expect(visible).toContain('recorded results are saved');
       expect(deps.actions).toEqual([]);
     } finally { await server.close(); }
   });

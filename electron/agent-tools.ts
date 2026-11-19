@@ -1,3 +1,4 @@
+import { defaultUiLocale, type UiLocale } from '../shared/locale';
 import { z } from 'zod';
 import type { ModuleListing, ModuleQuery, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { AgentSettings, ToolOutcome } from '../shared/model';
@@ -9,19 +10,51 @@ const MAX_SCHEMA_LENGTH = 12_000;
 const discoveryNames = new Set(['find_modules', 'get_module_tools']);
 const resultEnvelopeKeys = new Set(['ok', 'outcome', 'status', 'message', 'error', 'warning', 'retryBlocked', 'hostOperation', 'moduleId', 'untrusted']);
 
+const discoveryText = {
+  de: {
+    find: "Finde passende verfügbare OVD-Module nach Aufgabe oder Modultyp, z.B. Mail, Kalender oder Dateien. Das durchsucht Modulbeschreibungen, keine Mails oder sonstigen Geschäftsinhalte. Lade danach gezielt benötigte Werkzeuge mit get_module_tools.",
+    moduleQuery: "Modultyp oder gewünschte Funktion, keine Mail-Suchbegriffe.",
+    moduleOffset: "nextOffset einer vorherigen Modulsuche.",
+    moduleLimit: "Höchstens 20 kurze Modulbeschreibungen.",
+    load: "Lade gezielt die für den Auftrag nötigen Werkzeuge eines passenden OVD-Moduls. query beschreibt eine Funktion wie suchen, neue Mail oder Entwurf bearbeiten. Erst im nächsten Schritt sind die geladenen Werkzeuge mit ihren exakten Argumenten aufrufbar. Weitere Treffer sind paginiert. Fehlt die gesuchte Funktion, suche allgemeiner oder blättere ohne query, bevor du sie als nicht verfügbar meldest. Lade nur die für den Auftrag benötigten Werkzeuge.",
+    moduleId: "ID aus der Modulübersicht oder find_modules.",
+    query: "Benötigte Funktion innerhalb des Moduls.",
+    offset: "nextOffset zum gezielten Nachladen weiterer Werkzeuge.",
+    limit: (max: number) => `Höchstens ${max} Werkzeuge; Standard ${Math.min(6, max)}. Bei vielen Funktionen die query eingrenzen.`,
+    findLabel: "Passende Module finden",
+    loadLabel: "Modulwerkzeuge laden",
+    readLabel: "Gespeichertes Ergebnis lesen",
+  },
+  en: {
+    find: "Find available OVD modules by task or module type. This searches module descriptions. Load matching tools with get_module_tools before searching domain data.",
+    moduleQuery: "Module type or capability, such as mail or files.",
+    moduleOffset: "nextOffset from a previous module search.",
+    moduleLimit: "Maximum number of short module summaries (up to 20).",
+    load: "Load the tools needed for this task from a selected OVD module. Describe the operation in query. Matching tools and argument schemas become available next turn. If needed, broaden the query or page through results without a query before concluding a tool is unavailable.",
+    moduleId: "Module ID from a summary or find_modules.",
+    query: "Capability needed within the selected module.",
+    offset: "nextOffset to load another page of tools.",
+    limit: (max: number) => `Up to ${max} tools, default ${Math.min(6, max)}. Narrow the query when many tools match.`,
+    findLabel: "Find modules",
+    loadLabel: "Load module tools",
+    readLabel: "Read saved result",
+  },
+};
+
 /** Only these small discovery schemas are sent before a task selects module tools. */
-function discoveryDefinitions(settings: AgentSettings): readonly ProviderToolDefinition[] {
+function discoveryDefinitions(settings: AgentSettings, locale: UiLocale = defaultUiLocale): readonly ProviderToolDefinition[] {
+  const text = discoveryText[locale];
   return [
   {
     type: 'function',
     function: {
       name: 'find_modules',
-      description: 'Finde passende verfügbare OVD-Module nach Aufgabe oder Modultyp, z.B. Mail, Kalender oder Dateien. Das durchsucht Modulbeschreibungen, keine Mails oder sonstigen Geschäftsinhalte. Lade danach gezielt benötigte Werkzeuge mit get_module_tools.',
+      description: text.find,
       parameters: {
         type: 'object', properties: {
-          query: { type: 'string', maxLength: 200, description: 'Modultyp oder gewünschte Funktion, keine Mail-Suchbegriffe.' },
-          offset: { type: 'integer', minimum: 0, description: 'nextOffset einer vorherigen Modulsuche.' },
-          limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Höchstens 20 kurze Modulbeschreibungen.' }
+          query: { type: 'string', maxLength: 200, description: text.moduleQuery },
+          offset: { type: 'integer', minimum: 0, description: text.moduleOffset },
+          limit: { type: 'integer', minimum: 1, maximum: 20, description: text.moduleLimit }
         }, additionalProperties: false
       }
     }
@@ -30,13 +63,13 @@ function discoveryDefinitions(settings: AgentSettings): readonly ProviderToolDef
     type: 'function',
     function: {
       name: 'get_module_tools',
-      description: 'Lade gezielt die für den Auftrag nötigen Werkzeuge eines passenden OVD-Moduls. query beschreibt eine Funktion wie suchen, neue Mail oder Entwurf bearbeiten. Erst im nächsten Schritt sind die geladenen Werkzeuge mit ihren exakten Argumenten aufrufbar. Weitere Treffer sind paginiert. Fehlt die gesuchte Funktion, suche allgemeiner oder blättere ohne query, bevor du sie als nicht verfügbar meldest. Lade nur die für den Auftrag benötigten Werkzeuge.',
+      description: text.load,
       parameters: {
         type: 'object', properties: {
-          moduleId: { type: 'string', minLength: 1, maxLength: 128, description: 'ID aus der Modulübersicht oder find_modules.' },
-          query: { type: 'string', maxLength: 200, description: 'Benötigte Funktion innerhalb des Moduls.' },
-          offset: { type: 'integer', minimum: 0, description: 'nextOffset zum gezielten Nachladen weiterer Werkzeuge.' },
-          limit: { type: 'integer', minimum: 1, maximum: settings.maxActiveTools, description: `Höchstens ${settings.maxActiveTools} Werkzeuge; Standard ${Math.min(6, settings.maxActiveTools)}. Bei vielen Funktionen die query eingrenzen.` }
+          moduleId: { type: 'string', minLength: 1, maxLength: 128, description: text.moduleId },
+          query: { type: 'string', maxLength: 200, description: text.query },
+          offset: { type: 'integer', minimum: 0, description: text.offset },
+          limit: { type: 'integer', minimum: 1, maximum: settings.maxActiveTools, description: text.limit(settings.maxActiveTools) }
         }, required: ['moduleId'], additionalProperties: false
       }
     }
@@ -118,9 +151,9 @@ export class ModuleToolRuntime {
   private readonly bootstrap: readonly ProviderToolDefinition[];
   private readonly querySchema: ReturnType<typeof moduleToolQuerySchema>;
   private resultReader?: { definition: ProviderToolDefinition; read(input: unknown): unknown };
-  constructor(settings?: Partial<AgentSettings>) {
+  constructor(settings?: Partial<AgentSettings>, private readonly locale: UiLocale = defaultUiLocale) {
     this.settings = normalizeAgentSettings(settings);
-    this.bootstrap = discoveryDefinitions(this.settings);
+    this.bootstrap = discoveryDefinitions(this.settings, this.locale);
     this.querySchema = moduleToolQuerySchema(this.settings.maxActiveTools);
   }
   private offeredDefinitions(active: ReadonlyMap<string, ActiveTool>): readonly ProviderToolDefinition[] {
@@ -133,9 +166,9 @@ export class ModuleToolRuntime {
   get definitions(): readonly ProviderToolDefinition[] { return this.offeredDefinitions(this.active); }
   captureOffer() { return { definitions: this.definitions, active: new Map(this.active) as ReadonlyMap<string, ActiveTool> }; }
   label(name: string, offeredBindings?: ReadonlyMap<string, ActiveTool>): string {
-    if (name === 'find_modules') return 'Passende Module finden';
-    if (name === 'get_module_tools') return 'Modulwerkzeuge laden';
-    if (name === 'read_tool_result') return 'Gespeichertes Ergebnis lesen';
+    if (name === 'find_modules') return discoveryText[this.locale].findLabel;
+    if (name === 'get_module_tools') return discoveryText[this.locale].loadLabel;
+    if (name === 'read_tool_result') return discoveryText[this.locale].readLabel;
     const descriptor = (offeredBindings?.get(name) ?? this.active.get(name))?.descriptor;
     return descriptor?.label || name;
   }

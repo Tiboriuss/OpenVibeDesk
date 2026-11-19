@@ -1,3 +1,4 @@
+import { speechProblemText } from './voice-copy';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronDown, RefreshCw } from 'lucide-react';
 import { defaultSpeechSettings, speechProviders, speechSettingsInputSchema, type SpeechSettings as Preferences, type SpeechPublicSettings, type SpeechMode, type SpeechProvider } from '../shared/speech';
@@ -103,7 +104,7 @@ export function SpeechSettings({ preparation, searchQuery = '', navigationReques
           {saved.hasApiKey && <button type="button" className="speech-key-remove" onClick={() => { setClearKey(value => !value); setKey(''); setNotice(''); }}>{clearKey ? copy.keepKey : copy.removeKey}</button>}
           <div className="speech-settings-actions"><span role="status">{busy ? uiText[locale].saving : notice || (dirty ? copy.edited : '')}</span><button type="button" disabled={!dirty || busy} onClick={discard}><RefreshCw size={13} aria-hidden="true" /> {copy.discard}</button><button type="submit" className="speech-save" disabled={!dirty || busy}>{copy.save}</button></div>
         </fieldset></form>}
-        {error && <p className="speech-settings-error" role="alert">{error}</p>}
+        {error && <p className="speech-settings-error" role="alert">{speechProblemText(error, locale)}</p>}
       </div>
     </details>
   </section>;

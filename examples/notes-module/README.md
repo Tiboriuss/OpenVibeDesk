@@ -6,7 +6,7 @@ This small, self-contained example needs no additional packages. It is not one o
 
 ## Try it
 
-For installation through the app, add the [OpenVibeDesk Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) and select **Notes** (currently **Notizen**). Follow the [repository setup guide](../../docs/module-repositories.md#configure-a-source). The catalog contains a separately published copy; this directory is the local authoring example.
+For installation through the app, add the [OpenVibeDesk Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) and select **Notes** (German: **Notizen**). Follow the [repository setup guide](../../docs/module-repositories.md#configure-a-source). The catalog contains a separately published copy; this directory is the local authoring example.
 
 For local development:
 

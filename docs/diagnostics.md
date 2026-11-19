@@ -6,12 +6,12 @@ OVD provides switchable local diagnostics for AI requests and host agent executi
 
 ## Capture a problem on the affected computer
 
-1. Open **Settings → Diagnose → Diagnoseprotokoll** and enable **Diagnoseprotokoll aktivieren**. The choice is saved immediately and restored after restart.
+1. Open **Settings → Diagnostics → Diagnostic log** and enable **Enable diagnostic logging**. The choice is saved immediately and restored after restart.
 2. Reproduce the issue with a new, harmless text or read-only request. Enabling logging does not retry the previous task or repeat completed actions.
-3. Return to the diagnostics settings and choose **Protokoll exportieren**. Select a destination outside the app and its profile. The result is a local JSON file; OVD does not upload or send it automatically.
+3. Return to the diagnostics settings and choose **Export log**. Select a destination outside the app and its profile. The result is a local JSON file; OVD does not upload or send it automatically.
 4. Share that file with the developer, together with what you expected to happen. Disable logging when finished if ongoing capture is unnecessary.
 
-The same workflow works on another computer. Exporting can be cancelled without producing a report. A failed export or unavailable log storage is shown in settings. Disabling capture retains existing entries for export; **Leeren** removes them while preserving the enabled/disabled preference.
+The same workflow works on another computer. Exporting can be cancelled without producing a report. A failed export or unavailable log storage is shown in settings. Disabling capture retains existing entries for export; **Clear** removes them while preserving the enabled/disabled preference.
 
 ## What is recorded
 

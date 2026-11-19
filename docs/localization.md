@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Module contract](../CONTRIBUTING.md#building-modules) · [Working Notes example](../examples/notes-module/README.md)
 
-OVD supplies one resolved interface language, currently `en` or `de`. Users can change it under **Settings → Appearance → Interface language** or ask the Assistant. A module has two places to translate: its contributions in the host and the controls inside its own window or settings form. Both use the same language.
+OVD supplies one resolved interface language, currently `en` or `de`. New workspaces and older profiles without a saved language start in English. Explicit **Deutsch**, **English** and **System** selections survive upgrades. **System** uses the first supported language from the operating system’s list, falling back to English. Users can change it under **Settings → Appearance → Interface language** or ask the Assistant. A module has two places to translate: its contributions in the host and the controls inside its own window or settings form. Both use the same language.
 
 ## Translate the module manifest
 

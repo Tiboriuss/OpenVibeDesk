@@ -8,7 +8,7 @@ OpenVibeDesk is an open-source project for people who want to get their daily wo
 
 The assistant works with the same app you see. Ask it to find an email, and it can open that message in the mail window. Ask for a reply, and it can prepare an editable draft. The interface and assistant use the same functions, so the conversation connects to visible work you can inspect and continue yourself.
 
-This is an early, single-user **alpha**. Releases include installers for **macOS Apple Silicon, macOS Intel and Windows x64**. Development and practical use have been exercised on macOS; automated package checks do not establish complete Windows runtime or upgrade validation. Linux remains a local build target. The application interface is currently primarily German; this repository's documentation is maintained in English.
+This is an early, single-user **alpha**. Releases include installers for **macOS Apple Silicon, macOS Intel and Windows x64**. Development and practical use have been exercised on macOS; automated package checks do not establish complete Windows runtime or upgrade validation. Linux remains a local build target. The workspace starts in English. Choose German or follow your system language in [Settings → Appearance](docs/getting-started.md#choose-the-interface-language).
 
 [Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Add modules](#modules-and-a-small-ai-context) · [Download](#download-and-install) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Maturation plan](docs/maturation-plan.md)
 
@@ -28,7 +28,7 @@ This is the direction of the project. The early version already has Mail, Files,
 
 Read a message, bring it into Chat as a reference, and let the Assistant prepare a reply in a separate draft window. Files and approved MCP tools join the same workspace.
 
-These screenshots show the running app with **fictional sample data in isolated profiles**. The OVD-Bar images are from 11 November 2026; the module gallery below is from 28 October and predates the latest density and paging refinements. The interface is currently primarily German. Click any image to view it at full size.
+Follow a fictional studio’s launch email from the inbox to an Assistant-prepared reply. The gallery shows the English interface running with isolated sample data on 19 November 2026. Select any image to open it at full size.
 
 [![The compact horizontal OVD-Bar with module icons and an overflow menu](assets/screenshots/ovd-bar.png)](assets/screenshots/ovd-bar.png)
 
@@ -122,9 +122,9 @@ pnpm dev
 
 `pnpm dev` builds the project and launches Electron without installing the app. It does not start a hot-reload server; restart it after source changes. If `pnpm` is missing, see [setup and troubleshooting](docs/getting-started.md#install-the-development-tools).
 
-Choose a provider in **Settings → AI & connection** (currently **Einstellungen → KI & Verbindung**): OpenAI, Azure AI Foundry, an OpenAI-compatible endpoint, or **ChatGPT** with direct browser sign-in. API connections can use Chat Completions or Responses; Azure uses deployment names and its matching authentication method. Eligible ChatGPT accounts can authorize plan usage directly through OAuth and the public Responses API. This connection runs inside OVD without an external agent runtime. See [AI provider setup](docs/ai-providers.md) for endpoints, authentication and preview requirements. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
+Choose a provider in **Settings → AI & connection** (German: **Einstellungen → KI & Verbindung**): OpenAI, Azure AI Foundry, an OpenAI-compatible endpoint, or **ChatGPT** with direct browser sign-in. API connections can use Chat Completions or Responses; Azure uses deployment names and its matching authentication method. Eligible ChatGPT accounts can authorize plan usage directly through OAuth and the public Responses API. This connection runs inside OVD without an external agent runtime. See [AI provider setup](docs/ai-providers.md) for endpoints, authentication and preview requirements. The [first-run guide](docs/getting-started.md#first-run) covers mail accounts, optional modules, and MCP setup.
 
-Optional [speech input](docs/speech-input.md) has its own provider, endpoint and API key under **KI & Verbindung → Spracheingabe**. Dictate live or transcribe after recording, then review the text before sending. The chat provider can be different; ChatGPT sign-in does not currently grant access to audio transcription.
+Optional [speech input](docs/speech-input.md) has its own provider, endpoint and API key under **AI & connection → Voice input**. Dictate live or transcribe after recording, then review the text before sending. The chat provider can be different; ChatGPT sign-in does not currently grant access to audio transcription.
 
 | Command | Purpose |
 | --- | --- |
@@ -147,7 +147,7 @@ The build targets do not imply verified cross-compilation, signing, or productio
 - **Files:** UTF-8 text files up to 2 MiB can be read in pages. PDF, Office, and other binary formats currently provide metadata. Local paths are accessible within operating-system permissions; Documents is a starting location, not an access boundary.
 - **Extensions:** MCP supports browser OAuth for HTTP servers through pre-registered clients or dynamic registration; see [setup and compatibility limits](modules/ovd-mcp/README.md#oauth-for-http-servers). MCP resources, prompts, and the legacy SSE transport are not implemented. Local MCP servers and approved third-party modules run with normal user permissions, outside an operating-system sandbox.
 
-With Workspace tools enabled, the Assistant can search and read configured mail and files and navigate their views for your task without individual read approvals. Sending and other protected actions use the shared confirmation flow. The explicitly saved **Without confirmations** mode (currently **Ohne Abfragen**) can skip individual confirmations for requested assistant actions. MCP tool permissions and approval of third-party module code remain separate.
+With Workspace tools enabled, the Assistant can search and read configured mail and files and navigate their views for your task without individual read approvals. Sending and other protected actions use the shared confirmation flow. The explicitly saved **Without confirmations** mode (German: **Ohne Abfragen**) can skip individual confirmations for requested assistant actions. MCP tool permissions and approval of third-party module code remain separate.
 
 The internal package name `ai-workspace` and storage identifiers are retained to preserve existing data and credentials. See [data locations](docs/getting-started.md#local-data) and the [architecture](docs/architecture.md).
 
@@ -159,7 +159,7 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 | --- | --- | --- |
 | First | Trustworthy existing workflows | Chat drafts survive a restart. The host now detects damaged workspace data before opening a session and offers [startup recovery](docs/getting-started.md#if-the-workspace-cannot-open). Host-boundary checks and the MCP compatibility assessment remain open. |
 | Foundation | Display language, storage and module lifecycle | Build on the [shared interface language](docs/getting-started.md#choose-the-interface-language) as more workflows gain English and German labels. Other priorities include storage migrations, backup/restore, and module and MCP compatibility. |
-| Daily use | Existing modules and interface | Complete Mail-list paging, everyday mail actions, synchronization and composition. Roll out German and English as Mail, Chat, Files, MCP and settings workflows are revised (R21b). |
+| Daily use | Existing modules and interface | Complete Mail-list paging, everyday mail actions, synchronization and composition. Extend English and German coverage to the remaining bundled module workflows (R21b). |
 | Release | Reproducible distribution | macOS/Windows installers and integrity checks are available. Trusted publisher signing, notarization and broader runtime/upgrade validation remain. |
 
 The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.
