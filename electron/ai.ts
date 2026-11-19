@@ -16,7 +16,7 @@ import { chatGptAuth } from './chatgpt-auth';
 
 export const defaultAiConfig: AiConfig = { baseUrl: 'https://api.openai.com/v1', smartModel: '', simpleModel: '', smartThinking: 'off', simpleThinking: 'off', historyStart: 0, workspaceTools: true, confirmationMode: 'ask' };
 const thinkingSchema = z.enum(['off', 'low', 'medium', 'high']);
-export const chatOptionsSchema = z.object({ tier: z.enum(['smart', 'simple']), sessionRefId: z.string().min(1).max(100).optional(), sessionId: z.string().min(1).max(100).optional(), clientRequestId: z.uuid().optional(), references: moduleReferenceInputsSchema.optional() }).strict();
+export const chatOptionsSchema = z.object({ tier: z.enum(['smart', 'simple']), sessionRefId: z.string().min(1).max(128).optional(), sessionId: z.string().min(1).max(128).optional(), clientRequestId: z.uuid().optional(), composerRevision: z.number().int().nonnegative().optional(), references: moduleReferenceInputsSchema.optional() }).strict();
 const inputSchema = z.object({ ...aiConnectionFields, baseUrl: z.string().trim().max(2048), smartModel: z.string().trim().max(200), simpleModel: z.string().trim().max(200), smartThinking: thinkingSchema, simpleThinking: thinkingSchema, workspaceTools: z.boolean().optional(), realMailAccess: z.boolean().optional(), confirmationMode: z.enum(['ask', 'never']).optional(), apiKey: z.string().min(1).max(4096).refine(value => !/[\r\n\u0000]/.test(value)).optional() }).strict();
 export function normalizeAiConfig(value: unknown): AiConfig {
   if (!value || typeof value !== 'object') return { ...defaultAiConfig };

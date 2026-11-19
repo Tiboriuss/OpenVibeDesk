@@ -56,7 +56,7 @@ Place the OVD-Bar vertically or horizontally, resize it, adjust its background o
 | Area | Current scope |
 | --- | --- |
 | **OVD-Bar** | Vertical or horizontal floating launcher; adjustable size, background opacity and placement, optional idle collapse, keyboard navigation and module ordering. |
-| **Assistant** | Streaming, Markdown, separately configurable live/recorded speech input, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
+| **Assistant** | Streaming, Markdown, separately configurable live/recorded speech input, resumable per-chat drafts, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
 | **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML previews and paged full-text reading, attachments, local drafts with paged Assistant access, SMTP sending and separate Sent-copy filing with retry. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
 | **MCP** | Local Stdio and remote Streamable HTTP servers, browser OAuth or Bearer authentication, individual tool approvals, and a compact activity log. |
@@ -157,9 +157,9 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 
 | Priority | Focus | Next work |
 | --- | --- | --- |
-| First | Trustworthy existing workflows | Extend visible save/error recovery to the whole workspace (R05), then finish explicit Mail-list paging. Tool-free reformulation (R01a), context budgeting (R02), source continuation (R03) and measured memory/window-traffic improvements (R04) are implemented and practically verified. |
-| Foundation | Storage and module lifecycle | Add migrations and backup/restore; finish module compatibility and settings lifecycle contracts; assess MCP compatibility. External reference resolution, explicit instruction references and durable task continuation are implemented. |
-| Daily use | Existing modules and interface | Complete everyday mail actions, synchronization and composition; refine Chat, Files, MCP, settings and accessibility. |
+| First | Trustworthy existing workflows | Chat drafts survive a restart. The host now detects damaged workspace data before opening a session and offers [startup recovery](docs/getting-started.md#if-the-workspace-cannot-open). Host-boundary checks and the MCP compatibility assessment remain open. |
+| Foundation | Display language, storage and module lifecycle | Build on the [shared interface language](docs/getting-started.md#choose-the-interface-language) as more workflows gain English and German labels. Other priorities include storage migrations, backup/restore, and module and MCP compatibility. |
+| Daily use | Existing modules and interface | Complete Mail-list paging, everyday mail actions, synchronization and composition. Roll out German and English as Mail, Chat, Files, MCP and settings workflows are revised (R21b). |
 | Release | Reproducible distribution | macOS/Windows installers and integrity checks are available. Trusted publisher signing, notarization and broader runtime/upgrade validation remain. |
 
 The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.

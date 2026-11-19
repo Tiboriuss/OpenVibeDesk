@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { UiLocale } from '../shared/locale';
 import type { ModuleInfo, ModuleListing, ModuleManifest, ModuleQuery, ModuleSummary } from '../shared/modules';
 
 export const MODULE_API_VERSION = 1;
@@ -31,11 +32,26 @@ function safeToolSchema(value: unknown): value is Record<string, unknown> {
   try { return (value as Record<string, unknown>).type === 'object' && JSON.stringify(value).length <= 12000 && visit(value, 0); } catch { return false; }
 }
 const tool = z.object({ name: capabilityName, label: text(120).optional(), description: text(500), parameters: z.record(z.string(), z.unknown()).refine(safeToolSchema, 'Begrenztes Objekt-JSON-Schema ohne Referenzen erforderlich.'), confirmation: z.object({ title: text(120).optional(), message: text(1000) }).strict().optional() }).strict();
+const localizedTitle = z.object({ title: text(120).optional() }).strict();
+const localizedKeywords = z.array(text(40)).max(30);
+const languageTag = z.string().min(2).max(60).refine(value => {
+  try { return Intl.getCanonicalLocales(value)[0] === value; }
+  catch { return false; }
+}, 'Sprachkataloge benötigen kanonische BCP-47-Tags.');
+const localeCatalog = z.object({
+  title: text(120).optional(), description: text(400).optional(), keywords: z.array(text(40)).max(50).optional(),
+  views: z.record(localId, localizedTitle).optional(),
+  navigation: z.record(localId, localizedTitle).optional(),
+  referenceTypes: z.record(localId, localizedTitle).optional(),
+  settings: z.record(localId, localizedTitle.extend({ description: text(400).optional(), keywords: localizedKeywords.optional() })).optional(),
+  tools: z.record(capabilityName, z.object({ label: text(120).optional(), description: text(500).optional(), keywords: localizedKeywords.optional() }).strict()).optional()
+}).strict();
 export const moduleManifestSchema = z.object({
   apiVersion: z.literal(1), id: moduleId, title: text(120), version: text(40).regex(/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/), description: text(400),
   keywords: z.array(text(40)).max(50).optional(), required: z.boolean().optional(), capabilities: z.array(capabilityName).max(100).default([]), permissions: z.array(text(100)).max(30).default([]),
   runtime: z.discriminatedUnion('type', [z.object({ type: z.literal('host-adapter'), adapter: localId }).strict(), z.object({ type: z.literal('process'), entry: relativeEntry }).strict()]),
   tools: z.array(tool).max(64).optional(),
+  locales: z.record(languageTag, localeCatalog).optional(),
   contributions: z.object({ views: z.array(view).max(20).default([]), navigation: z.array(z.object({ id: localId, title: text(120), view: localId, icon: icon.optional(), order: z.number().int().min(-1000).max(1000).optional() }).strict()).max(20).default([]), settings: z.array(settings).max(20).default([]), referenceTypes: z.array(z.object({ id: localId, title: text(120), snapshotTool: capabilityName.optional(), usage: z.enum(['context', 'instructions']).optional() }).strict()).max(20).optional(), memory: z.object({ retrieveTool: capabilityName }).strict().optional(), events: z.object({ subscriptions: z.array(moduleEventTopicSchema).max(20).default([]), publications: z.array(moduleEventTopicSchema).max(20).default([]) }).strict().optional() }).strict().default({ views: [], navigation: [], settings: [] })
 }).strict();
 
@@ -94,6 +110,12 @@ function validateContributions(manifest: ModuleManifest): void {
   if (sets.some(values => new Set(values).size !== values.length)) throw new Error('Das Modul enthält doppelte IDs oder Funktionen.');
   const views = new Set(manifest.contributions.views.map(item => item.id));
   if (manifest.contributions.navigation.some(item => !views.has(item.view))) throw new Error('Ein Moduleintrag verweist auf eine unbekannte Ansicht.');
+  for (const locale of Object.values(manifest.locales ?? {})) {
+    for (const kind of ['views', 'navigation', 'settings', 'referenceTypes'] as const) {
+      if (Object.keys(locale[kind] ?? {}).some(id => !manifest.contributions[kind]?.some(item => item.id === id))) throw new Error('Der Sprachkatalog verweist auf einen unbekannten Moduleintrag.');
+    }
+    if (Object.keys(locale.tools ?? {}).some(name => !manifest.capabilities.includes(name))) throw new Error('Der Sprachkatalog verweist auf eine unbekannte Modulfunktion.');
+  }
   const events = manifest.contributions.events;
   if (events) {
     if (manifest.runtime.type !== 'process') throw new Error('Ereignisbeiträge benötigen ein Prozessmodul.');
@@ -191,16 +213,21 @@ export class ModuleRegistry {
   }
 
   listModules(): ModuleInfo[] { return copy([...this.records.values()].map(record => record.module).concat(this.issues)); }
-  listSummaries(): ModuleSummary[] { return [...this.records.values()].filter(record => record.module.status === 'ready').map(({ module }) => ({ id: module.id, title: module.title, description: module.description.slice(0, 240) })); }
-  findModules(rawOptions: ModuleQuery = {}): ModuleListing {
+  searchEntries(locale: UiLocale = 'de') {
+    return [...this.records.values()].filter(({ module }) => module.status === 'ready').map(({ module }) => {
+      const catalog = module.manifest?.locales?.[locale], title = catalog?.title ?? module.title, description = catalog?.description ?? module.description;
+      return { summary: { id: module.id, title, description: description.slice(0, 240) }, search: [module.id, title, description, ...(catalog?.keywords ?? module.manifest?.keywords ?? [])].join(' ') };
+    });
+  }
+  listSummaries(locale: UiLocale = 'de'): ModuleSummary[] { return this.searchEntries(locale).map(item => item.summary); }
+  findModules(rawOptions: ModuleQuery = {}, locale: UiLocale = 'de'): ModuleListing {
     const options = querySchema.parse(rawOptions), query = fold(options.query ?? ''), terms = query.split(/[\s._-]+/).filter(Boolean);
-    const available = [...this.records.values()].filter(record => record.module.status === 'ready').map(record => {
-      const { module } = record, text = fold([module.title, module.description, module.id, ...(module.manifest?.keywords ?? [])].join(' '));
-      return { record, exact: fold(module.id) === query || fold(module.title) === query, score: terms.filter(term => text.includes(term)).length };
-    }).filter(({ score }) => !terms.length || score > 0).sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score).map(({ record }) => record);
+    const available = this.searchEntries(locale).map(({ summary, search }) => ({
+      summary, exact: fold(summary.id) === query || fold(summary.title) === query, score: terms.filter(term => fold(search).includes(term)).length
+    })).filter(({ score }) => !terms.length || score > 0).sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score);
     const offset = options.offset ?? 0, limit = options.limit ?? 10;
     const hasMore = offset + limit < available.length;
-    return { modules: available.slice(offset, offset + limit).map(({ module }) => ({ id: module.id, title: module.title, description: module.description.slice(0, 240) })), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+    return { modules: available.slice(offset, offset + limit).map(item => item.summary), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   }
   getModule(id: string): ModuleInfo | undefined { const found = this.records.get(id)?.module; return found ? copy(found) : undefined; }
   getModuleCapabilityNames(id: string): string[] { const found = this.records.get(id)?.module; if (!found || found.status !== 'ready') throw new Error('Das Modul ist nicht verfügbar oder noch nicht freigegeben.'); return [...(found.manifest?.capabilities ?? [])]; }

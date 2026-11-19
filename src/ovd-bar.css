@@ -11,6 +11,8 @@ html:has(.ovd-bar),html:has(.ovd-bar) body,html:has(.ovd-bar) #root{background:t
 .ovd-bar .ovd-bar-button:active{background:rgb(184 170 255 / .24)}
 .ovd-bar .ovd-bar-button:focus-visible{outline:2px solid var(--ovd-inverse-accent,#b8aaff);outline-offset:-3px;background:rgb(255 255 255 / .08)}
 .ovd-bar .ovd-bar-menu{color:var(--ovd-inverse-accent,#b8aaff)}
+.ovd-bar .ovd-bar-save-issue{color:#ffbdc5}
+.ovd-bar .ovd-bar-save-dot{top:auto;bottom:4px}
 .ovd-bar .module-attention-dot{width:7px;height:7px;background:var(--ovd-inverse-accent,#b8aaff);box-shadow:0 0 0 2px var(--ovd-navy,#222844)}
 .ovd-bar-error{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:#ffbdc5;box-shadow:0 0 0 2px var(--ovd-navy,#222844)}
 .ovd-bar.is-collapsed{justify-content:center}

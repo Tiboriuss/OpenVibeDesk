@@ -2,6 +2,8 @@ import { BrowserWindow, Menu, screen, type Display, type MenuItemConstructorOpti
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import type { UiLocale } from '../shared/locale';
+import { nativeText } from './native-locale';
 import type { Settings } from '../shared/model';
 import { resolveBarSettings } from '../shared/ovd-bar';
 import { barDimensions } from '../shared/ovd-bar-layout';
@@ -14,6 +16,7 @@ type Options = {
   dataDirectory: string;
   settings(): Settings;
   navigationCount(): number;
+  getLocale(): UiLocale;
   saveSettings(patch: Partial<Settings>, isCurrent?: () => boolean): Promise<void>;
   openSettings(): Promise<void>;
   quit(): Promise<unknown>;
@@ -215,29 +218,32 @@ export class OvdBarController {
     if (this.menuOpen || this.window.isDestroyed()) return;
     this.menuOpen = true; this.reveal();
     const settings = resolveBarSettings(this.options.settings());
+    const locale = this.options.getLocale();
+    const text = nativeText[locale];
+    const currentPercent = (value: number) => new Intl.NumberFormat(locale, { style: 'percent' }).format(value) + ` (${text.current})`;
     let selected: (() => Promise<unknown>) | undefined;
     const change = (patch: Partial<Settings>) => () => { selected = () => this.options.saveSettings(patch); };
-    const positions = [['free', 'Frei verschiebbar'], ['left', 'Links'], ['right', 'Rechts'], ['top', 'Oben'], ['bottom', 'Unten']] as const;
+    const positions = [['free', text.free], ['left', text.left], ['right', text.right], ['top', text.top], ['bottom', text.bottom]] as const;
     const template: MenuItemConstructorOptions[] = [
-      { label: 'OVD-Bar anpassen …', click: () => { selected = this.options.openSettings; } },
+      { label: text.customizeBar, click: () => { selected = this.options.openSettings; } },
       { type: 'separator' },
-      { label: 'Ausrichtung', submenu: [
-        { label: 'Vertikal', type: 'radio', checked: settings.barOrientation === 'vertical', click: change({ barOrientation: 'vertical' }) },
-        { label: 'Horizontal', type: 'radio', checked: settings.barOrientation === 'horizontal', click: change({ barOrientation: 'horizontal' }) }
+      { label: text.orientation, submenu: [
+        { label: text.vertical, type: 'radio', checked: settings.barOrientation === 'vertical', click: change({ barOrientation: 'vertical' }) },
+        { label: text.horizontal, type: 'radio', checked: settings.barOrientation === 'horizontal', click: change({ barOrientation: 'horizontal' }) }
       ] },
-      { label: 'Position', submenu: positions.map(([value, label]) => ({ label, type: 'radio' as const, checked: settings.barPosition === value, click: change({ barPosition: value }) })) },
-      { label: 'Größe', submenu: [
-        ...(![32, 40, 48, 56].includes(settings.barSize) ? [{ label: `${Math.round(settings.barSize / 40 * 100)} % (aktuell)`, type: 'radio' as const, checked: true, enabled: false }] : []),
-        ...[[32, 'Klein'], [40, 'Standard'], [48, 'Groß'], [56, 'Sehr groß']].map(([value, label]) => ({ label: String(label), type: 'radio' as const, checked: settings.barSize === value, click: change({ barSize: Number(value) }) }))
+      { label: text.position, submenu: positions.map(([value, label]) => ({ label, type: 'radio' as const, checked: settings.barPosition === value, click: change({ barPosition: value }) })) },
+      { label: text.size, submenu: [
+        ...(![32, 40, 48, 56].includes(settings.barSize) ? [{ label: currentPercent(settings.barSize / 40), type: 'radio' as const, checked: true, enabled: false }] : []),
+        ...[[32, text.small], [40, text.standard], [48, text.large], [56, text.extraLarge]].map(([value, label]) => ({ label: String(label), type: 'radio' as const, checked: settings.barSize === value, click: change({ barSize: Number(value) }) }))
       ] },
-      { label: 'Hintergrund', submenu: [
-        ...(![100, 96, 90, 70].includes(settings.barOpacity) ? [{ label: `${settings.barOpacity} % (aktuell)`, type: 'radio' as const, checked: true, enabled: false }] : []),
-        ...[[100, 'Deckend'], [96, 'Standard'], [90, 'Leicht transparent'], [70, 'Transparent']].map(([value, label]) => ({ label: String(label), type: 'radio' as const, checked: settings.barOpacity === value, click: change({ barOpacity: Number(value) }) }))
+      { label: text.background, submenu: [
+        ...(![100, 96, 90, 70].includes(settings.barOpacity) ? [{ label: currentPercent(settings.barOpacity / 100), type: 'radio' as const, checked: true, enabled: false }] : []),
+        ...[[100, text.opaque], [96, text.standard], [90, text.translucent], [70, text.transparent]].map(([value, label]) => ({ label: String(label), type: 'radio' as const, checked: settings.barOpacity === value, click: change({ barOpacity: Number(value) }) }))
       ] },
-      { label: 'Immer im Vordergrund', type: 'checkbox', checked: this.options.settings().dockAlwaysOnTop, click: change({ dockAlwaysOnTop: !this.options.settings().dockAlwaysOnTop }) },
-      { label: 'Bei Nichtbenutzung einklappen', type: 'checkbox', checked: settings.barAutoHide, click: change({ barAutoHide: !settings.barAutoHide }) },
+      { label: text.alwaysOnTop, type: 'checkbox', checked: this.options.settings().dockAlwaysOnTop, click: change({ dockAlwaysOnTop: !this.options.settings().dockAlwaysOnTop }) },
+      { label: text.autoHide, type: 'checkbox', checked: settings.barAutoHide, click: change({ barAutoHide: !settings.barAutoHide }) },
       { type: 'separator' },
-      { label: 'OpenVibeDesk beenden', click: () => { selected = this.options.quit; } }
+      { label: text.appQuit, click: () => { selected = this.options.quit; } }
     ];
     try {
       await new Promise<void>(resolve => Menu.buildFromTemplate(template).popup({ window: this.window, callback: resolve }));

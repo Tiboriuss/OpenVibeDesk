@@ -26,6 +26,7 @@ OpenVibeDesk's documentation is maintained in English. The app currently uses pr
 | [Speech input](speech-input.md) | Separate speech providers and credentials, Live or After-recording transcription, microphone controls, limits and Assistant configuration. |
 | [Diagnostics](diagnostics.md) | Switchable local provider logs, privacy boundaries, cross-computer support reports and Assistant controls. |
 | [Releases and installers](releases.md) | macOS/Windows packages without trusted publisher certificates, versioning, integrity checks, manual upgrades, and remaining validation. |
+| [Localization](localization.md) | Translate a module manifest, listen for live language changes, localize host controls and verify a package. |
 | [Contributing](../CONTRIBUTING.md) | Development, practical validation, and the contract for custom modules. |
 | [Architecture](architecture.md) | Process boundaries, persistence, assistant integration, references, and current technical limits. |
 | [Maturation plan](maturation-plan.md) | Prioritized work on existing modules, verified gaps, dependencies, current technical references and practical acceptance gates. |

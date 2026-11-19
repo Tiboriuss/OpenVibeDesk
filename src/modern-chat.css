@@ -135,3 +135,8 @@
 
 .chat-load-earlier { display:block; margin:0 auto 12px; border:1px solid var(--line); border-radius:7px; background:var(--paper); color:var(--ink); padding:6px 10px; font:inherit; font-size:12px; cursor:pointer; }
 .chat-load-earlier[aria-disabled="true"] { opacity:.6; cursor:wait; }
+
+.composer-recovery { display: grid; gap: 6px; }
+.composer-recovery > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.composer-recovery button { font: inherit; cursor: pointer; }
+.composer-recovery pre { max-height: 8em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -7,7 +7,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { applyUiAction, initialState, uiActionSchema } from '../shared/actions';
-import { initializeStore, loadState, saveState } from './store';
+import { getWorkspaceStoreFault, saveState } from './store';
+import { resolveUiLocale, type UiLocale } from '../shared/locale';
+import { workspaceSaveFailureText, type WorkspaceSaveErrorCode, type WorkspaceSaveStatus } from '../shared/workspace-save';
+import { nativeText } from './native-locale';
+import { openStartupWorkspace } from './workspace-startup';
+import { WorkspaceCheckpoints } from './workspace-checkpoints';
+import { chatComposerWriteSchema, composerSessionId, type ChatComposerContent, type ChatComposerSnapshot, type ChatComposerWriteResult, type StoredChatComposer } from '../shared/chat-composer';
+import { storedChatComposer, withComposer, sameComposerContent } from './chat-composer';
 import { chatSessionListRequestSchema } from '../shared/sessions';
 import { listChatSessions, WorkspaceViewProjector, type WorkspaceView } from './workspace-view';
 import { settingsPatchSchema, normalizeSettings, coreSettingsCategoryIds } from '../shared/settings';
@@ -29,8 +36,8 @@ import { getExternalChatUrl } from '../shared/chat-links';
 import { getTimeContext, resolveTimeRange, resolveTimeDifference } from '../shared/time';
 import { evaluateCalculation } from '../shared/calculation';
 import { getNavigationEntries, mergeNavigationOrder, migrateNavigationOrder, orderNavigationEntries } from '../shared/navigation';
-import { moduleReferenceInputSchema, moduleReferenceSchema, moduleReferenceSummarySchema, type ModuleReference, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
-import { readChatHistory } from './chat-history';
+import { MAX_MODULE_REFERENCES, moduleReferenceInputSchema, moduleReferenceSchema, moduleReferenceSummarySchema, type ModuleReference, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
+import { characterEnd, readChatHistory } from './chat-history';
 import { ModuleHost } from './module-host';
 import { ModuleRepositoryService, normalizeRepositoryUrl } from './module-repositories';
 import { moduleRepositoryInputSchema, repositoryInstallInputSchema } from '../shared/module-repositories';
@@ -56,16 +63,54 @@ const appIconPath = path.join(app.getAppPath(), 'assets', 'brand', 'app-icon.png
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
 let currentState: WorkspaceState;
+let systemLocale: UiLocale = 'de';
+function uiLocale(): UiLocale {
+  const preferred = currentState?.settings.language;
+  return preferred === 'en' || preferred === 'de' ? preferred : systemLocale;
+}
+function native() { return nativeText[uiLocale()]; }
+function presentSaveStatus(status: WorkspaceSaveStatus): WorkspaceSaveStatus {
+  return status.errorCode ? { ...status, error: workspaceSaveFailureText(uiLocale(), status.errorCode) } : status;
+}
 let dock: BrowserWindow | null = null;
 let ovdBar: OvdBarController | undefined;
 const panels = new Map<WindowKind, BrowserWindow>();
 const confirmedDraftCloses = new WeakSet<BrowserWindow>();
+const confirmedChatCloses = new WeakSet<BrowserWindow>();
 const panelModules: Partial<Record<WindowKind, string>> = { mail: 'ovd-mail', draft: 'ovd-mail', files: 'ovd-files' };
 const moduleWindows = new Map<string, { moduleId: string; viewId: string; window: BrowserWindow }>();
 let moduleHost: ModuleHost | undefined;
 let moduleRepositories: ModuleRepositoryService | undefined;
 let repositorySettingsStatus: 'clean' | 'dirty' | 'busy' = 'clean';
-let saveTimer: NodeJS.Timeout | undefined;
+const checkpoints = new WorkspaceCheckpoints({
+  write: () => persistWorkspace(),
+  publish: status => {
+    for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) {
+      if (win && !win.isDestroyed()) win.webContents.send('workspace:save-status', presentSaveStatus(status));
+    }
+  },
+  describeFailure: error => {
+    let code: WorkspaceSaveErrorCode;
+    if (getWorkspaceStoreFault()) code = 'unconfirmed';
+    else {
+      switch ((error as NodeJS.ErrnoException | null)?.code) {
+        case 'ENOSPC': case 'EDQUOT': code = 'disk-full'; break;
+        case 'EACCES': case 'EPERM': case 'EROFS': code = 'read-only'; break;
+        default: code = 'write-failed';
+      }
+    }
+    return { errorCode: code, error: workspaceSaveFailureText(uiLocale(), code), retryable: code !== 'unconfirmed' };
+  }
+});
+
+async function retryWorkspaceSave() {
+  try { await checkpoints.flush(); } catch { /* The status carries the sanitized cause. */ }
+  return presentSaveStatus(checkpoints.status());
+}
+
+function saveCurrent(publications: readonly ModuleEventPublication[] = []) {
+  return checkpoints.writeNow(() => persistWorkspace(undefined, publications));
+}
 let settingsWrites: Promise<unknown> = Promise.resolve();
 let quitting = false;
 let readyToQuit = false;
@@ -84,8 +129,90 @@ let pendingContinuation: { messageId: string; options: ReformulateChatOptions } 
 let operationJournal: OperationJournal;
 let activeOperationRunner: OperationRunner | undefined;
 let hostOperationFingerprint = '';
-const forkMailReferences = new Map<string, EmailReference>();
-const forkModuleReferences = new Map<string, ModuleReference[]>();
+let chatComposerBlocked = false;
+
+/** A native close can reach Main before earlier renderer input. Drain those IPC edits before flushing. */
+async function prepareChatClose(win = panels.get('chat')): Promise<boolean> {
+  if (!win || win.isDestroyed() || win.webContents.isCrashed() || !win.webContents.getURL()) return true;
+  const owner = win.webContents;
+  const token = crypto.randomUUID();
+  const ready = await new Promise<boolean>((resolve, reject) => {
+    const finish = (result: boolean, error?: Error) => {
+      clearTimeout(timer);
+      ipcMain.off('chat:composer:close-ready', onReady);
+      owner.off('destroyed', onDestroyed);
+      if (error) reject(error); else resolve(result);
+    };
+    const onReady = (event: Electron.IpcMainEvent, receipt: unknown, value: unknown) => {
+      if (receipt === token && event.sender === owner && event.senderFrame === owner.mainFrame) finish(value === true && !chatComposerBlocked);
+    };
+    const onDestroyed = () => finish(true);
+    const timer = setTimeout(() => finish(false, new Error('Der Chat hat die ausstehenden Entwurfsänderungen noch nicht bestätigt.')), 10_000);
+    ipcMain.on('chat:composer:close-ready', onReady);
+    owner.once('destroyed', onDestroyed);
+    owner.send('chat:composer:prepare-close', token);
+  });
+  if (!ready && !win.isDestroyed()) { win.show(); win.focus(); }
+  return ready;
+}
+let acceptingChat: { sessionId: string; settled: Promise<void> } | undefined;
+
+/** A concurrent save must capture either side of acceptance, never an intermediate request/draft pair. */
+function persistWorkspace(snapshot: () => WorkspaceState = () => currentState, publications: readonly ModuleEventPublication[] = []): Promise<void> {
+  const write = () => saveState(snapshot(), publications);
+  return acceptingChat ? acceptingChat.settled.then(write) : write();
+}
+function forkedMessage(sessionId: string): ChatMessage | undefined {
+  const source = storedChatComposer(currentState, sessionId)?.forkSource;
+  return source && currentState.sessions.find(session => session.id === source.sessionId)?.messages.find(message => message.id === source.messageId && message.role === 'user');
+}
+function getChatComposer(rawId: unknown): ChatComposerSnapshot {
+  const sessionId = composerSessionId.parse(rawId);
+  if (!currentState.sessions.some(session => session.id === sessionId)) throw new Error('Chat nicht gefunden.');
+  const stored = storedChatComposer(currentState, sessionId);
+  return { sessionId, revision: stored?.revision ?? 0, content: stored?.content ?? { text: '' }, ...(stored?.legacyReceipt ? { legacyReceipt: stored.legacyReceipt } : {}) };
+}
+async function flushChatComposer(id: unknown, revision: unknown): Promise<{ acknowledged: boolean; snapshot: ChatComposerSnapshot }> {
+  const expected = z.number().int().nonnegative().parse(revision);
+  let snapshot = getChatComposer(id);
+  if (snapshot.revision === expected) {
+    await checkpoints.flush();
+    snapshot = getChatComposer(id);
+  }
+  return { acknowledged: snapshot.revision === expected, snapshot };
+}
+function publishChatComposer(sessionId: string): void {
+  const chat = panels.get('chat')?.webContents;
+  if (chat && !chat.isDestroyed() && !chat.isCrashed()) chat.send('chat:composer:changed', getChatComposer(sessionId));
+}
+function setChatComposer(raw: unknown): ChatComposerWriteResult {
+  const { sessionId, expectedRevision, expectedContent, content, legacyReceipt } = chatComposerWriteSchema.parse(raw);
+  const snapshot = getChatComposer(sessionId);
+  if (snapshot.revision !== expectedRevision || (expectedContent && !sameComposerContent(expectedContent, snapshot.content)) || acceptingChat?.sessionId === sessionId) {
+    return { applied: false, snapshot };
+  }
+  const previous = storedChatComposer(currentState, sessionId);
+  let mailSource = previous?.content.emailSummary?.id === content.emailSummary?.id ? previous?.mailSource : undefined;
+  if (!mailSource && content.emailSummary) {
+    const live = moduleHost?.isReady('ovd-mail') && mailModule?.getLiveMail(content.emailSummary.id);
+    if (live) mailSource = mailModule!.externalMail(live).source;
+  }
+  const receipt = legacyReceipt ?? previous?.legacyReceipt;
+  const stored: StoredChatComposer = { sessionId, revision: snapshot.revision + 1, content, ...(receipt ? { legacyReceipt: receipt } : {}),
+    ...(mailSource ? { mailSource } : {}), ...(previous?.forkSource ? { forkSource: previous.forkSource } : {}) };
+  // A composer keystroke does not alter a window projection or any Mail draft.
+  currentState = withComposer(currentState, stored);
+  checkpoints.changed();
+  publishChatComposer(sessionId);
+  return { applied: true, snapshot: getChatComposer(sessionId) };
+}
+function changeSelectedContext(sessionId: string, change: (content: ChatComposerContent) => ChatComposerContent) {
+  const snapshot = getChatComposer(sessionId);
+  const content = change(snapshot.content);
+  if (content === snapshot.content) return;
+  const result = setChatComposer({ sessionId, expectedRevision: snapshot.revision, content });
+  if (!result.applied) throw new Error('Der Chatentwurf wird gerade gesendet. Bitte erneut versuchen.');
+}
 const moduleReferences = new ModuleReferenceRegistry((id, type) => !!moduleHost?.isReady(id) && !!moduleHost.registry.getModule(id)?.manifest?.contributions.referenceTypes?.some(item => item.id === type),
   (input, context) => { if (!moduleHost) throw new Error('Die Modulverwaltung ist noch nicht bereit.'); return moduleHost.resolveReference(input, context); });
 let activeStream: { controller: AbortController; flush(): void; sessionId: string; assistantId: string; provider?: AiConfig['provider'] } | undefined;
@@ -106,7 +233,7 @@ function boundedEmailReference(mail: Pick<Mail, 'id' | 'from' | 'to' | 'subject'
     ...(mail.accountName ? { accountName: mail.accountName.slice(0, 200) } : {}), ...(mail.accountId ? { accountId: mail.accountId } : {}), ...(mail.fromAddresses ? { fromAddresses: mail.fromAddresses.slice(0, 20).map(value => value.slice(0, 320)) } : {}), ...(mail.replyToAddresses ? { replyToAddresses: mail.replyToAddresses.slice(0, 20).map(value => value.slice(0, 320)) } : {}), ...(mail.messageId ? { messageId: mail.messageId.slice(0, 500) } : {}), ...(mail.references ? { references: mail.references.slice(-20).map(value => value.slice(0, 500)) } : {}), truncated: truncated || mail.bodyText.length > 12000 };
 }
 function savedEmailReference(id: string, sessionId = currentState.activeSessionId): EmailReference | undefined {
-  const fork = forkMailReferences.get(sessionId);
+  const fork = forkedMessage(sessionId)?.emailReference;
   if (fork?.id === id) return fork;
   const sessions = [...currentState.sessions.filter(item => item.id === sessionId), ...currentState.sessions.filter(item => item.id !== sessionId)];
   for (const session of sessions) {
@@ -129,9 +256,11 @@ function emailReferenceSummary(rawId: unknown): EmailReferenceSummary {
 /** Capture the selected mail as bounded context for this message. */
 async function snapshotEmailReference(rawId: unknown, sessionId: string, signal: AbortSignal): Promise<EmailReference> {
   const id = validateEmailReferenceId(rawId);
-  const fork = forkMailReferences.get(sessionId);
+  const fork = forkedMessage(sessionId)?.emailReference;
   if (fork?.id === id) return boundedEmailReference(fork, fork.truncated);
-  const live = moduleHost?.isReady('ovd-mail') ? await mailModule?.snapshotLiveReference(id, signal) : undefined;
+  const composer = storedChatComposer(currentState, sessionId);
+  const source = composer?.content.emailSummary?.id === id ? composer.mailSource : undefined;
+  const live = moduleHost?.isReady('ovd-mail') ? await mailModule?.snapshotLiveReference(id, signal, source) : undefined;
   if (live) return live;
   const saved = savedEmailReference(id, sessionId);
   if (saved) return saved;
@@ -141,7 +270,7 @@ async function snapshotEmailReference(rawId: unknown, sessionId: string, signal:
 }
 function savedModuleReference(input: ModuleReferenceInput, sessionId = currentState.activeSessionId): ModuleReference | undefined {
   const candidates = [
-    ...(forkModuleReferences.get(sessionId) ?? []),
+    ...(forkedMessage(sessionId)?.references ?? []),
     ...currentState.sessions.filter(item => item.id === sessionId).flatMap(item => [...item.messages].reverse().flatMap(message => message.references ?? [])),
     ...currentState.sessions.filter(item => item.id !== sessionId).flatMap(item => [...item.messages].reverse().flatMap(message => message.references ?? []))
   ];
@@ -166,7 +295,7 @@ async function moduleReferenceSummary(raw: unknown, context: OperationContext): 
   }
 }
 async function snapshotModuleReference(input: ModuleReferenceInput, sessionId: string, signal: AbortSignal): Promise<ModuleReference> {
-  const fork = forkModuleReferences.get(sessionId)?.find(item => sameModuleReference(item, input));
+  const fork = forkedMessage(sessionId)?.references?.find(item => sameModuleReference(item, input));
   // Context references may retain their historical snapshot when editing a
   // request. Instructions must still resolve through an available approved module.
   if (fork && fork.usage !== 'instructions') return moduleReferenceSchema.parse(fork);
@@ -180,8 +309,14 @@ async function snapshotModuleReference(input: ModuleReferenceInput, sessionId: s
 }
 async function selectModuleReference(raw: ModuleReferenceSummary): Promise<void> {
   const summary = moduleReferenceSummarySchema.parse(raw);
+  const sessionId = currentState.activeSessionId;
   await openPanel('chat');
-  panels.get('chat')?.webContents.send('chat:reference-module', summary);
+  changeSelectedContext(sessionId, content => {
+    const references = content.references ?? [];
+    if (references.some(item => sameModuleReference(item, summary))) return content;
+    if (references.length >= MAX_MODULE_REFERENCES) throw new Error('Bitte zuerst eine Referenz aus dem Chatentwurf entfernen.');
+    return { ...content, references: [...references, summary] };
+  });
 }
 const viewProjectors = new WeakMap<BrowserWindow, WorkspaceViewProjector>();
 const sentViews = new WeakMap<BrowserWindow, ReturnType<WorkspaceViewProjector['project']>>();
@@ -195,7 +330,7 @@ function windowProjector(win: BrowserWindow): WorkspaceViewProjector {
   if (!projector) { projector = new WorkspaceViewProjector(); viewProjectors.set(win, projector); }
   return projector;
 }
-function windowState(win: BrowserWindow) { return windowProjector(win).project(currentState, windowView(win)); }
+function windowState(win: BrowserWindow) { return windowProjector(win).project(currentState, windowView(win), uiLocale()); }
 function broadcast(): void {
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) {
     if (!win || win.isDestroyed()) continue;
@@ -206,14 +341,15 @@ function broadcast(): void {
   }
 }
 function commit(next: WorkspaceState): void {
+  if (next === currentState) return;
   if (currentState && next.activeSessionId !== currentState.activeSessionId) { const chat = panels.get('chat'); if (chat) speech?.cancelOwner(chat.webContents.id); }
   currentState = next;
   mailModule?.onStateChanged(next);
   broadcast();
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { void saveState(currentState).catch(error => console.error('Workspace save failed', error)); }, 250);
+  checkpoints.changed();
 }
 function setupWindow(win: BrowserWindow): void {
+  win.on('page-title-updated', event => event.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
   win.webContents.on('will-frame-navigate', event => {
@@ -221,21 +357,25 @@ function setupWindow(win: BrowserWindow): void {
     if (event.isMainFrame || (event.frame?.url === 'about:srcdoc' && event.url !== 'about:srcdoc')) event.preventDefault();
   });
 }
-function panelTitle(kind: WindowKind): string { return { mail: 'Mail', chat: 'Assistant', draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen', sessions: 'Chats' }[kind]; }
+function panelTitle(kind: WindowKind): string {
+  const moduleId = panelModules[kind];
+  const contributed = moduleId ? moduleHost?.getModule(moduleId)?.manifest?.contributions.views.find(view => view.id === kind) : undefined;
+  return contributed?.title ?? { mail: 'Mail', chat: 'Assistant', draft: native().draft, files: native().files, settings: native().settings, sessions: 'Chats' }[kind];
+}
 
 function confirmSettingsClose(force = false): boolean {
   if (!force && !moduleRepositories?.list().busy && repositorySettingsStatus === 'clean' && speechSettingsStatus === 'clean' && aiSettingsStatus === 'clean' && agentSettingsStatus === 'clean' && mcpSettingsStatus === 'clean' && (mailModule?.getSettingsStatus() ?? 'clean') === 'clean') return true;
   const owner = panels.get('settings');
   if (!owner || owner.isDestroyed()) return true;
   if (moduleRepositories?.list().busy || repositorySettingsStatus === 'busy' || speechSettingsStatus === 'busy' || aiSettingsStatus === 'busy' || agentSettingsStatus === 'busy' || mcpSettingsStatus === 'busy' || mailModule?.getSettingsStatus() === 'busy') {
-    dialog.showMessageBoxSync(owner, { type: 'info', title: 'Vorgang läuft', message: 'Bitte warte, bis der aktuelle Vorgang abgeschlossen ist.', buttons: ['OK'] });
+    dialog.showMessageBoxSync(owner, { type: 'info', title: native().activeOperation, message: native().waitForOperation, buttons: ['OK'] });
     return false;
   }
   return dialog.showMessageBoxSync(owner, {
-    type: 'warning', title: 'Ungespeicherte Änderungen',
-    message: 'Ungespeicherte Einstellungen verwerfen?',
-    detail: 'Deine Änderungen wurden noch nicht gespeichert.',
-    buttons: ['Zurück', 'Änderungen verwerfen'], defaultId: 0, cancelId: 0, noLink: true
+    type: 'warning', title: native().unsaved,
+    message: native().discardSettings,
+    detail: native().settingsNotSaved,
+    buttons: [native().back, native().discard], defaultId: 0, cancelId: 0, noLink: true
   }) === 1;
 }
 
@@ -272,23 +412,35 @@ async function openPanel(kind: WindowKind): Promise<void> {
     const bounds = win.getBounds();
     commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, ...bounds } : w) });
   };
-  if (kind === 'draft') {
-    let closing = false;
-    win.on('close', event => {
-      if (quitting || confirmedDraftCloses.has(win)) return;
-      event.preventDefault();
-      if (closing) return;
-      closing = true;
-      void mailModule?.flushDrafts().then(() => {
-        confirmedDraftCloses.add(win); if (!win.isDestroyed()) win.close();
-      }).catch(() => {
-        dialog.showErrorBox('Entwurf nicht gespeichert', 'Der Entwurf konnte nicht lokal gespeichert werden. Das Fenster bleibt geöffnet. Bitte die Speicherung erneut versuchen.');
-      }).finally(() => { closing = false; });
+  let closing = false;
+  win.on('close', event => {
+    if (quitting) { if (!readyToQuit) event.preventDefault(); return; }
+    const pendingChat = kind === 'chat' && !confirmedChatCloses.delete(win);
+    const pendingDraft = kind === 'draft' && !confirmedDraftCloses.has(win);
+    if (!pendingChat && !pendingDraft && checkpoints.status().status === 'saved') return;
+    event.preventDefault();
+    if (closing) return;
+    closing = true;
+    void (async () => {
+      if (pendingChat && !await prepareChatClose(win)) { closing = false; return; }
+      if (pendingDraft) await mailModule?.flushDrafts();
+      await checkpoints.flush();
+      if (win.isDestroyed()) return;
+      if (pendingDraft) confirmedDraftCloses.add(win);
+      if (kind === 'chat') {
+        if (chatComposerBlocked) { closing = false; win.focus(); return; }
+        confirmedChatCloses.add(win);
+      }
+      closing = false;
+      win.close();
+    })().catch(() => {
+      closing = false;
+      dialog.showErrorBox(native().staysOpen, native().changesNotSaved);
     });
-  }
+  });
   win.on('move', rememberBounds);
   win.on('resize', rememberBounds);
-  win.on('closed', () => { panels.delete(kind); mailModule?.onPanelClosed(kind); if (kind === 'settings') { speechSettingsStatus = 'clean'; aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
+  win.on('closed', () => { panels.delete(kind); if (kind === 'chat') chatComposerBlocked = false; mailModule?.onPanelClosed(kind); if (kind === 'settings') { speechSettingsStatus = 'clean'; aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
   await win.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: kind } });
 }
 
@@ -298,7 +450,7 @@ async function openDock(): Promise<void> {
     movable: true, alwaysOnTop: currentState.settings.dockAlwaysOnTop, skipTaskbar: true, hasShadow: false, backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   setupWindow(dock);
-  ovdBar = new OvdBarController(dock, { dataDirectory: app.getPath('userData'), settings: () => currentState.settings,
+  ovdBar = new OvdBarController(dock, { getLocale: uiLocale, dataDirectory: app.getPath('userData'), settings: () => currentState.settings,
     navigationCount: () => getNavigationEntries(moduleHost?.list() ?? []).length,
     saveSettings: (patch, isCurrent) => changeSettings(patch, { origin: 'ui', owner: dock ?? undefined, signal: new AbortController().signal }, isCurrent),
     openSettings: () => openSettingsCategory('dock'), quit: () => confirmQuit({ origin: 'ui', owner: dock ?? undefined, signal: new AbortController().signal }) });
@@ -354,7 +506,7 @@ async function saveAiSettings(input: unknown, context: OperationContext) {
     try { values = parseAiInput(input); } catch (error) { if (error instanceof Error && error.message.startsWith('Bitte ')) throw error; throw new Error('Bitte gültige KI-Einstellungen eingeben.'); }
     if (values.apiKey && values.authMode !== 'none') await setKey(values, values.apiKey);
     const ai = { provider: values.provider, protocol: values.protocol, authMode: values.authMode, apiVersion: values.apiVersion, baseUrl: values.baseUrl, smartModel: values.smartModel, simpleModel: values.simpleModel, smartThinking: values.smartThinking, simpleThinking: values.simpleThinking, workspaceTools: values.workspaceTools ?? true, confirmationMode: values.confirmationMode ?? currentState.ai?.confirmationMode ?? 'ask', historyStart: currentState.ai?.historyStart ?? currentState.chat.length };
-    await saveState({ ...currentState, ai, provider: values.smartModel });
+    await persistWorkspace(() => ({ ...currentState, ai, provider: values.smartModel }));
     commit({ ...currentState, ai, provider: values.smartModel });
     if (ai.workspaceTools === false && activeOperationRunner) activeStream?.controller.abort();
     moduleHost?.notifyEventsChanged();
@@ -386,11 +538,13 @@ async function persistSettingsPatch(input: unknown): Promise<void> {
     patch.navigationOrder = settingsPatchSchema.parse({ navigationOrder: mergeNavigationOrder(currentState.settings.navigationOrder, patch.navigationOrder) }).navigationOrder;
   }
   const settings = { ...currentState.settings, ...patch };
+  const previousLocale = uiLocale();
   // Publish only after successful persistence, so all windows retain saved values on failure.
-  await saveState({ ...currentState, settings });
+  await persistWorkspace(() => ({ ...currentState, settings }));
   if (patch.diagnosticsEnabled !== undefined) await setDiagnosticsEnabled(patch.diagnosticsEnabled);
   commit({ ...currentState, settings });
-  ovdBar?.layout();
+  if (previousLocale !== uiLocale()) refreshNativeLocale();
+  else ovdBar?.layout();
 }
 function changeSettings(input: unknown, _context: OperationContext, isCurrent?: () => boolean): Promise<void> {
   const patch = settingsPatchSchema.parse(input);
@@ -402,7 +556,7 @@ async function updateDiagnosticSettings(input: unknown, context: OperationContex
   return getDiagnosticsStatus();
 }
 async function exportDiagnosticLogs(context: OperationContext) {
-  const options: Electron.SaveDialogOptions = { title: 'Diagnoseprotokoll exportieren', defaultPath: path.join(app.getPath('downloads'), `OpenVibeDesk-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), filters: [{ name: 'Diagnoseprotokoll', extensions: ['json'] }], properties: ['createDirectory', 'showOverwriteConfirmation'] };
+  const options: Electron.SaveDialogOptions = { title: native().exportDiagnostics, defaultPath: path.join(app.getPath('downloads'), `OpenVibeDesk-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`), filters: [{ name: native().diagnostics, extensions: ['json'] }], properties: ['createDirectory', 'showOverwriteConfirmation'] };
   const owner = operationOwner(context);
   context.signal.throwIfAborted();
   const selection = owner ? await dialog.showSaveDialog(owner, options) : await dialog.showSaveDialog(options);
@@ -419,12 +573,12 @@ async function exportDiagnosticLogs(context: OperationContext) {
   return exportDiagnostics(destination);
 }
 async function clearDiagnosticLogs(context: OperationContext) {
-  if (context.origin === 'agent' && !await confirmCapability(context, 'Diagnoseprotokoll löschen?', 'Die lokal gespeicherten Diagnoseeinträge werden entfernt. Die Logging-Einstellung bleibt erhalten.')) return { ...await getDiagnosticsStatus(), cancelled: true, cleared: false };
+  if (context.origin === 'agent' && !await confirmCapability(context, native().clearDiagnostics, native().clearDiagnosticsDetail)) return { ...await getDiagnosticsStatus(), cancelled: true, cleared: false };
   await context.validateOperation?.();
   return { ...await clearDiagnostics(), cleared: true };
 }
 async function confirmQuit(context: OperationContext) {
-    if (await confirmCapability(context, 'OpenVibeDesk beenden?', 'Alle Workspace-Fenster werden geschlossen. Dein aktueller Zustand wird gespeichert.')) { app.quit(); return { quitRequested: true }; }
+    if (await confirmCapability(context, native().confirmQuit, native().quitDetail)) { app.quit(); return { quitRequested: true }; }
     return { cancelled: true };
 }
 const selectedLocalFiles = new Set<string>();
@@ -434,8 +588,15 @@ async function controlPanel(kind: WindowKind, action: 'minimize' | 'toggleMaximi
   if (action === 'minimize') win.minimize();
   else if (action === 'toggleMaximize') { if (win.isMaximized()) win.unmaximize(); else win.maximize(); }
   else {
-    if (kind === 'draft') { await mailModule?.flushDrafts(); confirmedDraftCloses.add(win); }
-    win.close();
+    if (kind === 'chat' && !await prepareChatClose(win)) throw new Error('Bitte die ungesicherten Änderungen im Chat klären.');
+    if (kind === 'draft') await mailModule?.flushDrafts();
+    await checkpoints.flush();
+    if (kind === 'draft') confirmedDraftCloses.add(win);
+    if (kind === 'chat') {
+      if (chatComposerBlocked) throw new Error('Bitte die ungesicherten Änderungen im Chat klären.');
+      confirmedChatCloses.add(win);
+    }
+    if (!win.isDestroyed()) win.close();
   }
   return { kind, action, closed: win.isDestroyed() };
 }
@@ -451,15 +612,21 @@ function forkWorkspaceChat(id: string, replacementText?: string, fromAgent = fal
   const state = fromAgent ? { ...currentState, sessions: currentState.sessions.map(item => item.id === currentState.activeSessionId ? { ...item, messages: item.messages.map(message => message.status === 'streaming' ? { ...message, status: 'cancelled' as const } : message) } : item) } : currentState;
   const result = forkSession(state, id, replacementText);
   const next = fromAgent ? { ...currentState, sessions: [result.state.sessions[0], ...currentState.sessions], activeSessionId: result.result.sessionId, chat: result.state.sessions[0].messages } : result.state;
-  commit(next);
-  if (result.result.emailReference) forkMailReferences.set(result.result.sessionId, result.result.emailReference);
-  if (result.result.references?.length) forkModuleReferences.set(result.result.sessionId, result.result.references);
-  return result.result;
+  const fork = result.result;
+  const email = fork.emailReference ?? (fork.emailRef ? emailReferenceSummary(fork.emailRef) : undefined);
+  commit(withComposer(next, {
+    sessionId: fork.sessionId, revision: 1, forkSource: { sessionId: state.activeSessionId, messageId: result.sourceMessageId },
+    content: { text: fork.text, ...(email ? { emailSummary: { id: email.id, subject: email.subject, from: email.from, ...(email.accountName ? { accountName: email.accountName } : {}) } } : {}),
+      ...(fork.sessionRefId ? { sessionRefId: fork.sessionRefId } : {}), ...(fork.references?.length ? { references: fork.references.map(referenceSummary) } : {}) }
+  }));
+  publishChatComposer(fork.sessionId);
+  return fork;
 }
 async function referenceWorkspaceChat(id: string) {
-  snapshotSessionReference(currentState, id);
+  const target = currentState.activeSessionId;
+  snapshotSessionReference(currentState, id, target);
   await openPanel('chat');
-  panels.get('chat')?.webContents.send('chat:reference-session', id);
+  changeSelectedContext(target, content => ({ ...content, sessionRefId: id }));
   return { sessionId: id, selectedAsContext: true };
 }
 async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent' | 'speech' | 'module-repository', values: Record<string, unknown>, accountId?: string) {
@@ -472,7 +639,7 @@ async function confirmCapability(context: OperationContext, message: string, det
   if (!options.alwaysAsk && context.origin === 'agent' && currentState.ai?.workspaceTools !== false && currentState.ai?.confirmationMode === 'never') { await context.validateOperation?.(); return true; }
   const owner = operationOwner(context);
   if (!owner) throw new Error('Kein Workspace-Fenster für die Bestätigung verfügbar.');
-  const result = await dialog.showMessageBox(owner, { type: 'question', title: 'OpenVibeDesk', message, detail, buttons: ['Abbrechen', 'Bestätigen'], defaultId: 0, cancelId: 0, noLink: true });
+  const result = await dialog.showMessageBox(owner, { type: 'question', title: 'OpenVibeDesk', message, detail, buttons: [native().cancel, native().confirm], defaultId: 0, cancelId: 0, noLink: true });
   context.signal.throwIfAborted();
   if (result.response === 1) await context.validateOperation?.();
   return result.response === 1;
@@ -481,6 +648,14 @@ function asToolMail(reference: EmailReference): Mail {
   return { ...reference, folder: 'Inbox', threadId: reference.id, read: true, bodyLoaded: true, externalFolder: '__reference__' };
 }
 function registerWorkspaceCapabilities(): void {
+  workspaceCapabilities.register('workspace.save_status', () => {
+    const { error: saveError, ...state } = presentSaveStatus(checkpoints.status());
+    return { ...state, ...(saveError ? { saveError } : {}) };
+  });
+  workspaceCapabilities.register('workspace.retry_save', async () => {
+    const result = await retryWorkspaceSave();
+    return { ...result, outcome: result.status === 'error' ? 'failed' : 'completed' };
+  });
   workspaceCapabilities.register('context.get', (_args, rawContext) => {
     const context = rawContext as OperationContext;
     const sessionId = context.sessionId ?? currentState.activeSessionId;
@@ -511,12 +686,33 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('bar.move', async (args, context) => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); await context.validateOperation?.(); context.signal.throwIfAborted(); return ovdBar.move(args, context.signal); });
   workspaceCapabilities.register('chats.list', ({ query, offset, limit, revision }) => { const page = listChatSessions(currentState, query, offset, limit ?? 20, revision); return { ...page, sessions: page.sessions.map(({ id, title, updatedAt, messageCount }) => ({ id, title, updatedAt, messageCount })) }; });
   workspaceCapabilities.register('chats.read', args => readChatHistory(currentState, args));
+  workspaceCapabilities.register('chats.read_draft', ({ sessionId, offset = 0, revision }) => {
+    const draft = getChatComposer(sessionId);
+    if ((offset > 0 || revision !== undefined) && draft.revision !== revision) throw new Error('Der Entwurf wurde geändert. Bitte ab der ersten Seite neu lesen.');
+    const { text, emailSummary, references, sessionRefId } = draft.content;
+    if (offset > text.length || (offset > 0 && characterEnd(text, 0, offset) !== offset)) throw new Error('Ungültige Textposition. Bitte nextOffset verwenden.');
+    const end = characterEnd(text, offset, 1500);
+    return { sessionId, revision: draft.revision, text: text.slice(offset, end), offset, textLength: text.length, complete: end === text.length,
+      ...(end < text.length ? { nextOffset: end } : {}), ...(emailSummary ? { emailRef: emailSummary.id } : {}), ...(sessionRefId ? { sessionRefId } : {}),
+      references: (references ?? []).map(({ moduleId, type, id }) => ({ moduleId, type, id })), untrusted: true };
+  });
+  workspaceCapabilities.register('chats.set_draft_text', async ({ sessionId, expectedRevision, text }, context) => {
+    await context.validateOperation?.();
+    context.signal.throwIfAborted();
+    const draft = getChatComposer(sessionId);
+    const result = setChatComposer({ sessionId, expectedRevision, content: { ...draft.content, text } });
+    if (!result.applied) throw new Error('Der Entwurf wurde inzwischen bearbeitet. Bitte die aktuelle Fassung lesen.');
+    let acknowledgement;
+    try { acknowledgement = await flushChatComposer(sessionId, result.snapshot.revision); }
+    catch { throw new Error(checkpoints.status().error ?? 'Der Chatentwurf konnte nicht gespeichert werden.'); }
+    return { sessionId, revision: result.snapshot.revision, currentRevision: acknowledgement.snapshot.revision, superseded: !acknowledgement.acknowledged, sent: false };
+  });
   workspaceCapabilities.register('chats.create', async ({ title }) => { const sessionId = newWorkspaceChat(title); await openPanel('chat'); return { sessionId, opened: true }; });
   workspaceCapabilities.register('chats.use_model', async ({ tier }) => { const config = currentState.ai; if (!config || !(tier === 'smart' ? config.smartModel : config.simpleModel)) throw new Error('Dieses Modell bitte zuerst in den KI-Einstellungen einrichten.'); await openPanel('chat'); panels.get('chat')?.webContents.send('chat:use-model', tier); return { tier, appliesTo: 'next_messages' }; });
   workspaceCapabilities.register('chats.open', async ({ sessionId }) => { selectWorkspaceChat(sessionId); await openPanel('chat'); return { sessionId, opened: true }; });
   workspaceCapabilities.register('chats.rename', ({ sessionId, title }) => { renameWorkspaceChat(sessionId, title); return { sessionId, renamed: true }; });
   workspaceCapabilities.register('chats.reference', ({ sessionId }) => referenceWorkspaceChat(sessionId));
-  workspaceCapabilities.register('chats.fork', ({ messageId, replacementText }) => { const result = forkWorkspaceChat(messageId, replacementText, true); panels.get('chat')?.webContents.send('chat:fork-draft', result); return { sessionId: result.sessionId, created: true }; });
+  workspaceCapabilities.register('chats.fork', ({ messageId, replacementText }) => { const result = forkWorkspaceChat(messageId, replacementText, true); return { sessionId: result.sessionId, created: true }; });
   workspaceCapabilities.register('chats.reformulate', async ({ messageId, sessionId, tier }, context) => {
     const source = reformulationSource(currentState, messageId, sessionId);
     const options: ReformulateChatOptions = { tier: tier ?? 'smart', sessionId: source.session.id };
@@ -564,19 +760,19 @@ function registerWorkspaceCapabilities(): void {
   });
   workspaceCapabilities.register('settings.agent_get', () => normalizeAgentSettings(currentState.agentSettings));
   workspaceCapabilities.register('settings.agent_save', args => prepareSettings('agent', args));
-  workspaceCapabilities.register('settings.get', () => currentState.settings);
-  workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return currentState.settings; });
+  workspaceCapabilities.register('settings.get', () => ({ ...currentState.settings, locale: uiLocale() }));
+  workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return { ...currentState.settings, locale: uiLocale() }; });
   workspaceCapabilities.register('diagnostics.status', () => getDiagnosticsStatus());
   workspaceCapabilities.register('diagnostics.update', (args, context) => updateDiagnosticSettings(args, context));
   workspaceCapabilities.register('diagnostics.export', (_args, context) => exportDiagnosticLogs(context));
   workspaceCapabilities.register('diagnostics.clear', (_args, context) => clearDiagnosticLogs(context));
   workspaceCapabilities.register('navigation.get', ({ offset = 0, limit = 50 }) => {
-    const entries = orderNavigationEntries(getNavigationEntries(moduleHost?.list() ?? []), currentState.settings.navigationOrder);
+    const entries = orderNavigationEntries(getNavigationEntries(moduleHost?.list() ?? [], false, uiLocale()), currentState.settings.navigationOrder);
     const hasMore = offset + limit < entries.length;
     return { entries: entries.slice(offset, offset + limit).map(({ id, title, moduleId, moduleTitle }, index) => ({ id, title, moduleId, moduleTitle, position: offset + index + 1 })), total: entries.length, customOrder: !!currentState.settings.navigationOrder?.length, hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   });
   workspaceCapabilities.register('navigation.move', ({ entryId, beforeId, afterId }) => queueSettingsWrite(async () => {
-    const entries = orderNavigationEntries(getNavigationEntries(moduleHost?.list() ?? []), currentState.settings.navigationOrder);
+    const entries = orderNavigationEntries(getNavigationEntries(moduleHost?.list() ?? [], false, uiLocale()), currentState.settings.navigationOrder);
     const target = beforeId ?? afterId!;
     if (!entries.some(item => item.id === entryId) || !entries.some(item => item.id === target)) throw new Error('Diese Navigationseinträge sind nicht verfügbar. Bitte die Seitenleiste neu abfragen.');
     if (entryId === target) throw new Error('Ein Eintrag kann nicht relativ zu sich selbst verschoben werden.');
@@ -585,7 +781,7 @@ function registerWorkspaceCapabilities(): void {
     await persistSettingsPatch({ navigationOrder: mergeNavigationOrder(currentState.settings.navigationOrder, ids) });
     return { saved: true, entryId, position: ids.indexOf(entryId) + 1, ...(beforeId ? { beforeId } : { afterId }) };
   }));
-  workspaceCapabilities.register('settings.open', async (args) => { await openSettingsCategory(args.category, args.search); return { opened: true, ...args }; });
+  workspaceCapabilities.register('settings.open', async (args) => { await openSettingsCategory(args.category, args.search, args.sectionId); return { opened: true, ...args }; });
   workspaceCapabilities.register('modules.list', () => moduleHost?.statuses() ?? []);
   workspaceCapabilities.register('modules.events_status', ({ moduleId, offset = 0, limit = 20 }) => {
     const rows = (moduleHost?.getEventStatus() ?? []).filter(item => !moduleId || item.moduleId === moduleId);
@@ -619,7 +815,7 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('modules.repository_remove', async ({ sourceId }, context) => {
     const source = moduleRepositories!.list().sources.find(item => item.id === sourceId);
     if (!source) throw new Error('Diese Modulquelle ist nicht mehr vorhanden.');
-    if (!await confirmCapability(context, 'Modulquelle entfernen?', `${source.title}\n${source.url}\nInstallierte Module und deren Daten bleiben erhalten.`)) return { status: 'cancelled' };
+    if (!await confirmCapability(context, native().removeRepository, `${source.title}\n${source.url}\n${native().keepInstalledModules}`)) return { status: 'cancelled' };
     await moduleRepositories!.remove(sourceId);
     return { removed: true, sourceId };
   });
@@ -645,7 +841,7 @@ function registerWorkspaceCapabilities(): void {
     const state = moduleRepositories!.list(), item = state.modules.find(item => item.sourceId === input.sourceId && item.id === input.moduleId && item.version === input.version);
     if (!item || !['available', 'update'].includes(item.status)) throw new Error(item?.reason ?? 'Bitte zuerst den aktuellen Modulkatalog laden und eine installierbare Version auswählen.');
     const source = state.sources.find(source => source.id === input.sourceId)!;
-    if (!await confirmCapability(context, item.status === 'update' ? 'Modul aktualisieren?' : 'Modul installieren?', `${item.title} · ${item.version}\nQuelle: ${source.url}\nDie Ausführung benötigt danach eine separate Freigabe.`)) return { status: 'cancelled' };
+    if (!await confirmCapability(context, item.status === 'update' ? native().updateModule : native().installModule, `${item.title} · ${item.version}\n${native().source}: ${source.url}\n${native().approvalRequired}`)) return { status: 'cancelled' };
     return moduleRepositories!.install(input, context.signal);
   });
   workspaceCapabilities.register('modules.attention', ({ moduleId, offset = 0, limit = 20 }) => {
@@ -658,7 +854,7 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
   workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
   workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)); });
-  workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, 'Gespeicherten API-Schlüssel entfernen?', 'Der KI-Anbieter benötigt gegebenenfalls anschließend einen neuen Schlüssel.')) return { cancelled: true }; await deleteKey(currentState.ai ?? defaultAiConfig); return { removed: true }; });
+  workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, native().clearKey, native().clearKeyDetail)) return { cancelled: true }; await deleteKey(currentState.ai ?? defaultAiConfig); return { removed: true }; });
   workspaceCapabilities.register('app.quit', (_args, context) => confirmQuit(context));
 }
 
@@ -715,6 +911,32 @@ async function continueChat(rawMessageId: unknown, rawOptions: unknown): Promise
   await sendChat(source.user.text, undefined, { tier: options.tier, sessionId }, source);
 }
 
+/** Save the accepted message, cleared composer revision and event recipients in one database transaction.
+ * Keep the old draft visible/authoritative during I/O. Other writes wait until the result is known. */
+async function acceptChatRequest(sessionId: string, user: ChatMessage, assistant: ChatMessage, composerRevision: number | undefined, events: readonly ModuleEventPublication[]) {
+  const original = currentState;
+  const update = (state: WorkspaceState) => {
+    const next = updateSessionMessages(state, sessionId, messages => [...messages, user, assistant], user.timestamp);
+    if (composerRevision === undefined) return next;
+    const receipt = storedChatComposer(state, sessionId)?.legacyReceipt;
+    return withComposer(next, { sessionId, revision: composerRevision + 1, content: { text: '' }, ...(receipt ? { legacyReceipt: receipt } : {}) });
+  };
+  if (composerRevision !== undefined && getChatComposer(sessionId).revision !== composerRevision) throw new Error('Der Entwurf wurde während der Vorbereitung geändert. Bitte prüfe ihn und sende erneut.');
+  const accepted = update(original);
+  const write = checkpoints.writeNow(() => saveState(accepted, events));
+  const finish = write.then(() => {
+    // Window navigation or edits to another chat may have advanced the host during fsync.
+    commit(currentState === original ? accepted : update(currentState));
+    if (composerRevision !== undefined) publishChatComposer(sessionId);
+    const chat = panels.get('chat')?.webContents;
+    if (user.clientRequestId && chat && !chat.isDestroyed() && !chat.isCrashed()) chat.send('chat:request-committed', user.clientRequestId);
+  }, () => {
+    throw new Error(getWorkspaceStoreFault() ? 'Die Speicherung der Nachricht konnte nicht bestätigt werden. Bitte OVD neu starten. Es wurde keine KI-Anfrage gesendet.' : 'Die Nachricht konnte lokal nicht gespeichert werden. Bitte erneut versuchen. Es wurde keine KI-Anfrage gesendet.');
+  });
+  acceptingChat = { sessionId, settled: finish.then(() => {}, () => {}) };
+  try { await finish; } finally { acceptingChat = undefined; }
+}
+
 async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, continuation?: ReturnType<typeof continuationSource>): Promise<void> {
   if (typeof text !== 'string' || !text.trim() || text.length > 20_000) throw new Error('Invalid message');
   if (emailRef !== undefined) validateEmailReferenceId(emailRef);
@@ -730,6 +952,15 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
   if (!chatSession) throw new Error('Chat nicht gefunden.');
   const sessionRef = options.sessionRefId ? snapshotSessionReference(currentState, options.sessionRefId, sessionId) : undefined;
   const message = text.trim();
+  if (options.composerRevision !== undefined) {
+    const draft = getChatComposer(sessionId);
+    const references = draft.content.references ?? [], requested = options.references ?? [];
+    if (!options.clientRequestId || !options.sessionId || draft.revision !== options.composerRevision || draft.content.text.trim() !== message ||
+      draft.content.emailSummary?.id !== emailRef || draft.content.sessionRefId !== options.sessionRefId ||
+      references.length !== requested.length || !references.every((item, index) => sameModuleReference(item, requested[index]))) {
+      throw new Error('Der Entwurf wurde geändert. Bitte die aktuelle Fassung prüfen und erneut senden.');
+    }
+  }
   const user: ChatMessage = continuation ? { ...structuredClone(continuation.user), id: crypto.randomUUID() } : { id: crypto.randomUUID(), role: 'user', text: message, ...(options.clientRequestId ? { clientRequestId: options.clientRequestId } : {}), sessionRef, timestamp: new Date().toISOString() };
   if (continuation) delete user.clientRequestId;
   const textEvidence = createChatEvidenceCollector();
@@ -737,9 +968,14 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
   const history = chatSession.messages.slice(chatSession.historyStart).filter(m => m.status !== 'streaming' && m.status !== 'failed' && (m.role !== 'assistant' || m.text.trim()));
   chatBusy = true;
   const controller = new AbortController();
-  let buffered = '', flushTimer: NodeJS.Timeout | undefined, lastCheckpoint = Date.now();
+  let buffered = '', flushTimer: NodeJS.Timeout | undefined;
   const updateAssistant = (patch: Partial<ChatMessage>) => commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, ...patch } : m)));
-  const flush = () => { if (flushTimer) clearTimeout(flushTimer); flushTimer = undefined; if (buffered) { const text = buffered; buffered = ''; commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, text: m.text + text } : m))); if (Date.now() - lastCheckpoint >= 2000) { lastCheckpoint = Date.now(); void saveState(currentState).catch(error => console.error('Workspace save failed', error)); } } };
+  const flush = () => {
+    clearTimeout(flushTimer); flushTimer = undefined;
+    if (!buffered) return;
+    const text = buffered; buffered = '';
+    commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistant.id ? { ...m, text: m.text + text } : m)));
+  };
   activeStream = { controller, flush, sessionId, assistantId: assistant.id, provider: config.provider };
   let prepared = false;
   let runLimit: AgentRunLimit | undefined;
@@ -753,11 +989,13 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     if (!finishedPublications) finishedPublications = answer ? chatEventPublications(chatFinishedEvent(sessionId, user, answer,
       operationRun ? operationJournal.getRun(operationRun.id) : undefined, operationRun ? operationJournal.listActions(operationRun.rootRunId) : [],
       operationRun ? operationJournal.getRun(operationRun.rootRunId)?.userMessageId : undefined)) : [];
-    await saveState(currentState, finishedEventPersisted ? [] : finishedPublications);
+    await saveCurrent(finishedEventPersisted ? [] : finishedPublications);
     finishedEventPersisted = true;
     moduleHost?.notifyEventsChanged();
   };
   try {
+    // A preparation or acceptance failure must leave the complete unsent selection recoverable.
+    if (options.composerRevision !== undefined) await checkpoints.flush();
     if (continuation) {
       for (const saved of user.references ?? []) {
         if (saved.usage !== 'instructions') continue;
@@ -774,20 +1012,12 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
       for (const reference of options.references) user.references.push(await snapshotModuleReference(reference, sessionId, controller.signal));
     }
     if (controller.signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
-    commit(updateSessionMessages(currentState, sessionId, messages => [...messages, user, assistant]));
-    try { await saveState(currentState, continuation ? [] : chatEventPublications(chatRequestEvent(sessionId, user))); }
-    catch {
-      commit(updateSessionMessages(currentState, sessionId, messages => messages.filter(item => item.id !== user.id && item.id !== assistant.id)));
-      throw new Error('Die Nachricht konnte lokal nicht gespeichert werden. Bitte erneut versuchen; es wurde keine KI-Anfrage gesendet.');
-    }
+    await acceptChatRequest(sessionId, user, assistant, options.composerRevision, continuation ? [] : chatEventPublications(chatRequestEvent(sessionId, user)));
     prepared = true;
     moduleHost?.notifyEventsChanged();
     operationRun = await operationJournal.createRun({ sessionId, userMessageId: user.id, assistantMessageId: assistant.id, ...(continuation ? { parentRunId: continuation.run.id } : {}) });
     updateAssistant({ operationRunId: operationRun.id });
-    await saveState(currentState);
-    forkMailReferences.delete(sessionId);
-    forkModuleReferences.delete(sessionId);
-    if (options.clientRequestId) panels.get('chat')?.webContents.send('chat:request-committed', options.clientRequestId);
+    await saveCurrent();
     const key = await getKey(config);
     if (controller.signal.aborted) throw new DOMException('Abgebrochen', 'AbortError');
     const toolsEnabled = config.workspaceTools !== false;
@@ -801,7 +1031,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     if (memory?.providers.length) {
       updateAssistant({ memory });
       // Do not use an unsaved context snapshot: recovery must see the same facts.
-      await saveState(currentState);
+      await saveCurrent();
     }
     controller.signal.throwIfAborted();
     if (toolsEnabled && currentState.ai?.workspaceTools === false) throw new Error('Die Workspace-Werkzeuge wurden während der Vorbereitung deaktiviert. Die Anfrage wurde nicht an den KI-Anbieter gesendet.');
@@ -906,21 +1136,20 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
   const fork = createReformulation(currentState, messageId, options.sessionId ?? currentState.activeSessionId);
   const settings = normalizeAgentSettings(currentState.agentSettings);
   const controller = new AbortController();
-  let buffered = '', flushTimer: NodeJS.Timeout | undefined, lastCheckpoint = Date.now(), timedOut = false;
+  let buffered = '', flushTimer: NodeJS.Timeout | undefined, timedOut = false;
   const update = (patch: Partial<ChatMessage>) => commit(updateSessionMessages(currentState, fork.session.id, messages => messages.map(message => message.id === fork.answer.id ? { ...message, ...patch } : message)));
   const flush = () => {
     if (flushTimer) clearTimeout(flushTimer); flushTimer = undefined;
     if (!buffered) return;
     const text = buffered; buffered = '';
     commit(updateSessionMessages(currentState, fork.session.id, messages => messages.map(message => message.id === fork.answer.id ? { ...message, text: message.text + text } : message)));
-    if (Date.now() - lastCheckpoint >= 2000) { lastCheckpoint = Date.now(); void saveState(currentState).catch(error => console.error('Reformulation save failed', error)); }
   };
   chatBusy = true;
   activeStream = { controller, flush, sessionId: fork.session.id, assistantId: fork.answer.id, provider: config.provider };
   commit(fork.state);
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, settings.timeoutSeconds * 1000);
   try {
-    await saveState(currentState);
+    await saveCurrent();
     await openPanel('chat');
     const messages = reformulationMessages(fork.source, settings.historyCharBudget, settings.historyMessageLimit);
     new AgentContext().fit(messages, config, options, settings, () => undefined);
@@ -928,13 +1157,13 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
     controller.signal.throwIfAborted();
     await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000, settings);
     flush(); update({ status: 'completed' });
-    await saveState(currentState);
+    await saveCurrent();
   } catch (error) {
     flush();
     const cancelled = controller.signal.aborted && !timedOut;
     // Discard rejected partial prose; it may falsely describe an unsolicited action.
     update({ text: '', status: cancelled ? 'cancelled' : error instanceof ContextBudgetError ? 'limited' : 'failed', ...(error instanceof ContextBudgetError ? { agentRunLimit: contextRunLimit(error) } : {}), error: cancelled ? 'Neuformulieren gestoppt. Es wurde keine Aktion ausgeführt.' : timedOut ? 'Das Zeitlimit für die Neuformulierung ist erreicht. Es wurde keine Aktion ausgeführt.' : `${error instanceof Error ? error.message : 'Neuformulieren fehlgeschlagen.'} Es wurde keine Aktion ausgeführt.` });
-    await saveState(currentState).catch(() => update({ error: 'Die Neuformulierung konnte nicht auf dem Datenträger gespeichert werden. Es wurde keine Aktion ausgeführt.' }));
+    await saveCurrent().catch(() => update({ error: 'Die Neuformulierung konnte nicht auf dem Datenträger gespeichert werden. Es wurde keine Aktion ausgeführt.' }));
   } finally { clearTimeout(timer); if (flushTimer) clearTimeout(flushTimer); activeStream = undefined; chatBusy = false; }
 }
 
@@ -945,7 +1174,7 @@ function requireMailModule(): MailModule {
 async function initializeMailModule(): Promise<void> {
   if (mailModule) { mailModule.startPolling(); return; }
   const { createMailModule } = await import('../modules/ovd-mail/backend');
-  const module = createMailModule({ getState: () => currentState, commit, saveState, panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles, isKnownLocalFile: selected => filesModule?.knowsPath(selected) ?? false,
+  const module = createMailModule({ getState: () => currentState, commit, saveState: snapshot => persistWorkspace(() => ({ ...currentState, drafts: snapshot.drafts })), panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles, isKnownLocalFile: selected => filesModule?.knowsPath(selected) ?? false,
     publishAttention: notice => moduleHost?.publishAttention('ovd-mail', notice), clearAttention: key => moduleHost?.clearAttention('ovd-mail', key) });
   await module.initialize();
   module.registerCapabilities(workspaceCapabilities);
@@ -1003,6 +1232,14 @@ function controlNativeWindow(win: BrowserWindow, action: 'minimize' | 'toggleMax
   else win.close();
   return { action, closed: win.isDestroyed() };
 }
+function refreshNativeLocale(): void {
+  for (const [kind, window] of panels) if (!window.isDestroyed()) window.setTitle(`OpenVibeDesk · ${panelTitle(kind)}`);
+  for (const { moduleId, viewId, window } of moduleWindows.values()) {
+    const view = moduleHost?.getModule(moduleId)?.manifest?.contributions.views.find(item => item.id === viewId);
+    if (view && !window.isDestroyed()) window.setTitle(`OpenVibeDesk · ${view.title}`);
+  }
+  modulesChanged();
+}
 function modulesChanged(): void {
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:changed');
   ovdBar?.layout();
@@ -1011,14 +1248,19 @@ function moduleAttentionChanged(): void {
   const notices = moduleHost?.listAttention() ?? [];
   for (const win of [dock, ...panels.values(), ...[...moduleWindows.values()].map(item => item.window)]) if (win && !win.isDestroyed()) win.webContents.send('modules:attention-changed', notices);
 }
-async function openSettingsCategory(category?: string, search?: string): Promise<void> {
+async function openSettingsCategory(category?: string, search?: string, sectionId?: string): Promise<void> {
+  if (sectionId) {
+    const sectionCategory = sectionId.split('.')[0];
+    if ((category && category !== sectionCategory) || search?.trim()) throw new Error(native().conflictingSection);
+    category = sectionCategory;
+  }
   if (category && ![...coreSettingsCategoryIds, ...(moduleHost?.settingsCategories() ?? [])].includes(category)) throw new Error('Diese Einstellungskategorie ist nicht verfügbar.');
   await openPanel('settings');
-  panels.get('settings')?.webContents.send('settings:navigate', { category, search });
+  panels.get('settings')?.webContents.send('settings:navigate', { category, search, sectionId });
 }
 async function openNativeModuleView(moduleId: string, viewId: string): Promise<void> {
   if (panelModules[viewId as WindowKind] === moduleId) return openPanel(viewId as WindowKind);
-  const view = moduleHost?.registry.getModule(moduleId)?.manifest?.contributions.views.find(item => item.id === viewId);
+  const view = moduleHost?.getModule(moduleId)?.manifest?.contributions.views.find(item => item.id === viewId);
   if (!view?.entry) throw new Error('Diese Modulansicht ist nicht verfügbar.');
   const key = `${moduleId}:${viewId}`, existing = moduleWindows.get(key)?.window;
   if (existing && !existing.isDestroyed()) { if (existing.isMinimized()) existing.restore(); existing.show(); existing.focus(); return; }
@@ -1043,7 +1285,7 @@ function verifyModuleFrame(event: Electron.IpcMainInvokeEvent, moduleId: unknown
 async function initializeModules(): Promise<void> {
   const userData = app.getPath('userData');
   hostOperationFingerprint = await operationHostIdentity(path.join(__dirname, '..'));
-  moduleHost = new ModuleHost({ builtInRoot: path.join(app.getAppPath(), 'modules'), userRoot: path.join(userData, 'modules'), dataRoot: path.join(userData, 'module-data'), configFile: path.join(userData, 'module-settings.json'), capabilities: workspaceCapabilities,
+  moduleHost = new ModuleHost({ getLocale: uiLocale, builtInRoot: path.join(app.getAppPath(), 'modules'), userRoot: path.join(userData, 'modules'), dataRoot: path.join(userData, 'module-data'), configFile: path.join(userData, 'module-settings.json'), capabilities: workspaceCapabilities,
     operationHostFingerprint: hostOperationFingerprint,
     agentExecutionAllowed: () => currentState.ai?.workspaceTools !== false,
     packageCommitted: (id, fingerprint) => moduleRepositories?.isPackageCommitted(id, fingerprint) ?? false,
@@ -1069,9 +1311,14 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.speech_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['workspace.save_status', 'context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'chats.read_draft', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.speech_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
+    if (action === 'chats.set_draft_text') {
+      const draft = getChatComposer(args.sessionId);
+      if (draft.revision !== args.expectedRevision) throw new Error('Der Entwurf wurde inzwischen bearbeitet. Bitte die aktuelle Fassung lesen.');
+      return { args, effect: 'write', resource: { id: `chat-composer:${draft.sessionId}`, version: String(draft.revision) } };
+    }
     const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
     return { args, effect: 'write', resource: { id: `workspace:${action}:${typeof args.sessionId === 'string' ? args.sessionId : ''}`, version: createHash('sha256').update(JSON.stringify(revision ?? null)).digest('hex') } };
   } });
@@ -1115,13 +1362,18 @@ if (hasInstanceLock) app.on('activate', () => { ovdBar?.reveal(true); });
 
 if (hasInstanceLock) app.whenReady().then(async () => {
   if (process.platform === 'darwin') app.dock?.setIcon(appIconPath);
-  await initializeStore();
+  const preferredLanguages = app.getPreferredSystemLanguages();
+  systemLocale = resolveUiLocale('system', preferredLanguages.length ? preferredLanguages : [app.getSystemLocale()]);
+  const stored = await openStartupWorkspace(systemLocale);
+  if (stored === undefined) { app.quit(); return; }
+  const loaded = stored ?? initialState();
+  const settings = normalizeSettings(loaded.settings);
+  const startupText = nativeText[resolveUiLocale(settings.language, [systemLocale])];
   operationJournal = new OperationJournal(path.join(app.getPath('userData'), 'operation-journal'));
-  await operationJournal.initialize().catch(error => dialog.showErrorBox('Aktionsprotokoll nicht verfügbar', error instanceof Error ? error.message : 'Es wird keine Assistentenaktion gestartet. Die vorhandenen Daten bleiben erhalten.'));
-  const loaded = loadState() ?? initialState();
-  currentState = normalizeSessions({ ...loaded, settings: normalizeSettings(loaded.settings), agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });
+  await operationJournal.initialize().catch(error => dialog.showErrorBox(startupText.journalUnavailable, error instanceof Error ? error.message : startupText.journalFailure));
+  currentState = normalizeSessions({ ...loaded, settings, agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) });
   await initializeDiagnostics({ dataDirectory: app.getPath('userData'), appVersion: app.getVersion(), enabled: currentState.settings.diagnosticsEnabled === true });
-  await initializeCredentialStore({ dataDirectory: app.getPath('userData') }).catch(() => dialog.showErrorBox('Lokaler Zugangsdaten-Speicher nicht verfügbar', 'Vorhandene Zugangsdaten-Dateien wurden nicht zurückgesetzt. Bitte das OVD-Profil prüfen. Die Einstellungen und Diagnose bleiben erreichbar.'));
+  await initializeCredentialStore({ dataDirectory: app.getPath('userData') }).catch(() => dialog.showErrorBox(native().vaultUnavailable, native().vaultFailure));
   let previousChatGptProfile: string | undefined;
   initializeChatGptAuth({ dataDirectory: path.join(app.getPath('userData'), 'chatgpt'), openExternal: async destination => {
     const url = new URL(destination);
@@ -1136,9 +1388,15 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     }
   } });
   previousChatGptProfile = (await chatGptAuth().status().catch(() => undefined))?.activeProfileId;
+  const beforeRecovery = currentState;
   for (const item of currentState.sessions) if (item.messages.some(m => m.status === 'streaming')) currentState = updateSessionMessages(currentState, item.id, messages => messages.map(m => m.status === 'streaming' ? { ...m, status: 'cancelled' } : m));
-  speech = new SpeechController({ dataDirectory: app.getPath('userData'), panels, verifyPanel, openSettings: () => openSettingsCategory('ai', 'Spracheingabe'), settingsStatus: status => { speechSettingsStatus = status; } });
+  // Persist the new stable session ID assigned to a legacy flat chat, as well
+  // as an interrupted answer. A normal open only applies defaults in memory.
+  if (!stored?.sessions?.length || currentState !== beforeRecovery) checkpoints.changed();
+  speech = new SpeechController({ dataDirectory: app.getPath('userData'), panels, verifyPanel, openSettings: () => openSettingsCategory('ai', undefined, 'ai.speech'), settingsStatus: status => { speechSettingsStatus = status; } });
   await speech.initialize();
+  ipcMain.handle('workspace:save-status', event => { verifySender(event); return presentSaveStatus(checkpoints.status()); });
+  ipcMain.handle('workspace:retry-save', event => { verifySender(event); return retryWorkspaceSave(); });
   ipcMain.handle('workspace:load', event => { verifySender(event); return windowState(BrowserWindow.fromWebContents(event.sender)!); });
   const verifyBar = (event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): void => {
     if (!dock || dock.isDestroyed() || event.sender !== dock.webContents || event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted OVD-Bar sender');
@@ -1173,7 +1431,7 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle('agent:settings:open', event => { verifySender(event); return openSettingsCategory('agent'); });
   ipcMain.handle('agent:settings:get', event => { verifySender(event); return normalizeAgentSettings(currentState.agentSettings); });
-  ipcMain.handle('agent:settings:save', async (event, input: unknown) => { verifyPanel(event, ['settings']); const agentSettings = agentSettingsSchema.parse(input); await saveState({ ...currentState, agentSettings }); commit({ ...currentState, agentSettings }); });
+  ipcMain.handle('agent:settings:save', async (event, input: unknown) => { verifyPanel(event, ['settings']); const agentSettings = agentSettingsSchema.parse(input); await persistWorkspace(() => ({ ...currentState, agentSettings })); commit({ ...currentState, agentSettings }); });
   ipcMain.on('agent:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) agentSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.on('mcp:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) mcpSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.handle('ai:settings:get', (event) => { verifySender(event); return readAiSettings(uiOperationContext(event)); });
@@ -1193,8 +1451,24 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle('chat:history:earlier', event => {
     verifyPanel(event, ['chat']);
-    windowProjector(panels.get('chat')!).older(currentState);
+    windowProjector(panels.get('chat')!).older(currentState, uiLocale());
     broadcast();
+  });
+  ipcMain.handle('chat:composer:get', (event, id: unknown) => { verifyPanel(event, ['chat']); return getChatComposer(id); });
+  ipcMain.handle('chat:composer:flush', (event, id: unknown, revision: unknown) => { verifyPanel(event, ['chat']); return flushChatComposer(id, revision); });
+  ipcMain.handle('chat:composer:set', (event, input: unknown, protectLocal: unknown) => {
+    verifyPanel(event, ['chat']);
+    try {
+      const result = setChatComposer(input);
+      if (!result.applied && protectLocal === true) chatComposerBlocked = true;
+      return result;
+    } catch (error) {
+      if (protectLocal === true) chatComposerBlocked = true;
+      throw error;
+    }
+  });
+  ipcMain.on('chat:composer:blocked', (event, blocked: unknown) => {
+    if (panels.get('chat')?.webContents === event.sender && event.senderFrame === event.sender.mainFrame && typeof blocked === 'boolean') chatComposerBlocked = blocked;
   });
   ipcMain.handle('chat:requests:committed', (event, input: unknown) => {
     verifyPanel(event, ['chat']);
@@ -1228,29 +1502,46 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await openDock();
   for (const kind of currentState.windows.filter(w => !w.minimized && (!panelModules[w.kind] || moduleHost?.isReady(panelModules[w.kind]!))).map(w => w.kind)) await openPanel(kind);
 });
+function handleQuitSaveFailure(error: unknown): void {
+  console.error('Workspace save failed', error);
+  if (getWorkspaceStoreFault()) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning', title: native().saveUnconfirmed,
+      message: native().askQuitWithoutSaving,
+      detail: native().unsavedQuitDetail,
+      buttons: [native().keepOpen, native().quitWithoutSaving], defaultId: 0, cancelId: 0, noLink: true
+    });
+    if (choice === 1) {
+      readyToQuit = true;
+      speech?.dispose(); chatGptAuth().dispose(); moduleHost?.dispose(); app.quit();
+      return;
+    }
+  } else {
+    dialog.showErrorBox(native().appStaysOpen, native().retrySaving);
+  }
+  quitting = false; allowSettingsUnload = false;
+  if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
+}
 app.on('before-quit', event => {
   if (readyToQuit || !currentState) return;
   event.preventDefault();
   if (quitting) return;
-  if (mailModule?.getSendingCount()) { dialog.showErrorBox('Mailvorgang läuft', 'Bitte warte, bis der laufende Versand oder die Gesendet-Ablage abgeschlossen ist, bevor du OpenVibeDesk beendest.'); return; }
-  if (moduleRepositories?.list().busy) { dialog.showErrorBox('Modulvorgang läuft', 'Bitte warte, bis die aktuelle Installation oder Katalogaktualisierung abgeschlossen ist.'); return; }
+  if (mailModule?.getSendingCount()) { dialog.showErrorBox(native().mailBusy, native().waitForMail); return; }
+  if (moduleRepositories?.list().busy) { dialog.showErrorBox(native().modulesBusy, native().waitForModules); return; }
   if (!confirmSettingsClose()) return;
   allowSettingsUnload = repositorySettingsStatus === 'dirty' || speechSettingsStatus === 'dirty' || aiSettingsStatus === 'dirty' || agentSettingsStatus === 'dirty' || mcpSettingsStatus === 'dirty' || mailModule?.getSettingsStatus() === 'dirty';
   quitting = true;
-  mailModule?.stopPolling();
-  const chatOwner = panels.get('chat'); if (chatOwner) speech?.cancelOwner(chatOwner.webContents.id);
-  if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; currentState = updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m)); }
-  if (saveTimer) clearTimeout(saveTimer);
   void (async () => {
     try {
+      if (!await prepareChatClose()) { quitting = false; allowSettingsUnload = false; return; }
+      mailModule?.stopPolling();
+      const chatOwner = panels.get('chat'); if (chatOwner) speech?.cancelOwner(chatOwner.webContents.id);
+      if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m))); }
       await ovdBar?.flush();
       await mailModule?.flushDrafts();
-      await saveState(currentState);
+      await checkpoints.flush();
     } catch (error) {
-      console.error('Workspace save failed', error);
-      quitting = false; allowSettingsUnload = false;
-      if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
-      dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Der aktuelle Zustand konnte vor dem Beenden nicht gespeichert werden. Deine Entwürfe bleiben geöffnet. Bitte die Speicherung erneut versuchen.');
+      handleQuitSaveFailure(error);
       return;
     }
     try { await mcpModule?.deactivate(); } catch { /* Other windows still shut down even if a transport is already gone. */ }
@@ -1258,16 +1549,18 @@ app.on('before-quit', event => {
     // Only quit after the exact latest state has a confirmed disk acknowledgement.
     try {
       while (true) {
+        if (!await prepareChatClose()) {
+          quitting = false; allowSettingsUnload = false;
+          if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
+          return;
+        }
         await mailModule?.flushDrafts();
         const snapshot = currentState;
-        await saveState(snapshot);
-        if (currentState === snapshot) break;
+        await saveCurrent();
+        if (currentState === snapshot && !chatComposerBlocked) break;
       }
     } catch (error) {
-      console.error('Workspace save failed', error);
-      quitting = false; allowSettingsUnload = false;
-      if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
-      dialog.showErrorBox('OpenVibeDesk bleibt geöffnet', 'Die letzten Änderungen konnten nicht gespeichert werden. Bitte die Speicherung erneut versuchen.');
+      handleQuitSaveFailure(error);
       return;
     }
     speech?.dispose(); chatGptAuth().dispose(); moduleHost?.dispose(); readyToQuit = true; app.quit();

@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { ModuleRegistry } from './modules';
 import { ModuleRuntimeManager } from './module-runtime';
 import { type CapabilityContext, type WorkspaceCapabilityRegistry } from './workspace-capabilities';
-import type { ModuleEventStatus, ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
+import type { UiLocale } from '../shared/locale';
+import type { ModuleManifest, ModuleEventStatus, ModuleInfo, ModuleQuery, ModuleSummary, ModuleToolDescriptor, ModuleToolListing, ModuleToolQuery } from '../shared/modules';
 import type { ModuleToolProvider } from '../shared/module-tool-provider';
 import type { OperationBinding, OperationIdentity, OperationReconciliation } from '../shared/operations';
 import { ATTENTION_PULSE_MS, MAX_ATTENTION, MAX_MODULE_ATTENTION, attentionAcknowledgementSchema, attentionKeySchema, moduleAttentionInputSchema, type ModuleAttention, type ModuleAttentionInput } from '../shared/module-attention';
@@ -23,6 +24,7 @@ type HostOptions = {
   operationHostFingerprint?: string;
   /** Read the live user grant; a run's captured configuration cannot retain revoked access. */
   agentExecutionAllowed?(): boolean;
+  getLocale?(): UiLocale;
   capabilities: WorkspaceCapabilityRegistry;
   activateBuiltin(id: string): Promise<void>;
   beforeDisable(id: string): Promise<void>;
@@ -58,6 +60,37 @@ const safeName = (moduleId: string, action: string, kind: string) => `${moduleId
 function canonicalOperationArgs(value: unknown): string {
   const sort = (item: unknown): unknown => Array.isArray(item) ? item.map(sort) : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sort((item as Record<string, unknown>)[key])])) : item;
   return JSON.stringify(sort(value));
+}
+
+function generatedCommandText(kind: 'view' | 'window' | 'settings', title: string, moduleTitle: string, locale: UiLocale) {
+  const open = locale === 'en' ? `Open ${title}` : `${title} öffnen`;
+  switch (kind) {
+    case 'view': return { label: open, description: locale === 'en' ? `Open the ${title} module view.` : `Öffne die Modulansicht ${title}.` };
+    case 'settings': return { label: open, description: locale === 'en' ? `Open ${title} settings for ${moduleTitle}.` : `Öffne die Einstellungen ${title} des Moduls ${moduleTitle}.` };
+    case 'window': return { label: locale === 'en' ? `Control ${title}` : `${title} steuern`,
+      description: locale === 'en' ? `Minimize, maximize or close the ${title} window.` : `Minimiere, maximiere oder schließe das Modulfenster ${title}.` };
+  }
+}
+
+// A registry listing is a detached copy. Keep the approved runtime manifest and its bindings canonical.
+function presentModule(module: ModuleInfo, locale: UiLocale): ModuleInfo {
+  const manifest = module.manifest;
+  if (!manifest?.locales) return module;
+  const catalog = manifest.locales[locale];
+  delete manifest.locales;
+  if (!catalog) return module;
+  module.title = manifest.title = catalog.title ?? manifest.title;
+  module.description = manifest.description = catalog.description ?? manifest.description;
+  if (catalog.keywords) manifest.keywords = catalog.keywords;
+  for (const kind of ['views', 'navigation', 'settings', 'referenceTypes'] as const) {
+    for (const item of manifest.contributions[kind] ?? []) Object.assign(item, catalog[kind]?.[item.id]);
+  }
+  for (const tool of manifest.tools ?? []) {
+    const translation = catalog.tools?.[tool.name];
+    if (translation?.label) tool.label = translation.label;
+    if (translation?.description) tool.description = translation.description;
+  }
+  return module;
 }
 
 /** Host owns activation and dispatch; the model only sees bounded metadata and selected schemas. */
@@ -242,12 +275,20 @@ export class ModuleHost {
     if (acknowledged) this.options.attentionChanged?.();
     return { acknowledged };
   }
-  list(): ModuleInfo[] { return this.registry.listModules(); }
-  summaries(): ModuleSummary[] { return [...this.registry.listSummaries(), ...this.providerModules().map(({ summary }) => summary)]; }
+  private get locale(): UiLocale { return this.options.getLocale?.() ?? 'de'; }
+  list(): ModuleInfo[] {
+    const locale = this.locale;
+    return this.registry.listModules().map(module => presentModule(module, locale));
+  }
+  getModule(id: string): ModuleInfo | undefined {
+    const module = this.registry.getModule(id);
+    return module && presentModule(module, this.locale);
+  }
+  summaries(): ModuleSummary[] { return [...this.registry.listSummaries(this.locale), ...this.providerModules().map(({ summary }) => summary)]; }
   find(raw: ModuleQuery = {}) {
     const options = moduleQuerySchema.parse(raw), query = fold(options.query ?? ''), terms = query.split(/[\s._-]+/).filter(Boolean);
     const catalog = [
-      ...this.list().filter(module => module.status === 'ready').map(module => ({ summary: { id: module.id, title: module.title, description: module.description.slice(0, 240) }, search: [module.id, module.title, module.description, ...(module.manifest?.keywords ?? [])].join(' ') })),
+      ...this.registry.searchEntries(this.locale),
       ...this.providerModules().map(({ summary }) => ({ summary, search: `${summary.id} ${summary.title} ${summary.description}` }))
     ];
     const matches = catalog.map((item, index) => ({ ...item, index, exact: fold(item.summary.id) === query || fold(item.summary.title) === query, score: terms.filter(term => fold(item.search).includes(term)).length }))
@@ -307,9 +348,9 @@ export class ModuleHost {
       this.rememberProviderOffer(binding.moduleId, tool);
       return tool;
     }
-    this.requireReady(binding.moduleId); await this.registry.verifyUnchanged(binding.moduleId);
+    const record = this.requireReady(binding.moduleId); await this.registry.verifyUnchanged(binding.moduleId);
     const current = [...(this.bindings.get(binding.moduleId) ?? this.buildBindings(binding.moduleId)).values()].find(item => item.action === binding.action);
-    return current ? structuredClone(current.descriptor) : undefined;
+    return current ? structuredClone(this.presentTool(current, record.module.manifest!)) : undefined;
   }
   /** Freeze validated resource arguments before durable intent is written. No domain tool executes here. */
   async prepareOperation(id: string, name: string, rawArgs: unknown, context: CapabilityContext): Promise<{ binding: OperationBinding; args: Record<string, unknown>; label: string }> {
@@ -352,7 +393,7 @@ export class ModuleHost {
     }
     context.signal.throwIfAborted(); this.assertAgentAccess(context); this.requireReady(id);
     const fingerprint = createHash('sha256').update(JSON.stringify([this.options.operationHostFingerprint ?? '', record.fingerprint, binding.kind, binding.action, binding.descriptor.parameters])).digest('hex');
-    return { binding: { moduleId: id, action: binding.action, fingerprint, effect, ...(resource ? { resource: structuredClone(resource) } : {}) }, args: normalized, label: binding.descriptor.label || binding.action };
+    return { binding: { moduleId: id, action: binding.action, fingerprint, effect, ...(resource ? { resource: structuredClone(resource) } : {}) }, args: normalized, label: this.presentTool(binding, record.module.manifest!).label || binding.action };
   }
   /** A status hook is separate from execution. Unknown outcomes never fall back to invoking the original tool. */
   async reconcileOperation(binding: OperationBinding, args: Record<string, unknown>, operation: OperationIdentity, context: CapabilityContext): Promise<OperationReconciliation> {
@@ -462,13 +503,31 @@ export class ModuleHost {
         add(tool.name, tool.description, tool.parameters, tool.label ?? tool.name, 'process', validate, tool.confirmation);
       }
       for (const view of manifest.contributions.views) {
-        add(`view.${view.id}`, `Öffne die Modulansicht ${view.title}.`, { type: 'object', properties: {}, additionalProperties: false }, `${view.title} öffnen`, 'view');
-        add(`window.${view.id}`, `Minimiere, maximiere oder schließe das Modulfenster ${view.title}.`, { type: 'object', properties: { action: { type: 'string', enum: ['minimize', 'toggleMaximize', 'close'] } }, required: ['action'], additionalProperties: false }, `${view.title} steuern`, 'window');
+        const open = generatedCommandText('view', view.title, manifest.title, 'de');
+        const control = generatedCommandText('window', view.title, manifest.title, 'de');
+        add(`view.${view.id}`, open.description, { type: 'object', properties: {}, additionalProperties: false }, open.label, 'view');
+        add(`window.${view.id}`, control.description, { type: 'object', properties: { action: { type: 'string', enum: ['minimize', 'toggleMaximize', 'close'] } }, required: ['action'], additionalProperties: false }, control.label, 'window');
       }
     }
-    for (const settings of manifest.contributions.settings) add(`settings.${settings.id}`, `Öffne die Einstellungen ${settings.title} des Moduls ${manifest.title}.`, { type: 'object', properties: {}, additionalProperties: false }, `${settings.title} öffnen`, 'settings');
+    for (const settings of manifest.contributions.settings) {
+      const open = generatedCommandText('settings', settings.title, manifest.title, 'de');
+      add(`settings.${settings.id}`, open.description, { type: 'object', properties: {}, additionalProperties: false }, open.label, 'settings');
+    }
     this.bindings.set(id, bindings);
     return bindings;
+  }
+  private presentTool(binding: Binding, manifest: ModuleManifest, locale = this.locale): ModuleToolDescriptor {
+    const { action, kind, descriptor } = binding, catalog = manifest.locales?.[locale];
+    if (kind === 'capability' || kind === 'process') {
+      const text = catalog?.tools?.[action];
+      return text ? { ...descriptor, label: text.label ?? descriptor.label, description: text.description ?? descriptor.description } : descriptor;
+    }
+    // View, window and settings commands are generated by the host. Keep their IDs and schemas unchanged.
+    const id = action.slice(action.indexOf('.') + 1);
+    const group = kind === 'settings' ? 'settings' : 'views';
+    const title = catalog?.[group]?.[id]?.title ?? manifest.contributions[group].find(item => item.id === id)?.title;
+    if (!title) return descriptor;
+    return { ...descriptor, ...generatedCommandText(kind, title, catalog?.title ?? manifest.title, locale) };
   }
   getTools(raw: ModuleToolQuery): ModuleToolListing {
     const query = toolQuerySchema.parse(raw);
@@ -485,13 +544,19 @@ export class ModuleHost {
       }
       return { moduleId: query.moduleId, tools, hasMore: result.hasMore, ...(result.hasMore ? { nextOffset: result.nextOffset } : {}) };
     }
-    this.requireReady(query.moduleId);
+    const manifest = this.requireReady(query.moduleId).module.manifest!;
     const bindings = this.bindings.get(query.moduleId) ?? this.buildBindings(query.moduleId);
     const terms = fold(query.query ?? '').split(/[\s._-]+/).filter(Boolean);
-    const ranked = [...bindings.values()].map(item => ({ item, exact: fold(item.action) === fold(query.query ?? ''), actionScore: terms.filter(term => fold(item.action).includes(term)).length, score: terms.reduce((score, term) => score + (fold(`${item.action} ${item.descriptor.label} ${item.descriptor.description}`).includes(term) ? 1 : 0), 0) }));
+    const locale = this.locale;
+    const ranked = [...bindings.values()].map(binding => {
+      const descriptor = this.presentTool(binding, manifest, locale);
+      const keywords = manifest.locales?.[locale]?.tools?.[binding.action]?.keywords ?? [];
+      const searchable = fold([binding.action, descriptor.label, descriptor.description, ...keywords].join(' '));
+      return { descriptor, exact: fold(binding.action) === fold(query.query ?? ''), actionScore: terms.filter(term => fold(binding.action).includes(term)).length, score: terms.filter(term => searchable.includes(term)).length };
+    });
     const all = ranked.filter(({ score }) => !terms.length || score > 0).sort((a, b) => Number(b.exact) - Number(a.exact) || b.score - a.score || b.actionScore - a.actionScore);
     const offset = query.offset ?? 0, limit = query.limit ?? 6, hasMore = offset + limit < all.length;
-    return { moduleId: query.moduleId, tools: all.slice(offset, offset + limit).map(({ item }) => item.descriptor), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+    return { moduleId: query.moduleId, tools: all.slice(offset, offset + limit).map(({ descriptor }) => descriptor), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
   }
   /** Automatic retrieval is an approved, read-only module contract, never a learning event. */
   async recallMemory(raw: MemoryRecallRequest, context: CapabilityContext): Promise<MemoryRecallSnapshot> {

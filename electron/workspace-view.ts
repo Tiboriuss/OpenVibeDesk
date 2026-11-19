@@ -1,3 +1,4 @@
+import type { UiLocale } from '../shared/locale';
 import { createHash } from 'node:crypto';
 import type { ChatSession, ChatSessionPage, ChatSessionSummary, RendererWorkspaceState, WindowKind, WorkspaceState } from '../shared/model';
 
@@ -32,14 +33,14 @@ export class WorkspaceViewProjector {
   private revision = 0;
   private sessions?: ChatSession[];
 
-  older(state: WorkspaceState): void {
-    this.project(state, 'chat');
+  older(state: WorkspaceState, locale: UiLocale): void {
+    this.project(state, 'chat', locale);
     const session = state.sessions.find(item => item.id === state.activeSessionId);
     this.start = Math.max(session?.historyStart ?? 0, this.start - PAGE_SIZE);
     this.previous = undefined;
   }
 
-  project(state: WorkspaceState, view: WorkspaceView): RendererWorkspaceState {
+  project(state: WorkspaceState, view: WorkspaceView, locale: UiLocale): RendererWorkspaceState {
     if (this.sessions !== state.sessions) { this.sessions = state.sessions; this.revision++; }
     const active = view === 'chat' ? state.sessions.find(item => item.id === state.activeSessionId) : undefined;
     if (active && active.id !== this.sessionId) {
@@ -48,13 +49,13 @@ export class WorkspaceViewProjector {
     }
     if (active) this.start = Math.min(active.messages.length, Math.max(active.historyStart, this.start));
     const draft = (view === 'draft' || view === 'files') ? state.drafts.find(item => item.id === state.activeDraftId) : undefined;
-    const keys = [view, state.settings, view === 'chat' ? state.ai : undefined,
+    const keys = [view, locale, state.settings, view === 'chat' ? state.ai : undefined,
       view === 'chat' || view === 'sessions' ? state.sessions : undefined,
       view === 'chat' || view === 'sessions' ? state.activeSessionId : undefined,
       view === 'mail' ? state.drafts : draft, view === 'chat' ? this.start : undefined];
     if (this.previous && keys.every((key, index) => key === this.previous!.keys[index])) return this.previous.value;
     const value: RendererWorkspaceState = {
-      version: 1, windows: EMPTY, mails: EMPTY, drafts: EMPTY, chat: EMPTY, sessions: EMPTY,
+      version: 1, locale, windows: EMPTY, mails: EMPTY, drafts: EMPTY, chat: EMPTY, sessions: EMPTY,
       folder: 'Inbox', activeSessionId: '', provider: '', settings: state.settings,
     };
     if (view === 'chat' || view === 'sessions') {

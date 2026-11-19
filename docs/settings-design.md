@@ -38,6 +38,10 @@ Under **KI & Verbindung**, **Chat** and **Spracheingabe** are peer expandable gr
 
 Internal navigation already supports opening a category or a search through the host. That should not be described as a completed external URL/deep-link or import/export feature.
 
+### Interface language
+
+The immediate **Interface language** control belongs to **Appearance**. UI actions and the Assistant’s `settings.update` capability share the same persisted preference. Use stable category and section IDs for navigation from other windows, including the microphone shortcut to `ai.speech`. Localize visible labels, accessible names, search terms and displayed dates or counts together. Keep the stored data and routing IDs independent of the display language. See [choosing the interface language](getting-started.md#choose-the-interface-language).
+
 ### OVD-Bar appearance and order
 
 The **OVD-Bar** category groups orientation, size, placement and background opacity separately from foreground/idle-collapse behavior. Controls are compact, searchable and backed by the same validated settings service as the Assistant. The bar menu opens this category directly. See the [OVD-Bar guide](ovd-bar.md) for behavior, defaults and platform limits.

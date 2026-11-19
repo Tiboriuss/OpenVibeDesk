@@ -92,6 +92,10 @@ The host automatically adds discoverable actions to open each process-module vie
 
 Navigation contributions appear in the [OVD-Bar](docs/ovd-bar.md), whose orientation, size, placement, opacity and ordering belong to the Host. Modules contribute stable IDs, icons and useful titles rather than their own launcher layout or geometry. Keep views usable in narrow native windows and keep hidden settings forms' pending values intact. Attention hints use the shared contract below; they must not create an additional polling loop in the Chat renderer.
 
+### Localized contributions
+
+Follow the [localization guide](docs/localization.md) for the manifest schema, per-field fallback, live iframe language messages, Assistant discovery and package compatibility. The [Notes module](examples/notes-module/README.md) demonstrates the complete flow.
+
 ### Backend lifecycle
 
 ```js

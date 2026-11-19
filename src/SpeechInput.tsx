@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, LoaderCircle, Mic, RefreshCw, Square, X } from 'lucide-react';
 import type { SpeechPublicSettings, SpeechSessionEvent } from '../shared/speech';
 import { startSpeechCapture, type SpeechCapture } from './speech-capture';
+import { useUiLocale } from './locale';
+import { speechText } from './speech-copy';
 import './speech-input.css';
 
 export interface SpeechPreviewState {
@@ -63,6 +65,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
   onBusyChange(busy: boolean): void;
   onPreview(value: SpeechPreviewState): void;
 }) {
+  const copy = speechText[useUiLocale()];
   const [settings, setSettings] = useState<SpeechPublicSettings>();
   const [view, setView] = useState(idle);
   const [loadingSettings, setLoadingSettings] = useState(true);
@@ -261,9 +264,9 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
   const busy = ['connecting', 'recording', 'transcribing'].includes(view.status);
   const configured = settings?.enabled && settings.configured;
   return <span className="speech-input-controls">
-    {busy ? <>{view.status === 'recording' && <button type="button" className="chat-icon-button speech-stop" aria-label="Aufnahme beenden" title="Aufnahme beenden und Text übernehmen" onClick={() => void stop()}><Square size={13} fill="currentColor"/></button>}<button type="button" className="chat-icon-button" aria-label="Spracheingabe abbrechen" title="Spracheingabe abbrechen (Esc)" onClick={cancel}><X size={17}/></button></> : <>
-      {view.status === 'failed' && <>{view.canRetry && <button type="button" className="chat-icon-button" aria-label="Aufnahme erneut transkribieren" title="Aufnahme erneut transkribieren" disabled={disabled} onClick={() => void retry()}><RefreshCw size={16}/></button>}{view.text && <button type="button" className="chat-icon-button" aria-label="Erkannten Text übernehmen" title="Erkannten Text übernehmen" onClick={() => { const text = view.text; cancel(); callbacks.current.onTranscript(text); }}><Check size={17}/></button>}<button type="button" className="chat-icon-button" aria-label="Sprachhinweis schließen" title="Sprachhinweis schließen" onClick={cancel}><X size={15}/></button></>}
-      <button type="button" className="chat-icon-button" aria-label={configured ? 'Spracheingabe starten' : 'Spracheingabe einrichten'} title={configured ? `Spracheingabe · ${settings.mode === 'live' ? 'Live' : 'Nach der Aufnahme'}` : 'Spracheingabe einrichten'} disabled={disabled || loadingSettings} onClick={() => void start()}><Mic size={17}/></button>
+    {busy ? <>{view.status === 'recording' && <button type="button" className="chat-icon-button speech-stop" aria-label={copy.stop} title={copy.finish} onClick={() => void stop()}><Square size={13} fill="currentColor"/></button>}<button type="button" className="chat-icon-button" aria-label={copy.cancel} title={`${copy.cancel} (Esc)`} onClick={cancel}><X size={17}/></button></> : <>
+      {view.status === 'failed' && <>{view.canRetry && <button type="button" className="chat-icon-button" aria-label={copy.retryRecording} title={copy.retryRecording} disabled={disabled} onClick={() => void retry()}><RefreshCw size={16}/></button>}{view.text && <button type="button" className="chat-icon-button" aria-label={copy.acceptText} title={copy.acceptText} onClick={() => { const text = view.text; cancel(); callbacks.current.onTranscript(text); }}><Check size={17}/></button>}<button type="button" className="chat-icon-button" aria-label={copy.dismiss} title={copy.dismiss} onClick={cancel}><X size={15}/></button></>}
+      <button type="button" className="chat-icon-button" aria-label={configured ? copy.start : copy.setup} title={configured ? `${copy.input} · ${settings.mode === 'live' ? 'Live' : copy.after}` : copy.setup} disabled={disabled || loadingSettings} onClick={() => void start()}><Mic size={17}/></button>
     </>}
   </span>;
 }

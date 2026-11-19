@@ -69,7 +69,11 @@ A second launch reuses the existing app instance, so close the previous process 
 
 ## First run
 
-The interface currently uses primarily German labels. The names below pair the English explanation with the actual visible label.
+### Choose the interface language
+
+Open **Settings → Appearance → Interface language** (**Einstellungen → Darstellung → Oberflächensprache**) and choose **System**, **Deutsch** or **English**. Open windows update immediately. **System** uses the first supported language in your operating system’s preferred list and falls back to German. You can also ask the Assistant to change the interface language.
+
+The settings navigation, chat list and workspace recovery controls support both languages. Some forms and module views still use their original labels. Speech recognition has its own [language setting](#enable-speech-input).
 
 ### Arrange the workspace
 
@@ -95,6 +99,12 @@ API keys and ChatGPT OAuth credentials use the local encrypted credential store.
 Expand **Spracheingabe** under **KI & Verbindung**, enable it, and select a provider and **Live** or **Nach Aufnahme** mode. Save its own transcription URL, model/deployment and API key. Speech and chat providers are independent; a ChatGPT sign-in does not configure an audio API connection.
 
 Use the microphone in Chat, speak, and click Stop. The final transcript is inserted into the message draft for review and editing. Nothing is sent automatically. See [Speech input](speech-input.md) for provider compatibility, microphone permissions and cancellation.
+
+### Resume an unsent chat
+
+Open the same conversation from **Chats** to continue typing where you left off. OVD saves the text together with its selected mail, chat and module references. If saving fails, keep the window open and use **Erneut speichern** once storage is available again. After a restart, accepted messages appear in the conversation and unsent drafts return to the input field.
+
+You can also ask the Assistant to prepare text for a specific chat. Open that chat to review, edit and send it.
 
 ### Reformulate an answer
 
@@ -184,7 +194,7 @@ Important entries include:
 
 | Path under `userData` | Purpose |
 | --- | --- |
-| `workspace.sqlite` | Workspace state and chat sessions; currently unencrypted. |
+| `workspace.sqlite` | Workspace state, chat history and unsent drafts. The file is unencrypted. |
 | `ovd-bar-position.json` | Free OVD-Bar placement and its display identity; appearance preferences remain in workspace settings. |
 | `operation-journal/operations.json` | Durable agent run/action records, ordinary frozen arguments and bounded redacted results; currently unencrypted. Preserve it to retain recovery guards. |
 | `modules/<module-folder>/module.json` | Custom module discovery. |
@@ -195,9 +205,17 @@ Important entries include:
 | `credentials/vault.json` | Authenticated AES-256-GCM encrypted credentials for built-in services. |
 | `credentials/local.key` | Local encryption key; retain it with the vault when backing up the profile. |
 
-Other account and configuration files may also live here. Credentials are managed separately by the local encrypted credential store. Unsent chat composer drafts also use renderer local storage. See [architecture and persistence](architecture.md) before changing or migrating these locations.
+Other account and configuration files may also live here. Credentials are managed separately by the local encrypted credential store. See [architecture and persistence](architecture.md) before changing or migrating these locations.
 
 Full Mail text reading also uses bounded, unencrypted temporary files under the operating system's temporary directory. They are removed on expiry/close and cleaned up after interrupted runs; they are not a persistent offline cache. See [source-reading limits](architecture.md#complete-mail-and-draft-text).
+
+### If the workspace cannot open
+
+OVD shows a startup dialog before opening any windows. Use **Datenordner öffnen** to locate the profile. If the file is unreadable, correct its access rights. If it requires a newer format, use the OVD version that created it or a compatible update. For SQLite companion files, close the other application that opened the database. Keep the database and its companion files together.
+
+For a damaged or unsupported file, **Kopie sichern …** saves its original bytes to a new file outside the profile. Keep that copy private. It can contain chat history, drafts and selected reference content. Copying lets you or your IT contact investigate while the original stays in place. A full profile backup also needs the other data listed above.
+
+After correcting the problem, choose **Erneut öffnen**. OVD checks the file again before starting the workspace. **Beenden** exits from recovery. These steps work without an AI connection.
 
 ### Credential storage
 

@@ -6,7 +6,10 @@ import { AgentSettings } from './AgentSettings';
 import { DiagnosticsSettings } from './DiagnosticsSettings';
 import { NavigationOrderSettings } from './NavigationOrderSettings';
 import { OvdBarSettings } from './OvdBarSettings';
-import { settingsCategories, settingsEntries, matchesSettingsEntry, type SettingsCategoryId, type SettingsCategory, type SettingsEntry } from './settings-registry';
+import { coreSettingsCategories, settingsEntries, matchesSettingsEntry, type SettingsCategoryId, type SettingsCategory, type SettingsEntry } from './settings-registry';
+import { uiText, useUiLocale } from './locale';
+import { settingsText } from './settings-copy';
+import type { LanguagePreference } from '../shared/locale';
 import { defaultSettings } from '../shared/settings';
 import type { Settings as WorkspaceSettings } from '../shared/model';
 import type { SettingsSuggestion } from './settings-preparation';
@@ -32,7 +35,23 @@ function initialGroups(): Record<GroupId, boolean> {
   return { display: false, installed: true };
 }
 
-export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettings; onUpdate(patch: Partial<WorkspaceSettings>): void }) {
+export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettings; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
+  const locale = useUiLocale();
+  const copy = settingsText[locale];
+  const hostText = uiText[locale];
+  const coreCategories = coreSettingsCategories(locale);
+  const categoryTitle = (id: string) => coreCategories.find(item => item.id === id)!.title;
+  const appearanceChange = useRef(0);
+  const [appearanceError, setAppearanceError] = useState<'language' | 'textSize'>();
+  async function updateAppearance<K extends 'language' | 'textSize'>(key: K, value: WorkspaceSettings[K]) {
+    const revision = ++appearanceChange.current;
+    setAppearanceError(undefined);
+    try { await onUpdate({ [key]: value }); }
+    catch { if (appearanceChange.current === revision) setAppearanceError(key); }
+  }
+  const [speechNavigation, setSpeechNavigation] = useState(0);
+  const languageSelect = useRef<HTMLSelectElement>(null);
+  const [languageNavigation, setLanguageNavigation] = useState(0);
   const [preparation, setPreparation] = useState<SettingsSuggestion>();
   const preparationToken = useRef(0);
   const [search, setSearch] = useState('');
@@ -49,7 +68,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   const eventRequest = useRef(0);
   const [visitedModuleSettings, setVisitedModuleSettings] = useState<Set<string>>(() => new Set());
   const contributedSettings = moduleSettings(moduleState.modules);
-  const categories: SettingsCategory[] = [...settingsCategories, ...contributedSettings.map(item => ({ id: item.categoryId, title: item.title, description: item.description ?? '', icon: item.icon, order: item.order }))].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+  const categories: SettingsCategory[] = [...coreCategories, ...contributedSettings.map(item => ({ id: item.categoryId, title: item.title, description: item.description ?? '', icon: item.icon, order: item.order }))].sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
   const entries: SettingsEntry[] = [...settingsEntries, ...contributedSettings.map(item => ({ id: `${item.moduleId}.${item.id}`, category: item.categoryId, title: item.title, description: item.description ?? '', keywords: (item.keywords ?? []).join(' '), apply: 'save' as const }))];
   const categoryIds = useRef(new Set<string>());
   categoryIds.current = new Set(categories.map(item => item.id));
@@ -65,14 +84,19 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       const query = typeof request.search === 'string' ? request.search.slice(0, 200) : '';
       if (query.trim()) setSearchGroups({ display: true, installed: true });
       setSearch(query);
+      if (request.sectionId === 'ai.speech') setSpeechNavigation(value => value + 1);
+      if (request.sectionId === 'display.language') setLanguageNavigation(value => value + 1);
     });
     return () => { unsubscribeOpen(); unsubscribePrepare(); unsubscribeNavigate(); };
   }, []);
+  useEffect(() => {
+    if (languageNavigation) languageSelect.current?.focus();
+  }, [languageNavigation]);
   useEffect(() => { if (!moduleState.loading && !categoryIds.current.has(active)) setActive('ai'); }, [moduleState.loading, moduleState.modules, active]);
   async function toggleModule(id: string, enabled: boolean) {
     setModuleBusy(id); setModuleError('');
     try { await window.workspace.setModuleEnabled(id, enabled); }
-    catch (reason) { setModuleError(reason instanceof Error ? reason.message : 'Modulzustand konnte nicht geändert werden.'); }
+    catch (reason) { setModuleError(reason instanceof Error ? reason.message : copy.toggleFailed); }
     finally { setModuleBusy(undefined); }
   }
   const searching = search.trim().length > 0;
@@ -86,7 +110,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
     try {
       const result = await window.workspace.getModuleEventStatus();
       if (request === eventRequest.current) { setEventStatus(result); setEventStatusError(''); }
-    } catch { if (request === eventRequest.current) setEventStatusError('Die Ereigniszustellung konnte nicht geladen werden.'); }
+    } catch { if (request === eventRequest.current) setEventStatusError(copy.eventsFailed); }
   }
   useEffect(() => {
     if (!moduleSettingsVisible) return;
@@ -98,7 +122,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   async function setSubscriptions(moduleId: string, topics: string[]) {
     setModuleBusy(moduleId); setModuleError(''); eventRequest.current++;
     try { await window.workspace.setModuleEventSubscriptions(moduleId, topics); await refreshEventStatus(); }
-    catch (reason) { setModuleError(reason instanceof Error ? reason.message : 'Ereignis-Abonnements konnten nicht gespeichert werden.'); }
+    catch (reason) { setModuleError(reason instanceof Error ? reason.message : copy.subscriptionsFailed); }
     finally { setModuleBusy(undefined); }
   }
   const anyResults = entries.some(entry => matchesSettingsEntry(entry, search, categories));
@@ -137,60 +161,68 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
     });
   }
 
+  const matches = (id: string) => !searching || matchesSettingsEntry(settingsEntries.find(item => item.id === id)!, search, categories);
   const isOpen = (id: GroupId) => searching ? searchGroups[id] : groups[id];
   return <div className="settings-view">
     <aside className="settings-sidebar">
-      <div className="settings-sidebar-title"><span className="settings-view-icon"><Settings size={18} /></span><h1>Einstellungen</h1></div>
-      <div className="settings-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label="Einstellungen durchsuchen" placeholder="Einstellungen suchen …" value={search} onChange={event => updateSearch(event.target.value)} />{search && <button type="button" aria-label="Suche löschen" title="Suche löschen" onClick={() => updateSearch('')}><X size={15} /></button>}</div>
-      <nav className="settings-category-nav" aria-label="Einstellungskategorien">{categories.map(item => {
+      <div className="settings-sidebar-title"><span className="settings-view-icon"><Settings size={18} /></span><h1>{hostText.settings}</h1></div>
+      <div className="settings-search"><Search size={16} aria-hidden="true" /><input type="search" aria-label={copy.search} placeholder={copy.searchPlaceholder} value={search} onChange={event => updateSearch(event.target.value)} />{search && <button type="button" aria-label={copy.clearSearch} title={copy.clearSearch} onClick={() => updateSearch('')}><X size={15} /></button>}</div>
+      <nav className="settings-category-nav" aria-label={copy.categories}>{categories.map(item => {
         const Icon = icons[item.id as keyof typeof icons] ?? moduleIcon(item.icon);
         const owner = contributedSettings.find(category => category.categoryId === item.id)?.moduleId;
         const notices = owner ? moduleAttention.filter(notice => notice.moduleId === owner) : [];
-        const label = notices.length ? `${item.title} · ${notices.length} ${notices.length === 1 ? 'Hinweis' : 'Hinweise'}` : item.title;
+        const label = notices.length ? `${item.title} · ${hostText.notices(notices.length)}` : item.title;
         return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-label={label} title={notices.length ? notices.map(notice => notice.message).join(' · ') : undefined} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><span className="module-attention-icon"><Icon size={16} aria-hidden="true" />{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span><span>{item.title}</span></button>;
       })}</nav>
     </aside>
     <main className="settings-view-content" ref={content}>
-      <header className="settings-content-heading"><h2>{searching ? 'Suchergebnisse' : category.title}</h2><p>{searching ? `Einstellungen für „${search.trim()}“` : category.description}</p></header>
-      {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>Keine Einstellung gefunden</strong><span>Versuche einen anderen Suchbegriff.</span></div>}
-      <section hidden={!visible('ai')} aria-label="KI & Verbindung">
-        {searching && <h3 className="settings-result-category">KI & Verbindung</h3>}
+      <header className="settings-content-heading"><h2>{searching ? copy.results : category.title}</h2><p>{searching ? copy.searchFor(search.trim()) : category.description}</p></header>
+      {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>{copy.noResults}</strong><span>{copy.searchAgain}</span></div>}
+      <section hidden={!visible('ai')} aria-label={categoryTitle('ai')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('ai')}</h3>}
         <div hidden={searching && !settingsEntries.some(entry => entry.category === 'ai' && entry.id !== 'ai.speech' && matchesSettingsEntry(entry, search))}><AiSettings preparation={preparation?.kind === 'ai' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('ai'); setSearch(''); }} /></div>
-        <SpeechSettings preparation={preparation?.kind === 'speech' ? preparation : undefined} searchQuery={search} />
+        <SpeechSettings navigationRequest={speechNavigation} preparation={preparation?.kind === 'speech' ? preparation : undefined} searchQuery={search} />
       </section>
-      <section hidden={!visible('agent')} aria-label="Agent">
-        {searching && <h3 className="settings-result-category">Agent</h3>}
+      <section hidden={!visible('agent')} aria-label={categoryTitle('agent')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('agent')}</h3>}
         <AgentSettings preparation={preparation?.kind === 'agent' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('agent'); setSearch(''); }} />
       </section>
-      <section hidden={!visible('display')} aria-label="Darstellung">
-        {searching && <h3 className="settings-result-category">Darstellung</h3>}
-        <details className="workspace-settings-group" open={isOpen('display')}>
-          <summary onClick={event => { event.preventDefault(); toggleGroup('display'); }}><span><strong>Textgröße</strong><small>Aktuell: {settings.textSize === 'large' ? 'Größer' : 'Standard'}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="text-size">Textgröße</label></div><select id="text-size" value={settings.textSize} onChange={event => onUpdate({ textSize: event.target.value as WorkspaceSettings['textSize'] })}><option value="standard">Standard</option><option value="large">Größer</option></select></div>{settings.textSize !== defaultSettings.textSize && <button type="button" className="settings-reset" onClick={() => onUpdate({ textSize: defaultSettings.textSize })}><RotateCcw size={13} /> Auf Standard zurücksetzen</button>}</div>
+      <section hidden={!visible('display')} aria-label={categoryTitle('display')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('display')}</h3>}
+        <div className="workspace-settings-group language-setting" hidden={!matches('display.language')}>
+          <label htmlFor="interface-language">{copy.language}</label>
+          <select ref={languageSelect} id="interface-language" value={settings.language ?? 'system'} onChange={event => void updateAppearance('language', event.target.value as LanguagePreference)}>
+            <option value="system">{copy.system}</option><option lang="de" value="de">Deutsch</option><option lang="en" value="en">English</option>
+          </select>
+          {appearanceError === 'language' && <p className="settings-feedback error" role="alert">{copy.languageSaveFailed}</p>}
+        </div>
+        <details className="workspace-settings-group" open={isOpen('display')} hidden={!matches('display.textSize')}>
+          <summary onClick={event => { event.preventDefault(); toggleGroup('display'); }}><span><strong>{copy.textSize}</strong><small>{settings.textSize === 'large' ? copy.large : copy.standard}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="text-size">{copy.textSize}</label></div><select id="text-size" value={settings.textSize} onChange={event => void updateAppearance('textSize', event.target.value as WorkspaceSettings['textSize'])}><option value="standard">{copy.standard}</option><option value="large">{copy.large}</option></select></div>{settings.textSize !== defaultSettings.textSize && <button type="button" className="settings-reset" onClick={() => void updateAppearance('textSize', defaultSettings.textSize)}><RotateCcw size={13} /> {copy.reset}</button>}{appearanceError === 'textSize' && <p className="settings-feedback error" role="alert">{copy.textSizeSaveFailed}</p>}</div>
         </details>
       </section>
-      <section hidden={!visible('dock')} aria-label="OVD-Bar">
-        {searching && <h3 className="settings-result-category">OVD-Bar</h3>}
+      <section hidden={!visible('dock')} aria-label={categoryTitle('dock')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('dock')}</h3>}
         <OvdBarSettings settings={settings} searchQuery={search}/>
         <NavigationOrderSettings settings={settings} modules={moduleState.modules} loading={moduleState.loading} searchQuery={search}/>
       </section>
-      <section hidden={!visible('diagnostics')} aria-label="Diagnose">
-        {searching && <h3 className="settings-result-category">Diagnose</h3>}
+      <section hidden={!visible('diagnostics')} aria-label={categoryTitle('diagnostics')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('diagnostics')}</h3>}
         <DiagnosticsSettings active={visible('diagnostics')} enabled={settings.diagnosticsEnabled ?? false} searchQuery={search} />
       </section>
-      <section hidden={!visible('modules')} aria-label="Module" className="module-management">
-        {searching && <h3 className="settings-result-category">Module</h3>}
+      <section hidden={!visible('modules')} aria-label={categoryTitle('modules')} className="module-management">
+        {searching && <h3 className="settings-result-category">{categoryTitle('modules')}</h3>}
         {(moduleError || moduleState.error) && <p className="settings-feedback error" role="alert">{moduleError || moduleState.error}</p>}
         <details className="workspace-settings-group installed-module-settings" open={isOpen('installed')} hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
-        <summary onClick={event => { event.preventDefault(); toggleGroup('installed'); }}><span><strong>Installierte Module</strong><small>{moduleState.loading ? 'Wird geladen …' : `${moduleState.modules.filter(module => module.status === 'ready').length} aktiv · ${moduleState.modules.length} installiert`}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+        <summary onClick={event => { event.preventDefault(); toggleGroup('installed'); }}><span><strong>{copy.installed}</strong><small>{moduleState.loading ? copy.loading : copy.moduleCount(moduleState.modules.filter(module => module.status === 'ready').length, moduleState.modules.length)}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
         <div className="installed-module-list">
-        {moduleState.loading && <p role="status">Module werden geladen …</p>}
+        {moduleState.loading && <p role="status">{copy.loadingModules}</p>}
         {eventStatusError && <p className="module-event-error" role="alert">{eventStatusError}</p>}
         {moduleState.modules.map(module => {
           const runtimeError = module.status === 'invalid' && !!module.manifest;
           const canDisable = module.status === 'ready' || runtimeError;
-          const statusLabel = runtimeError ? 'Modulfehler' : { ready: 'Aktiv', disabled: 'Deaktiviert', incompatible: 'Nicht kompatibel', invalid: 'Ungültiges Modul', approval_required: 'Freigabe erforderlich', unsupported: 'Nicht unterstützt' }[module.status];
-          return <div className="module-management-row" key={module.id}><Package size={17} aria-hidden="true" /><div><div className="installed-module-heading"><strong>{module.title}</strong><span className="module-status">{statusLabel}{module.required ? ' · Pflichtmodul' : ''}</span></div><details className="installed-module-details" open={searching || undefined}><summary>Details</summary><small>{module.id} · {module.version || 'Unbekannte Version'} · {module.source === 'builtin' ? 'Mitgeliefert' : 'Zusatzmodul'}</small><p>{module.description}</p></details>{module.reason && <p className="installed-module-reason">{module.reason}</p>}{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && (['ready', 'disabled', 'approval_required'].includes(module.status) || runtimeError) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, !canDisable)}>{moduleBusy === module.id ? 'Wird geändert …' : canDisable ? 'Deaktivieren' : module.status === 'approval_required' ? 'Freigeben & aktivieren' : 'Aktivieren'}</button>}</div>;
+          const statusLabel = runtimeError ? copy.moduleError : copy.status[module.status];
+          return <div className="module-management-row" key={module.id}><Package size={17} aria-hidden="true" /><div><div className="installed-module-heading"><strong>{module.title}</strong><span className="module-status">{statusLabel}{module.required && ` · ${copy.required}`}</span></div><details className="installed-module-details" open={searching || undefined}><summary>{copy.details}</summary><small>{module.id} · {module.version || copy.unknownVersion} · {module.source === 'builtin' ? copy.bundled : copy.additional}</small><p>{module.description}</p></details>{module.reason && <p className="installed-module-reason">{module.reason}</p>}{!!module.manifest?.contributions.events?.subscriptions.length && <ModuleEventSettings module={module} status={eventStatus.find(item => item.moduleId === module.id)} busy={!!moduleBusy} onChange={topics => void setSubscriptions(module.id, topics)} />}</div>{!module.required && (['ready', 'disabled', 'approval_required'].includes(module.status) || runtimeError) && <button type="button" disabled={!!moduleBusy} onClick={() => void toggleModule(module.id, !canDisable)}>{moduleBusy === module.id ? copy.changing : canDisable ? copy.disable : module.status === 'approval_required' ? copy.approve : copy.enable}</button>}</div>;
         })}
         </div>
         </details>
@@ -198,7 +230,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       </section>
       {contributedSettings.filter(item => visitedModuleSettings.has(item.categoryId)).map(item => <section key={`${item.moduleId}:${item.id}`} hidden={!visible(item.categoryId)} aria-label={item.title}>
         {searching && <h3 className="settings-result-category">{item.title}</h3>}
-        <item.Component preparation={preparation} searchQuery={search} />
+        <item.Component title={item.title} preparation={preparation} searchQuery={search} />
       </section>)}
     </main>
   </div>;

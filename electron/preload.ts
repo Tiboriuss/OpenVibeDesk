@@ -1,18 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { WorkspaceApi } from '../shared/model';
+import type { WorkspaceSaveStatus } from '../shared/workspace-save';
 
-const pendingReferences: string[] = [];
 let prepareMcpServer: ((request: import('../shared/mcp').McpPrepareRequest) => void) | undefined;
 const pendingMcpPreparations: import('../shared/mcp').McpPrepareRequest[] = [];
 ipcRenderer.on('mcp:prepare-server', (_event, request: import('../shared/mcp').McpPrepareRequest) => { if (prepareMcpServer) prepareMcpServer(request); else { pendingMcpPreparations.push(request); if (pendingMcpPreparations.length > 20) pendingMcpPreparations.shift(); } });
-const pendingModuleReferences: import('../shared/references').ModuleReferenceSummary[] = [];
-let moduleReferenceListener: ((reference: import('../shared/references').ModuleReferenceSummary) => void) | undefined;
-ipcRenderer.on('chat:reference-module', (_event, reference: import('../shared/references').ModuleReferenceSummary) => { if (moduleReferenceListener) moduleReferenceListener(reference); else { pendingModuleReferences.push(reference); if (pendingModuleReferences.length > 20) pendingModuleReferences.shift(); } });
-let referenceListener: ((id: string) => void) | undefined;
-ipcRenderer.on('chat:reference-session', (_event, id: string) => { if (referenceListener) referenceListener(id); else pendingReferences.push(id); });
-const pendingForkDrafts: import('../shared/model').ForkChatResult[] = [];
-let forkDraftListener: ((draft: import('../shared/model').ForkChatResult) => void) | undefined;
-ipcRenderer.on('chat:fork-draft', (_event, draft: import('../shared/model').ForkChatResult) => { if (forkDraftListener) forkDraftListener(draft); else { pendingForkDrafts.push(draft); if (pendingForkDrafts.length > 20) pendingForkDrafts.shift(); } });
+let prepareChatClose: (() => Promise<boolean>) | undefined;
+ipcRenderer.on('chat:composer:prepare-close', (_event, token: string) => {
+  void Promise.resolve().then(() => prepareChatClose?.() ?? true).then(
+    ready => ipcRenderer.send('chat:composer:close-ready', token, ready),
+    () => ipcRenderer.send('chat:composer:close-ready', token, false)
+  );
+});
 let chatModelListener: ((tier: import('../shared/model').ModelTier) => void) | undefined;
 let pendingChatModel: import('../shared/model').ModelTier | undefined;
 ipcRenderer.on('chat:use-model', (_event, tier: import('../shared/model').ModelTier) => { if (chatModelListener) chatModelListener(tier); else pendingChatModel = tier; });
@@ -52,6 +51,13 @@ let pendingMailQuery: { result: import('../shared/mail-query').MailQueryResult; 
 ipcRenderer.on('mail:query-results', (_event, payload) => { if (showMailQuery) showMailQuery(payload); else pendingMailQuery = payload; });
 
 const api: WorkspaceApi = {
+  getWorkspaceSaveStatus: () => ipcRenderer.invoke('workspace:save-status'),
+  retryWorkspaceSave: () => ipcRenderer.invoke('workspace:retry-save'),
+  onWorkspaceSaveStatus: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, status: WorkspaceSaveStatus) => callback(status);
+    ipcRenderer.on('workspace:save-status', listener);
+    return () => ipcRenderer.removeListener('workspace:save-status', listener);
+  },
   showBarMenu: () => ipcRenderer.invoke('ovd-bar:menu'),
   revealBar: () => ipcRenderer.invoke('ovd-bar:reveal'),
   setBarInteraction: value => ipcRenderer.send('ovd-bar:interaction', value),
@@ -83,7 +89,6 @@ const api: WorkspaceApi = {
   filesReference: id => ipcRenderer.invoke('files:reference', id),
   getModuleReference: reference => ipcRenderer.invoke('chat:module-reference', reference),
   referenceModuleResource: (moduleId, reference) => ipcRenderer.invoke('modules:reference', moduleId, reference),
-  onModuleReference: callback => { moduleReferenceListener = callback; for (const reference of pendingModuleReferences.splice(0)) callback(reference); return () => { if (moduleReferenceListener === callback) moduleReferenceListener = undefined; }; },
   queryMail: request => ipcRenderer.invoke('mail:query', request),
   countMail: request => ipcRenderer.invoke('mail:count', request),
   onMailQueryResults: callback => { showMailQuery = callback; if (pendingMailQuery) { const event = pendingMailQuery; pendingMailQuery = undefined; callback(event); } return () => { if (showMailQuery === callback) showMailQuery = undefined; }; },
@@ -115,6 +120,19 @@ const api: WorkspaceApi = {
   listChatSessions: input => ipcRenderer.invoke('chat:sessions:list', input),
   loadEarlierChat: () => ipcRenderer.invoke('chat:history:earlier'),
   committedChatRequests: ids => ipcRenderer.invoke('chat:requests:committed', ids),
+  getChatComposer: id => ipcRenderer.invoke('chat:composer:get', id),
+  setChatComposer: (write, protectLocal) => ipcRenderer.invoke('chat:composer:set', write, protectLocal),
+  flushChatComposer: (id, revision) => ipcRenderer.invoke('chat:composer:flush', id, revision),
+  onPrepareChatClose: handler => {
+    prepareChatClose = handler;
+    return () => { if (prepareChatClose === handler) prepareChatClose = undefined; };
+  },
+  setChatComposerBlocked: blocked => ipcRenderer.send('chat:composer:blocked', blocked),
+  onChatComposerChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: import('../shared/chat-composer').ChatComposerSnapshot) => callback(snapshot);
+    ipcRenderer.on('chat:composer:changed', listener);
+    return () => ipcRenderer.removeListener('chat:composer:changed', listener);
+  },
   onStateChanged: callback => { const listener = (_event: Electron.IpcRendererEvent, state: import('../shared/model').RendererWorkspaceState) => callback(state); ipcRenderer.on('workspace:changed', listener); return () => ipcRenderer.removeListener('workspace:changed', listener); },
   dispatchAction: action => ipcRenderer.invoke('workspace:action', action),
   updateSettings: patch => ipcRenderer.invoke('settings:update', patch),
@@ -195,9 +213,7 @@ const api: WorkspaceApi = {
   renameChatSession: (id, title) => ipcRenderer.invoke('chat:session:rename', id, title),
   forkChat: (id, replacementText) => ipcRenderer.invoke('chat:session:fork', id, replacementText),
   referenceChatSession: id => ipcRenderer.invoke('chat:session:reference', id),
-  onSessionReference: callback => { referenceListener = callback; for (const id of pendingReferences.splice(0)) callback(id); return () => { if (referenceListener === callback) referenceListener = undefined; }; },
   onChatModel: callback => { chatModelListener = callback; if (pendingChatModel) { const tier = pendingChatModel; pendingChatModel = undefined; callback(tier); } return () => { if (chatModelListener === callback) chatModelListener = undefined; }; },
-  onForkDraft: callback => { forkDraftListener = callback; for (const draft of pendingForkDrafts.splice(0)) callback(draft); return () => { if (forkDraftListener === callback) forkDraftListener = undefined; }; },
   onChatRequestCommitted: callback => { chatCommitListener = callback; for (const id of pendingChatCommits) callback(id); pendingChatCommits.clear(); return () => { if (chatCommitListener === callback) chatCommitListener = undefined; }; },
   getMailReference: id => ipcRenderer.invoke('chat:mail-reference', id),
   sendChat: (text, emailRef, options) => ipcRenderer.invoke('chat:send', text, emailRef, options),

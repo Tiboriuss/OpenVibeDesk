@@ -1,24 +1,29 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import { Ellipsis, GripHorizontal, GripVertical } from 'lucide-react';
+import { CircleAlert, Ellipsis, GripHorizontal, GripVertical } from 'lucide-react';
 import type { Settings } from '../shared/model';
 import type { ModuleAttention } from '../shared/module-attention';
 import { resolveBarSettings } from '../shared/ovd-bar';
+import { uiText, useUiLocale } from './locale';
 import { BrandMark } from './BrandMark';
 import { ModuleAttentionDot } from './ModuleAttentionDot';
 import { moduleIcon, type WorkspaceNavigationEntry } from './module-registry';
 import './ovd-bar.css';
 
 const MENU_ID = '__ovd_bar_menu__';
+const SAVE_ISSUE_ID = '__workspace_save_issue__';
 
 /** Presentation only: module navigation and Bar configuration keep their Host services. */
-export function OvdBar({ settings, entries, attention, error, onNavigate, onError }: {
+export function OvdBar({ settings, entries, attention, error, saveIssue, onShowSaveIssue, onNavigate, onError }: {
   settings?: Settings;
   entries: WorkspaceNavigationEntry[];
   attention: ModuleAttention[];
   error?: string;
+  saveIssue?: string;
+  onShowSaveIssue(): void;
   onNavigate(entry: WorkspaceNavigationEntry, notices: ModuleAttention[]): Promise<void>;
   onError(message: string): void;
 }) {
+  const copy = uiText[useUiLocale()];
   const bar = resolveBarSettings(settings);
   const horizontal = bar.barOrientation === 'horizontal';
   const [collapsed, setCollapsed] = useState(false);
@@ -28,7 +33,7 @@ export function OvdBar({ settings, entries, attention, error, onNavigate, onErro
   const interaction = useRef({ hovered: false, focused: false });
   const revealFocus = useRef(false);
   const revealPointerArea = useRef<{ left: number; top: number; right: number; bottom: number } | undefined>(undefined);
-  const ids = [...entries.map(item => item.id), MENU_ID];
+  const ids = [...(saveIssue ? [SAVE_ISSUE_ID] : []), ...entries.map(item => item.id), MENU_ID];
   const activeId = focusedId && ids.includes(focusedId) ? focusedId : ids[0];
 
   function reportInteraction(patch: Partial<{ hovered: boolean; focused: boolean }>) {
@@ -97,6 +102,7 @@ export function OvdBar({ settings, entries, attention, error, onNavigate, onErro
 
   const iconSize = Math.round(bar.barSize * .55);
   const visibleError = error || presentationError;
+  const revealLabel = saveIssue ? copy.revealBarSave : copy.revealBar;
   const style = { '--bar-size': `${bar.barSize}px`, '--bar-icon-size': `${iconSize}px`, '--bar-opacity': bar.barOpacity / 100 } as CSSProperties;
   return <div ref={element} className={`ovd-bar ${horizontal ? 'is-horizontal' : 'is-vertical'}${collapsed ? ' is-collapsed' : ''}`} style={style}
     role="toolbar" aria-label="OVD-Bar" aria-orientation={bar.barOrientation}
@@ -126,13 +132,17 @@ export function OvdBar({ settings, entries, attention, error, onNavigate, onErro
     }}
     onFocusCapture={() => reportInteraction({ focused: true })} onKeyDown={onKeyDown}
     onContextMenu={event => { event.preventDefault(); void showMenu(); }}>
-    {collapsed ? <button type="button" className="ovd-bar-button ovd-bar-reveal" aria-label="OVD-Bar einblenden" title="OVD-Bar einblenden" onClick={() => { revealPointerArea.current = undefined; void reveal(); }} onFocus={() => void reveal()}><BrandMark variant="app" size={Math.round(bar.barSize * .75)} />{attention.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...attention.map(notice => notice.pulseUntil))} />}</button> : <>
-      <div className="ovd-bar-grip" title="OVD-Bar verschieben" aria-hidden="true">{horizontal ? <GripVertical size={13} /> : <GripHorizontal size={13} />}</div>
-      <div ref={navigation} className="ovd-bar-navigation">{entries.map(entry => {
+    {collapsed ? <button type="button" className="ovd-bar-button ovd-bar-reveal" aria-label={revealLabel} title={revealLabel} onClick={() => { revealPointerArea.current = undefined; void reveal(); }} onFocus={() => void reveal()}><BrandMark variant="app" size={Math.round(bar.barSize * .75)} />{attention.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...attention.map(notice => notice.pulseUntil))} />}{saveIssue && <span className="ovd-bar-error ovd-bar-save-dot" aria-hidden="true" />}</button> : <>
+      <div className="ovd-bar-grip" title={copy.moveBar} aria-hidden="true">{horizontal ? <GripVertical size={13} /> : <GripHorizontal size={13} />}</div>
+      <div ref={navigation} className="ovd-bar-navigation">
+      {saveIssue && <button type="button" className="ovd-bar-button ovd-bar-save-issue" data-bar-id={SAVE_ISSUE_ID}
+        tabIndex={activeId === SAVE_ISSUE_ID ? 0 : -1} aria-label={copy.showSaveError} title={`${copy.showSaveError} · ${saveIssue}`}
+        onFocus={() => setFocusedId(SAVE_ISSUE_ID)} onClick={onShowSaveIssue}><CircleAlert size={iconSize} aria-hidden="true" /></button>}
+      {entries.map(entry => {
         const Icon = moduleIcon(entry.icon);
         const primary = entries.find(item => item.moduleId === entry.moduleId)?.id === entry.id;
         const notices = primary ? attention.filter(notice => notice.moduleId === entry.moduleId) : [];
-        const label = notices.length ? `${entry.title} · ${notices.length} ${notices.length === 1 ? 'Hinweis' : 'Hinweise'}: ${notices.map(notice => notice.message).join(' · ')}` : entry.title;
+        const label = notices.length ? `${entry.title} · ${copy.notices(notices.length)}: ${notices.map(notice => notice.message).join(' · ')}` : entry.title;
         return <button type="button" className={`ovd-bar-button${entry.id === 'assistant' ? ' ovd-bar-assistant' : ''}`} key={entry.id} data-bar-id={entry.id}
           tabIndex={activeId === entry.id ? 0 : -1} aria-label={label} title={label}
           onFocus={() => { setFocusedId(entry.id); }}
@@ -141,9 +151,10 @@ export function OvdBar({ settings, entries, attention, error, onNavigate, onErro
         </button>;
       })}</div>
       <button type="button" className="ovd-bar-button ovd-bar-menu" data-bar-id={MENU_ID} tabIndex={activeId === MENU_ID ? 0 : -1}
-        aria-label="OVD-Bar-Menü" title={visibleError ? `OVD-Bar-Menü · ${visibleError}` : 'OVD-Bar-Menü'} aria-haspopup="menu"
+        aria-label={copy.barMenu} title={visibleError ? `${copy.barMenu} · ${visibleError}` : copy.barMenu} aria-haspopup="menu"
         onFocus={() => setFocusedId(MENU_ID)} onClick={() => void showMenu()}><Ellipsis size={iconSize} aria-hidden="true" />{visibleError && <span className="ovd-bar-error" aria-hidden="true" />}</button>
     </>}
     {visibleError && <span className="sr-only" role="alert">{visibleError}</span>}
+    {saveIssue && <span className="sr-only" role="alert">{saveIssue}</span>}
   </div>;
 }

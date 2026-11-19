@@ -4,7 +4,7 @@ For the prioritized implementation backlog and acceptance gates, see the [matura
 
 [Documentation](README.md) · [Contributing](../CONTRIBUTING.md#building-modules) · [Desktop app decision](decisions/0001-local-desktop.md)
 
-The current Host includes whole-request context budgets (R02), complete bounded Mail/draft reads (R03), measured window/cache retention changes (R04), the configurable OVD-Bar, and separately configured speech input. Workspace-wide visible save recovery remains the next reliability package, R05; the existing store still exports the complete database.
+The current Host includes whole-request context budgets (R02), complete bounded Mail/draft reads (R03), measured window/cache retention changes (R04), the configurable OVD-Bar, and separately configured speech input. R05 covers visible workspace save recovery. The existing store still exports the complete database.
 
 ## Processes and trust boundaries
 
@@ -191,7 +191,7 @@ Approved process modules can supply optional `prepareOperation` and `reconcile` 
 
 The Mail adapter freezes omitted draft/mail/source/account selections and hashes business-content/configuration revisions. Send retry binding excludes status/error/timestamp changes caused by the attempt itself; filing binds its immutable outgoing Message-ID and fixed folder rather than mutable filing outcomes. Its status hook checks existing SMTP and Sent-copy guards without SMTP or APPEND: confirmed acceptance/filing is reused, definite acknowledged non-acceptance or an unattempted filing can establish no effect, and ambiguous outcomes remain unknown. An explicit Sent-filing operation retains its existing Message-ID reconciliation rules and never resends. Audited `mail.search` and `mail.query` are trusted business reads: they can present results in the Mail window but do not modify mailbox content, mark mail read or send messages, so a failed search can be continued under current access checks. This classification does not turn R01a into a tool-enabled path. Other Mail mutations without an authoritative reconciliation path remain blocked when uncertain.
 
-This is not a transaction spanning OVD and a remote service, an exactly-once guarantee or complete workspace durability. Broader save feedback/recovery remains R05; backup/restore and retention remain later packages. The journal protects its own records independently of ordinary workspace autosave.
+Remote effects and local acknowledgements can diverge. The journal protects its own records independently of workspace checkpoints and [startup recovery](#workspace-startup-recovery). Full-profile backup, restore and retention are planned in R09.
 
 ### Third-party module contract
 
@@ -259,13 +259,31 @@ This reduces window traffic without changing SQLite storage or provider context.
 
 ## State model
 
-[`WorkspaceState`](../shared/model.ts) includes window positions, retained sample mail, drafts, settings and chat sessions. [`electron/store.ts`](../electron/store.ts) stores it as a JSON value in a local SQLite table. Unsent chat text and pending mail/module reference metadata are also kept in renderer-local storage for recovery; pending chat-reference selection is retained per session in the open chat window. The SQLite file is not encrypted. Although fetched IMAP messages are cached only in memory, local drafts, explicitly sent reference snapshots, chat responses and bounded answer evidence can contain real mail or file content. Snapshots preserve bounded text and metadata for history and forks after a restart. Downloaded attachments are written to the user's selected location.
+[`WorkspaceState`](../shared/model.ts) includes window positions, retained sample mail, drafts, settings and chat sessions. [`electron/store.ts`](../electron/store.ts) stores it as a JSON value in a local SQLite table. Unsent Chat text and its selected reference metadata are stored together under their session ID in the same workspace. The SQLite file is not encrypted. Although fetched IMAP messages are cached only in memory, local drafts, explicitly sent reference snapshots, chat responses and bounded answer evidence can contain real mail or file content. Snapshots preserve bounded text and metadata for history and forks after a restart. Downloaded attachments are written to the user's selected location.
 
 Workspace writes capture their serialized snapshot when requested, then run in order. The store writes the exported SQLite bytes to a temporary file, flushes that file, atomically replaces `workspace.sqlite`, and flushes the directory entry on non-Windows platforms before acknowledging success. This strengthens the existing storage path without introducing a new database schema.
 
-That store acknowledgement is not yet a uniform UI durability contract. Draft revisions and the operation journal have dedicated save/recovery semantics, and general settings publish only after their queued write succeeds. Other workspace mutations use delayed `commit`/stream checkpoints whose failures can still be logged without a shared visible retry state. Renderer-local composer recovery has its own limits. [R05](maturation-plan.md#r05-visible-durability-for-the-whole-workspace) extends revision-aware saving, failure presentation and close/restart recovery across these remaining paths; a successful generic IPC response must not be interpreted as a blanket disk-durability guarantee.
+The [checkpoint coordinator](../electron/workspace-checkpoints.ts) tracks the current and last acknowledged workspace revisions within each app process. It coalesces ordinary edits for 250 ms and schedules a checkpoint within two seconds of sustained changes when the writer is available. On failure, native workspace panels show a compact notice and the OVD-Bar offers a route to it. The Assistant discovers `workspace.save_status` and `workspace.retry_save` through its module tools. Retry saves the current in-memory workspace to disk. The UI can initiate recovery even when the store cannot yet accept a new Chat request. If a failure leaves an atomic replacement uncertain, the store blocks further writes. On Quit, the user can then keep OVD open or explicitly exit with a warning that recent edits may be lost.
+
+This status covers the workspace, including unsent Chat drafts. Mail drafts and the operation journal keep their own acknowledgements, and settings forms have individual save boundaries. Startup recovery handles a workspace that fails validation before the first checkpoint.
 
 Before a persistent mail cache is introduced, the plan calls for a relational schema for accounts, folders, messages, MIME parts, threads, drafts, attachments and sync cursors, with versioned, transactional migrations. Large attachments belong in managed files, with metadata and references in SQLite. The current `sql.js` implementation loads/exports the complete database and atomically writes its file; it is not yet the planned large-mailbox store.
+
+### Workspace startup recovery
+
+The [store](../electron/store.ts) opens the SQLite image in memory and validates the saved workspace before handing it to the host. The [startup dialog](../electron/workspace-startup.ts) runs before the operation journal, workspace windows and module activation. An inaccessible, damaged or unsupported file stays in place. The user can locate the profile, save a raw copy of a damaged or unsupported database, and retry after addressing the cause. Retry reopens the original path and requires an existing workspace. A genuinely new profile follows the ordinary first-launch path.
+
+Legacy version 1 profiles with a flat chat history use the existing session migration. Recovery never schedules a past provider request, outgoing message or agent action. A raw copy covers the workspace database only. Profile-wide backup, restore and reconciliation of action receipts belong to [R09](maturation-plan.md#r09-backup-restore-and-data-retention). [User recovery steps](getting-started.md#if-the-workspace-cannot-open)
+
+### Chat draft recovery
+
+Each conversation has a versioned draft containing its input text, selected mail, referenced chat and module reference summaries. The chat window reads this record by session ID. A write specifies the revision it edited so a stale window or Assistant action cannot replace a newer edit. Other windows receive their usual projections. Draft text enters the model context only when sent or explicitly retrieved through a tool.
+
+The Assistant can inspect one chat with `chats.read_draft`. Longer drafts are returned in pages bound to the same revision. `chats.set_draft_text` edits only the text at the expected revision and waits for the workspace checkpoint. The selected references stay attached for the user to review before sending.
+
+Submitting a draft uses a client request ID. Acceptance stores the user message and clears the submitted draft together, before the provider is contacted. Closing or restarting OVD can therefore restore pending input or show the accepted message without replaying the request. For a newly selected IMAP message, the host keeps the source account, connection identity, folder, UID validity and UID so the Mail module can reopen the same message after restart. A fork points back to its saved source message. Selecting an instruction reference still requires the owning module to pass its current checks when sending.
+
+On first opening an older conversation, the Chat window imports its browser-stored draft and checks any pending client request IDs against accepted messages. The workspace records fingerprints of the imported values alongside the draft. Cleanup removes matching browser entries after a disk acknowledgement and can resume after a crash, including after the draft has been sent. If a legacy draft and the current draft both contain different edits, the user can compare them and choose which to keep.
 
 ### Draft persistence and recovery
 

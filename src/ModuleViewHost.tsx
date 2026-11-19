@@ -1,17 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { moduleReferenceInputSchema } from '../shared/references';
+import { useUiLocale } from './locale';
 import './module-host.css';
 
 /** External module HTML runs in an opaque iframe; only declared module commands cross the bridge. */
 export function ModuleViewHost({ moduleId, viewId, title }: { moduleId: string; viewId: string; title: string }) {
+  const locale = useUiLocale();
   const frame = useRef<HTMLIFrameElement>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
+  const currentLocale = useRef(locale);
+  currentLocale.current = locale;
+  function shareLocale() {
+    frame.current?.contentWindow?.postMessage({ type: 'ovd:locale', locale: currentLocale.current }, '*');
+  }
+  useEffect(() => { shareLocale(); }, [locale]);
   const inFlight = useRef(new Set<string>());
   useEffect(() => {
     let active = true;
     setReady(false); setError(''); inFlight.current.clear();
-    void window.workspace.readModuleView(moduleId, viewId).then(() => { if (active) setReady(true); }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Modulansicht konnte nicht geladen werden.'); });
+    void window.workspace.readModuleView(moduleId, viewId).then(() => { if (active) setReady(true); }).catch(reason => { if (active) setError(reason instanceof Error && reason.message ? reason.message : 'load'); });
     return () => { active = false; };
   }, [moduleId, viewId]);
   useEffect(() => {
@@ -19,6 +27,8 @@ export function ModuleViewHost({ moduleId, viewId, title }: { moduleId: string; 
     const listener = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
       const value = event.data as Record<string, unknown>;
+      // Late subscribers can request the current locale without invoking a module tool.
+      if (value.type === 'ovd:get-locale') { shareLocale(); return; }
       if (!['ovd:invoke', 'ovd:reference'].includes(String(value.type)) || typeof value.requestId !== 'string' || !value.requestId || value.requestId.length > 100) return;
       const source = event.source as Window;
       const respond = (result: unknown) => { if (active && source === frame.current?.contentWindow) source.postMessage({ type: 'ovd:result', requestId: value.requestId, ...result as object }, '*'); };
@@ -39,7 +49,7 @@ export function ModuleViewHost({ moduleId, viewId, title }: { moduleId: string; 
     window.addEventListener('message', listener);
     return () => { active = false; window.removeEventListener('message', listener); inFlight.current.clear(); };
   }, [moduleId, viewId]);
-  if (error) return <div className="module-host-status" role="alert">{error}</div>;
-  if (!ready) return <div className="module-host-status" role="status">Modulansicht wird geladen …</div>;
-  return <iframe className="module-view-host" ref={frame} title={title} sandbox="allow-scripts" referrerPolicy="no-referrer" src={`ovd-module://view/${encodeURIComponent(moduleId)}/${encodeURIComponent(viewId)}`} />;
+  if (error) return <div className="module-host-status" role="alert">{error === 'load' ? locale === 'en' ? 'Could not load the module view.' : 'Modulansicht konnte nicht geladen werden.' : error}</div>;
+  if (!ready) return <div className="module-host-status" role="status">{locale === 'en' ? 'Loading module view…' : 'Modulansicht wird geladen …'}</div>;
+  return <iframe className="module-view-host" ref={frame} onLoad={shareLocale} title={title} sandbox="allow-scripts" referrerPolicy="no-referrer" src={`ovd-module://view/${encodeURIComponent(moduleId)}/${encodeURIComponent(viewId)}`} />;
 }

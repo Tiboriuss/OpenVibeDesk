@@ -3,6 +3,30 @@
 .ovd-brand-mark{display:block;flex:none;object-fit:contain;user-select:none;pointer-events:none}
 .native-panel{display:flex;flex-direction:column;background:var(--paper);color:var(--ink)}
 .native-view-body{flex:1;min-height:0;overflow:hidden}
+.workspace-save-notice {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:4px 8px;
+  padding:5px 10px;
+  border-bottom:1px solid #e4b7bd;
+  background:#fff3f4;
+  color:#822638;
+  font-size:12px;
+}
+.workspace-save-notice > svg { flex:none }
+.workspace-save-notice > span { flex:1 1 120px; min-width:0; overflow-wrap:anywhere }
+.workspace-save-notice > button {
+  margin-inline-start:auto;
+  min-height:26px;
+  padding:2px 8px;
+  border:1px solid currentColor;
+  border-radius:5px;
+  background:var(--ovd-white);
+  color:inherit;
+  font:inherit;
+}
+.large-text .workspace-save-notice { font-size:14px }
 .window-chrome{height:36px;flex:none;display:flex;align-items:center;gap:10px;padding-left:15px;background:var(--shell);color:var(--ovd-white);border-bottom:1px solid color-mix(in srgb,var(--ovd-inverse-accent) 25%,var(--ovd-navy));-webkit-app-region:drag;user-select:none}
 .window-chrome-brand{width:48px;height:25px;display:grid;place-items:center;background:transparent}
 .window-chrome-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;letter-spacing:.1px;font-weight:700}

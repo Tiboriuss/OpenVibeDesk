@@ -29,6 +29,38 @@ function eventHash(event: ModuleEvent): string {
     ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical((value as Record<string, unknown>)[key])])) : value;
   return createHash('sha256').update(JSON.stringify(canonical(event))).digest('hex');
 }
+/** Validate pending payloads and immutable delivery receipts before reconciliation can change them. */
+export function validateModuleEventStore(db: Database): void {
+  const invalid = () => { throw new Error('Invalid stored module event'); };
+  if (scalar(db, 'SELECT COUNT(*) FROM module_events') > MODULE_EVENT_LEDGER_LIMIT
+      || scalar(db, 'SELECT COUNT(*) FROM module_event_deliveries') > MODULE_EVENT_DELIVERY_LIMIT
+      || scalar(db, 'SELECT COUNT(*) FROM module_events WHERE event_json IS NOT NULL') > MODULE_EVENT_PENDING_LIMIT
+      || scalar(db, 'SELECT COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) FROM module_events') > MODULE_EVENT_QUEUE_BYTES) invalid();
+  const pending = new Set<number>();
+  for (const row of rows(db, 'SELECT * FROM module_events')) {
+    if (typeof row.sequence !== 'number' || !Number.isSafeInteger(row.sequence) || row.sequence < 1
+        || !moduleEventSchema.shape.source.shape.moduleId.safeParse(row.source).success || !moduleEventSchema.shape.id.safeParse(row.id).success
+        || !moduleEventTopicSchema.safeParse(row.type).success || !Number.isSafeInteger(row.occurred_at)
+        || typeof row.hash !== 'string' || !/^[a-f0-9]{64}$/.test(row.hash)) invalid();
+    if (row.event_json === null) {
+      if (row.payload_bytes !== 0) invalid();
+      continue;
+    }
+    if (typeof row.event_json !== 'string' || Buffer.byteLength(row.event_json) !== row.payload_bytes) invalid();
+    const event = moduleEventSchema.parse(JSON.parse(String(row.event_json)));
+    if (event.id !== row.id || event.source.moduleId !== row.source || event.type !== row.type
+        || Date.parse(event.occurredAt) !== row.occurred_at || eventHash(event) !== row.hash) invalid();
+    pending.add(Number(row.sequence));
+  }
+  const assigned = new Set<number>();
+  for (const row of rows(db, 'SELECT * FROM module_event_deliveries')) {
+    if (!pending.has(Number(row.event_sequence)) || !moduleEventRecipientSchema.safeParse({ moduleId: row.module_id, fingerprint: row.fingerprint, grantId: row.grant_id }).success
+        || ![row.attempts, row.next_attempt_at, row.updated_at].every(value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+        || (row.last_error !== null && typeof row.last_error !== 'string')) invalid();
+    assigned.add(Number(row.event_sequence));
+  }
+  if (assigned.size !== pending.size) invalid();
+}
 function clearDeliveredPayloads(db: Database): void {
   db.run('UPDATE module_events SET event_json = NULL, payload_bytes = 0 WHERE event_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM module_event_deliveries d WHERE d.event_sequence = module_events.sequence)');
 }

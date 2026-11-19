@@ -18,7 +18,7 @@ function metadata(message: ChatMessage, index: number): Omit<ChatHistoryPart, 't
   };
 }
 
-function characterEnd(text: string, start: number, length: number): number {
+export function characterEnd(text: string, start: number, length: number): number {
   let end = Math.min(text.length, start + length);
   // Keep a surrogate pair together while offsets still use normal JS text indices.
   if (end > start && end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;

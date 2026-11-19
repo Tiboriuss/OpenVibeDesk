@@ -12,7 +12,7 @@ For local development:
 
 1. Copy the entire `notes-module` directory into `<userData>/modules/`; the containing directory name is your choice. See the [module setup instructions](../../CONTRIBUTING.md#building-modules) for the user-data location.
 2. Restart OVD.
-3. Review and enable the **Notes** module (currently **Notizen**) under **Settings → Modules** (**Einstellungen → Module**). OVD requests approval for the local module code's fingerprint before its first execution.
+3. Review and enable the **Notes** module (**Notizen** in German) under **Settings → Modules** (**Einstellungen → Module**). OVD requests approval for the local module code's fingerprint before its first execution.
 4. Open **Notes** in the dock to add or search notes. The assistant can use the same functions, for example: “Save a note: Prepare the presentation for Friday.”
 
 Both copies use the ID `sample-notes`. Use one installation method per profile: a repository package cannot overwrite a manually installed module with the same ID.
@@ -24,6 +24,8 @@ Both copies use the ID `sample-notes`. Use one installation method per profile: 
 The backend validates inputs in addition to the manifest schema, honors cancellation, limits listed note data to 24 KiB per page, and writes updates atomically to `notes.json` in the host-provided data directory. It stores at most 500 notes of up to 2,000 characters each. Listing uses `query`, `offset` and `limit` (default 20, maximum 50), with `hasMore` and `nextOffset` for continuation. The example deliberately provides searching/reading and adding notes; it does not expose editing or deletion.
 
 [`notes.html`](notes.html) and [`settings.html`](settings.html) run in separate isolated iframes. Their HTML, CSS and JavaScript are self-contained. The UI calls tools with `parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*')` and receives `ovd:result` with the matching `requestId`, `ok`, and either `result` or `error`. Both sides check the sender window. Module views have no direct access to the workspace API.
+
+The local example includes German and English. Set **Settings → Appearance → Interface language** to **English** with Notes open. The window title, OVD-Bar entry, Settings category and note controls switch language. An unsaved note keeps its text. Searching for “memo” finds the module and “lookup” finds its list tool. The [catalog and iframe contract](../../CONTRIBUTING.md#localized-contributions) describes how to support another module.
 
 A separate process is not an OS sandbox. Approval is for trusted local code. The declared `storage.module-data` permission describes the example's intended access; the host supplies a dedicated data directory, but the module process still has the current user's OS permissions.
 

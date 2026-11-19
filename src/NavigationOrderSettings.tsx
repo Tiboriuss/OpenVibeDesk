@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, RotateCcw } from 'lucide-react';
 import type { Settings } from '../shared/model';
 import type { ModuleInfo } from '../shared/modules';
+import { useUiLocale } from './locale';
 import { mergeNavigationOrder } from '../shared/navigation';
 import { moduleIcon, workspaceNavigation } from './module-registry';
 import { matchesSettingsEntry, navigationOrderEntry } from './settings-registry';
@@ -25,7 +26,8 @@ export function NavigationOrderSettings({ settings, modules, loading, searchQuer
   const list = useRef<HTMLOListElement>(null);
   const summary = useRef<HTMLElement>(null);
   const restoreFocus = useRef<{ id?: string; direction?: 'up' | 'down' } | undefined>(undefined);
-  const entries = workspaceNavigation(modules, settings.navigationOrder);
+  const locale = useUiLocale();
+  const entries = workspaceNavigation(modules, settings.navigationOrder, locale);
   const searching = !!searchQuery.trim();
   const visible = !searching || matchesSettingsEntry(navigationOrderEntry, searchQuery);
   const customized = !!settings.navigationOrder?.length;

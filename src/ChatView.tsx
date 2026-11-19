@@ -9,6 +9,8 @@ import { deriveMemoryPresentation, normalizeMemoryRecallSnapshot, type MemoryRec
 import { SESSION_DRAG_PREFIX, SESSION_DRAG_TYPE } from './SessionsView';
 import { MAIL_DRAG_TYPE, readMailDrag } from './mail-reference';
 import { MODULE_REFERENCE_DRAG_TYPE, moduleReferenceKey, readModuleReferenceDrag, type ModuleReferenceInput, type ModuleReferenceSummary } from '../shared/references';
+import { messagePresentation, composerRecoveryText } from './chat-locale';
+import { useUiLocale } from './locale';
 import './modern-chat.css';
 
 type Tier = 'smart' | 'simple';
@@ -37,6 +39,7 @@ function ToolActivity({ events, children }: { events: NonNullable<ChatMessage['t
 }
 
 function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapshot }) {
+  const locale = useUiLocale();
   const [linkError, setLinkError] = useState('');
   const snapshot = normalizeMemoryRecallSnapshot(rawSnapshot);
   if (!snapshot) return null;
@@ -52,14 +55,14 @@ function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapsh
   return <details className={`tool-events memory-context${failures ? ' has-failures' : ''}`}>
     <summary><ChevronRight size={13} aria-hidden="true"/><Brain size={13} aria-hidden="true"/><span>Gedächtnis</span><small>{summary}</small></summary>
     <div className="memory-context-content">
-      <p className="memory-context-note">Momentaufnahme für diese Antwort · {new Date(snapshot.retrievedAt).toLocaleString()}</p>
+      <p className="memory-context-note">Momentaufnahme für diese Antwort · {new Date(snapshot.retrievedAt).toLocaleString(locale)}</p>
       {providers.map(provider => <div className="memory-provider" key={provider.moduleId}><strong>{provider.title}</strong><span>{provider.status === 'failed' ? provider.detail || 'Abruf fehlgeschlagen.' : `${provider.count} übernommen${provider.status === 'truncated' ? ' · Auswahl begrenzt' : ''}`}</span></div>)}
       {memories.map(memory => <div className="memory-entry" key={`${memory.moduleId}:${memory.id}`}>
         <div className="memory-source"><strong>{memory.moduleTitle}</strong>{memory.source.uri ? <a href={memory.source.uri} title={memory.source.uri} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); void openSource(memory.source.uri!); }} onAuxClick={event => { if (event.button === 1) { event.preventDefault(); void openSource(memory.source.uri!); } }}>{memory.source.title}</a> : <span>{memory.source.title}</span>}</div>
         <p>{memory.text}</p>
         {memory.source.reference && <small>Referenz: {memory.moduleId} · {memory.source.reference.type} · {memory.source.reference.id}</small>}
-        {memory.updatedAt && <small>Stand: {new Date(memory.updatedAt).toLocaleString()}</small>}
-        {memory.expiresAt && <small>Gültig bis: {new Date(memory.expiresAt).toLocaleString()}</small>}
+        {memory.updatedAt && <small>Stand: {new Date(memory.updatedAt).toLocaleString(locale)}</small>}
+        {memory.expiresAt && <small>Gültig bis: {new Date(memory.expiresAt).toLocaleString(locale)}</small>}
       </div>)}
       {truncated && <p className="memory-context-note">Die Auswahl ist begrenzt. Weitere Inhalte sind über die Werkzeuge des zuständigen Moduls erreichbar.</p>}
       {linkError && <p className="memory-context-error" role="alert">{linkError}</p>}
@@ -68,9 +71,10 @@ function MemoryContext({ snapshot: rawSnapshot }: { snapshot: MemoryRecallSnapsh
 }
 
 function AgentLimitNotice({ limit, onOpen }: { limit?: ChatMessage['agentRunLimit']; onOpen(): void }) {
+  const locale = useUiLocale();
   const explanation = limit?.reason === 'context_budget' ? 'Die nächste Anfrage passt nicht in das Kontextbudget. Der Auftrag wurde angehalten; vorhandene Ergebnisse bleiben erhalten.' : limit?.reason === 'tool_rounds' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugrunden eingestellt.` : limit?.reason === 'tool_calls' ? `Für diesen Auftrag sind maximal ${limit.limit} Werkzeugaufrufe eingestellt.` : limit?.reason === 'timeout' ? `Das Zeitlimit von ${limit.limit} Sekunden wurde erreicht.` : 'Die eingestellte Grenze für diesen Auftrag wurde erreicht.';
   const next = limit?.nextToolType === 'discovery' ? 'Weitere Werkzeugsuche stand aus.' : limit?.nextToolType === 'action' ? 'Ein weiterer Fachaufruf stand aus.' : limit?.nextToolType === 'mixed' ? 'Weitere Such- und Aktionsschritte standen aus.' : '';
-  return <div className="message-limit-status" role="status"><strong><CircleAlert size={14} aria-hidden="true"/>{limit?.reason === 'context_budget' ? 'Kontextbudget erreicht' : 'Agent-Limit erreicht'}</strong><p>{explanation}{next ? ` ${next}` : ''}</p>{limit?.context && <small>{limit.context.estimatedInputTokens.toLocaleString('de-DE')} geschätzte Eingabetokens · Budget {limit.context.inputTokenBudget.toLocaleString('de-DE')} · Antwortreserve {limit.context.outputTokenReserve.toLocaleString('de-DE')}</small>}{limit && limit.toolCalls > 0 && <small>{limit.toolRounds} Runden · {limit.toolCalls} Aufrufe · {limit.discoveryCalls} Werkzeugsuche · {limit.actionCalls} Fachaufrufe · {Math.max(0, Math.round(limit.elapsedMs / 1000))} s</small>}<button type="button" onClick={onOpen}>Agent-Einstellungen</button></div>;
+  return <div className="message-limit-status" role="status"><strong><CircleAlert size={14} aria-hidden="true"/>{limit?.reason === 'context_budget' ? 'Kontextbudget erreicht' : 'Agent-Limit erreicht'}</strong><p>{explanation}{next ? ` ${next}` : ''}</p>{limit?.context && <small>{limit.context.estimatedInputTokens.toLocaleString(locale)} geschätzte Eingabetokens · Budget {limit.context.inputTokenBudget.toLocaleString(locale)} · Antwortreserve {limit.context.outputTokenReserve.toLocaleString(locale)}</small>}{limit && limit.toolCalls > 0 && <small>{limit.toolRounds} Runden · {limit.toolCalls} Aufrufe · {limit.discoveryCalls} Werkzeugsuche · {limit.actionCalls} Fachaufrufe · {Math.max(0, Math.round(limit.elapsedMs / 1000))} s</small>}<button type="button" onClick={onOpen}>Agent-Einstellungen</button></div>;
 }
 
 function OperationStatus({ message, sessionId, sending }: { message: ChatMessage; sessionId: string; sending: boolean }) {
@@ -128,12 +132,15 @@ function hasOperationDetails(message: ChatMessage): boolean {
   return !!message.operationRunId && !message.reformulationOf && (canContinue(message) || message.evidence?.toolsUsed === true || !!message.toolEvents?.some(event => !['find_modules', 'get_module_tools'].includes(event.name)));
 }
 
-export function ChatView({ state, prompt, setPrompt, emailReference, emailLoading, emailError, onEmailDrop, onRemoveEmail, references, referencesLoading, referenceError, onModuleReferenceDrop, onRemoveModuleReference, onCancelModuleReferences, sessionRef, setSessionRef, sending, error, tier, setTier, thinking, onSend, onStop, onNew, onSessions, onForkEdit, onReformulate, onContinue, onAgentSettings }: {
+export function ChatView({ state, prompt, setPrompt, emailReference, emailLoading, emailError, onEmailDrop, onRemoveEmail, references, referencesLoading, referenceError, onModuleReferenceDrop, onRemoveModuleReference, onCancelModuleReferences, sessionRef, setSessionRef, composerLocked, composerIssue, savedComposer, onResolveComposer, sending, error, tier, setTier, thinking, onSend, onStop, onNew, onSessions, onForkEdit, onReformulate, onContinue, onAgentSettings }: {
   state: RendererWorkspaceState; prompt: string; setPrompt(value: string): void; emailReference?: EmailReferenceSummary; emailLoading: boolean; emailError?: string; onEmailDrop(id: string): void; onRemoveEmail(): void;
   references: ModuleReferenceSummary[]; referencesLoading: boolean; referenceError?: string; onModuleReferenceDrop(reference: ModuleReferenceInput): void; onRemoveModuleReference(reference: ModuleReferenceInput): void; onCancelModuleReferences(): void;
+  composerLocked: boolean; composerIssue?: 'load' | 'write' | 'conflict' | 'legacy'; savedComposer?: import('../shared/chat-composer').ChatComposerContent; onResolveComposer(keep: boolean): void;
   sessionRef?: string; setSessionRef(value?: string): void; sending: boolean; error?: string; tier: Tier; setTier(value: Tier): void; thinking: Thinking;
   onSend(): void; onStop(): void; onNew(): void; onSessions(): void; onForkEdit(messageId: string): void; onReformulate(messageId: string): void; onContinue(messageId: string): void; onAgentSettings(): void;
 }) {
+  const locale = useUiLocale();
+  const recovery = composerRecoveryText[locale];
   const list = useRef<HTMLDivElement>(null), thread = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), stick = useRef(true);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [copied, setCopied] = useState<string>();
@@ -264,6 +271,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
   const acceptsDrop = (data: DataTransfer) => isReferenceDrag(data) || data.types.includes('text/plain');
   function drop(event: React.DragEvent) {
     dragDepth.current = 0; setDragging(false);
+    if (composerLocked) { event.preventDefault(); return; }
     const text = event.dataTransfer.getData('text/plain');
     const id = event.dataTransfer.getData(SESSION_DRAG_TYPE) || (text.startsWith(SESSION_DRAG_PREFIX) ? text.slice(SESSION_DRAG_PREFIX.length) : '');
     if (id && state.sessions.some(session => session.id === id && session.id !== state.activeSessionId)) { event.preventDefault(); setSessionRef(id); input.current?.focus(); return; }
@@ -280,9 +288,9 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
     } catch { setCopyError('Kopieren war nicht möglich. Du kannst den Text markieren und selbst kopieren.'); }
   }
   function hasPreviousUser(id: string): boolean { const index = state.chat.findIndex(message => message.id === id); return index >= 0 && (!!state.presentation?.chatHasEarlierUser || state.chat.slice(Math.max(0, (active?.historyStart ?? 0) - (state.presentation?.chatStart ?? 0)), index).some(message => message.role === 'user')); }
-  function send() { if (!sending && !speechBusy && !emailLoading && !referencesLoading && prompt.trim()) { scrollToLatest(); onSend(); } }
+  function send() { if (!composerLocked && !composerIssue && !sending && !speechBusy && !emailLoading && !referencesLoading && prompt.trim()) { scrollToLatest(); onSend(); } }
 
-  return <div className={`modern-chat${dragging ? ' is-dragging' : ''}`} onDragEnter={event => { if (isReferenceDrag(event.dataTransfer)) { event.preventDefault(); dragDepth.current++; setDragging(true); } }} onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }} onDragOver={event => { if (acceptsDrop(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }} onDrop={drop}>
+  return <div className={`modern-chat${dragging ? ' is-dragging' : ''}`} onDragEnter={event => { if (!composerLocked && isReferenceDrag(event.dataTransfer)) { event.preventDefault(); dragDepth.current++; setDragging(true); } }} onDragLeave={() => { if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false); } }} onDragOver={event => { if (!composerLocked && acceptsDrop(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }} onDrop={drop}>
     <div className="modern-chat-head"><div className="assistant-avatar"><Bot size={17}/></div><div className="modern-chat-title"><strong title={active?.title}>{active?.title ?? 'Neuer Chat'}</strong><small title={model}>{model || 'Modell in den Einstellungen auswählen'}</small></div><button type="button" title={`Neuer Chat (${shortcut}N)`} aria-label="Neuer Chat" onClick={onNew}><Plus size={18}/></button><button type="button" title={`Chats verwalten (${shortcut}F)`} aria-label="Chats verwalten" onClick={onSessions}><FolderClock size={18}/></button></div>
     <div className="sr-only" aria-live="polite">{state.chat.at(-1)?.status === 'completed' ? 'Antwort vollständig.' : state.chat.at(-1)?.status === 'failed' ? 'Antwort unterbrochen.' : state.chat.at(-1)?.status === 'cancelled' ? 'Antwort gestoppt.' : state.chat.at(-1)?.status === 'limited' ? 'Agent-Limit erreicht.' : ''}{copied ? ' Text kopiert.' : ''}</div>
     <div className="message-log-area">
@@ -290,7 +298,7 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
         <div ref={thread} className="message-thread">
           {(state.presentation?.chatStart ?? 0) > (active?.historyStart ?? 0) && <button type="button" className="chat-load-earlier" aria-disabled={historyLoading} onClick={() => void loadEarlier()}>{historyLoading ? 'Lädt …' : 'Frühere Nachrichten laden'}</button>}
           {historyError && <p className="chat-error" role="alert">{historyError}</p>}
-          {messages.map((message, index) => <article key={message.id} className={`modern-message ${message.role}${index === messages.length - 1 ? ' is-latest' : ''}`} aria-label={message.role === 'user' ? 'Deine Nachricht' : 'Antwort des Assistenten'} aria-busy={message.status === 'streaming'}>
+          {messages.map((message, index) => <article key={message.id} className={`modern-message ${message.role}${index === messages.length - 1 ? ' is-latest' : ''}`} {...messagePresentation(locale, message)} aria-busy={message.status === 'streaming'}>
           {message.role === 'assistant' && <div className="message-avatar" aria-hidden="true"><Bot size={15}/></div>}
           <div className="message-content">
             <div className="modern-message-body">
@@ -319,19 +327,29 @@ export function ChatView({ state, prompt, setPrompt, emailReference, emailLoadin
       {awayFromBottom && <button type="button" className="jump-to-latest" onClick={scrollToLatest} title="Zur neuesten Nachricht" aria-label="Zur neuesten Nachricht"><ArrowDown size={14} aria-hidden="true"/>Neueste Nachricht</button>}
     </div>
     <div className="modern-composer-area">
-      {(mail || linked || references.length > 0) && <div className="context-list">{mail && <span className="context-chip" title={[mail.from, mail.accountName].filter(Boolean).join(' · ')}><Mail size={14}/><span>{mail.subject || '(Kein Betreff)'}</span><button type="button" aria-label="E-Mail aus Kontext entfernen" onClick={onRemoveEmail}><X size={13}/></button></span>}{linked && <span className="context-chip"><Link2 size={14}/><span>{linked.title}</span><button type="button" aria-label="Chat aus Kontext entfernen" onClick={() => setSessionRef(undefined)}><X size={13}/></button></span>}{references.map(reference => <span key={moduleReferenceKey(reference)} className="context-chip" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={14} aria-hidden="true"/> : <Link2 size={14} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Anweisung: ' : ''}{reference.title}</span><button type="button" aria-label={`Referenz ${reference.title} entfernen`} onClick={() => onRemoveModuleReference(reference)}><X size={13}/></button></span>)}</div>}
+      {(mail || linked || references.length > 0) && <div className="context-list">{mail && <span className="context-chip" title={[mail.from, mail.accountName].filter(Boolean).join(' · ')}><Mail size={14}/><span>{mail.subject || '(Kein Betreff)'}</span><button type="button" disabled={composerLocked} aria-label="E-Mail aus Kontext entfernen" onClick={onRemoveEmail}><X size={13}/></button></span>}{linked && <span className="context-chip"><Link2 size={14}/><span>{linked.title}</span><button type="button" disabled={composerLocked} aria-label="Chat aus Kontext entfernen" onClick={() => setSessionRef(undefined)}><X size={13}/></button></span>}{references.map(reference => <span key={moduleReferenceKey(reference)} className="context-chip" title={reference.description || reference.title}>{reference.usage === 'instructions' ? <BookOpen size={14} aria-hidden="true"/> : <Link2 size={14} aria-hidden="true"/>}<span>{reference.usage === 'instructions' ? 'Anweisung: ' : ''}{reference.title}</span><button type="button" disabled={composerLocked} aria-label={`Referenz ${reference.title} entfernen`} onClick={() => onRemoveModuleReference(reference)}><X size={13}/></button></span>)}</div>}
       {dragging && <div className="reference-drop-target" role="status"><Link2 size={16} aria-hidden="true"/>Hier ablegen, um eine Referenz hinzuzufügen</div>}
       {emailLoading && <div className="chat-notice" role="status">Mailreferenz wird geladen … <button type="button" onClick={onRemoveEmail}>Abbrechen</button></div>}
       {emailError && <div className="chat-error" role="alert">{emailError}</div>}
       {referencesLoading && <div className="chat-notice" role="status">Referenzen werden geladen … <button type="button" onClick={onCancelModuleReferences}>Abbrechen</button></div>}
       {referenceError && <div className="chat-error" role="alert">{referenceError}</div>}
       {sending && state.presentation?.streamingSessionId !== state.activeSessionId && <div className="chat-notice">{!!state.presentation?.streamingSessionId ? 'Eine Antwort läuft in einem anderen Chat. Du kannst sie hier stoppen.' : 'Nachricht wird vorbereitet …'}</div>}
+      {composerIssue && <div className="chat-error composer-recovery">
+        <span role="alert">{recovery[composerIssue]}</span>
+        {(composerIssue === 'conflict' || composerIssue === 'legacy') && savedComposer && <details>
+          <summary>{recovery.view}</summary>
+          <pre>{savedComposer.text || recovery.noText}</pre>
+          {[savedComposer.emailSummary?.subject, state.sessions.find(item => item.id === savedComposer.sessionRefId)?.title, ...(savedComposer.references ?? []).map(item => item.title)].filter(Boolean).join(' · ')}
+        </details>}
+        <div><button type="button" onClick={() => onResolveComposer(true)}>{composerIssue === 'load' ? recovery.reload : composerIssue === 'write' ? recovery.retrySave : recovery.keepInput}</button>
+        {composerIssue !== 'load' && <button type="button" onClick={() => onResolveComposer(false)}>{recovery.useSaved}</button>}</div>
+      </div>}
       {(error || copyError || usageError) && <div className="chat-error" role="alert">{error || copyError || usageError}</div>}
       {state.ai?.provider === 'chatgpt' && chatGptStatus?.authenticated && chatGptStatus.planAccess && <div className="chatgpt-plan-status"><span>Verwendet ChatGPT-Tarif</span><button type="button" onClick={() => void manageChatGptUsage()}>Nutzung verwalten</button></div>}
       <div className="modern-composer">
         <SpeechPreview value={speechPreview}/>
-        <textarea ref={input} rows={1} aria-label="Nachricht" aria-describedby="composer-help" value={prompt} onChange={event => { adjustSpeechAnchor(event.target.value); setPrompt(event.target.value); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
-        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title={`Denktiefe: ${{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}`}><Brain size={13} aria-hidden="true"/><span>Denktiefe: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span></span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><SpeechInput key={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} scope={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} disabled={sending} onStart={startDictation} onTranscript={insertDictation} onBusyChange={setSpeechBusy} onPreview={setSpeechPreview}/><button type="button" className="chat-icon-button" title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" title="Senden (Enter)" aria-label="Nachricht senden" disabled={speechBusy || emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
+        <textarea ref={input} readOnly={composerLocked} rows={1} aria-label="Nachricht" aria-describedby="composer-help" value={prompt} onChange={event => { adjustSpeechAnchor(event.target.value); setPrompt(event.target.value); }} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send(); } }} placeholder="Schreibe eine Nachricht …"/>
+        <div className="composer-actions"><label className="tier-select"><span className="sr-only">Modell auswählen</span><select aria-label="Modell auswählen" value={tier} disabled={sending} onChange={event => setTier(event.target.value as Tier)}><option value="smart">Intelligent{state.ai?.smartModel ? '' : ' · nicht eingerichtet'}</option><option value="simple">Einfach{state.ai?.simpleModel ? '' : ' · nicht eingerichtet'}</option></select></label><span className="thinking-label" title={`Denktiefe: ${{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}`}><Brain size={13} aria-hidden="true"/><span>Denktiefe: {{off:'Aus',low:'Niedrig',medium:'Mittel',high:'Hoch'}[thinking]}</span></span>{state.ai?.confirmationMode === 'never' && <span className="confirmation-mode-badge" title="Der Assistent führt angeforderte Aktionen ohne einzelne Bestätigungsdialoge aus. Bestehende Zugriffsrechte gelten weiter.">Ohne Abfragen</span>}<span className="composer-buttons"><SpeechInput key={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} scope={`${state.activeSessionId}:${state.ai?.provider ?? ""}`} disabled={sending || composerLocked} onStart={startDictation} onTranscript={insertDictation} onBusyChange={setSpeechBusy} onPreview={setSpeechPreview}/><button type="button" className="chat-icon-button" disabled={composerLocked} title="Chat als Referenz auswählen" aria-label="Chat als Referenz auswählen" onClick={onSessions}><Link2 size={17}/></button>{sending ? <button type="button" className="send-button" title="Antwort stoppen (Esc)" aria-label="Antwort stoppen" onClick={onStop}><Square size={14} fill="currentColor"/></button> : <button type="button" className="send-button" title="Senden (Enter)" aria-label="Nachricht senden" disabled={composerLocked || !!composerIssue || speechBusy || emailLoading || referencesLoading || !prompt.trim()} onClick={send}><ArrowUp size={17}/></button>}</span></div>
       </div>
       <p id="composer-help" className="sr-only">Referenzen hierher ziehen. Enter sendet, Umschalt + Enter fügt eine neue Zeile ein.</p>
     </div>

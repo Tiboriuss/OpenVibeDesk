@@ -1,4 +1,5 @@
 import { defaultSettings, type CoreSettingsCategoryId } from '../shared/settings';
+import type { UiLocale } from '../shared/locale';
 import { defaultAgentSettings } from '../shared/agent-settings';
 
 export type SettingsCategoryId = string;
@@ -13,11 +14,24 @@ export const barBehaviorEntry: SettingsEntry = { id: 'dock.behavior', category: 
 export const settingsCategories = [
   { id: 'ai', title: 'KI & Verbindung', description: 'Anbieter, Modelle und Workspace-Zugriff', order: 10 },
   { id: 'agent', title: 'Agent', description: 'Ausführung, Werkzeuglimits und Gesprächskontext', order: 20 },
-  { id: 'display', title: 'Darstellung', description: 'Lesbarkeit und Textgröße', order: 50 },
+  { id: 'display', title: 'Darstellung', description: 'Sprache und Textgröße', order: 50 },
   { id: 'dock', title: 'OVD-Bar', description: 'Anordnung, Aussehen und Verhalten', order: 60 },
   { id: 'diagnostics', title: 'Diagnose', description: 'Fehler nachvollziehen und Protokolle exportieren', order: 90 },
   { id: 'modules', title: 'Module', description: 'Zusatzmodule und ihre verfügbaren Funktionen', order: 1000 }
 ] as const satisfies readonly (SettingsCategory & { id: CoreSettingsCategoryId })[];
+
+const englishCategories: Record<CoreSettingsCategoryId, { title: string; description: string }> = {
+  ai: { title: 'AI & connection', description: 'Providers, models and workspace access' },
+  agent: { title: 'Agent', description: 'Execution, tool limits and conversation context' },
+  display: { title: 'Appearance', description: 'Language and text size' },
+  dock: { title: 'OVD-Bar', description: 'Layout, appearance and behavior' },
+  diagnostics: { title: 'Diagnostics', description: 'Investigate errors and export logs' },
+  modules: { title: 'Modules', description: 'Add-ons and their available features' }
+};
+
+export function coreSettingsCategories(locale: UiLocale): SettingsCategory[] {
+  return settingsCategories.map(item => locale === 'en' ? { ...item, ...englishCategories[item.id] } : item);
+}
 
 export const speechSettingsEntry: SettingsEntry = { id: 'ai.speech', category: 'ai', title: 'Spracheingabe', description: 'Mikrofon, Transkription und separate Audio-Verbindung', keywords: 'sprache spracheingabe diktat diktieren mikrofon microphone audio voice speech transcription transkription live realtime aufnahme nach aufnahme openai kompatibel azure foundry deepseek asr whisper', apply: 'save' };
 export const settingsEntries = [
@@ -28,7 +42,8 @@ export const settingsEntries = [
   { id: 'agent.execution', category: 'agent', title: 'Ausführung', description: 'Werkzeugrunden, Aufrufe und maximale Laufzeit pro Auftrag', keywords: 'agent assistent schritte werkzeug werkzeuge tool tools runden rounds aufrufe calls limit limits anzahl maximum budget timeout dauer laufzeit sekunden zeit zeitlimit zeitgrenze begrenzung', defaultValue: { maxToolRounds: defaultAgentSettings.maxToolRounds, maxToolCalls: defaultAgentSettings.maxToolCalls, timeoutSeconds: defaultAgentSettings.timeoutSeconds }, apply: 'save' },
   { id: 'agent.context', category: 'agent', title: 'Kontext', description: 'Gesamtbudget, Antwortreserve, Werkzeuge und Chatverlauf', keywords: 'agent kontext context gesamtkontext gesamtbudget anfrage request tokens token schätzung geschätzt antwort reserve antwortreserve ausgabe output verlauf history ältere nachrichten historie zeichen text budget werkzeuge tools aktiv geladen schema schemas beschreibungen limit grenzen speicher', defaultValue: { contextTokenBudget: defaultAgentSettings.contextTokenBudget, outputTokenReserve: defaultAgentSettings.outputTokenReserve, maxActiveTools: defaultAgentSettings.maxActiveTools, toolSchemaBudget: defaultAgentSettings.toolSchemaBudget, historyMessageLimit: defaultAgentSettings.historyMessageLimit, historyCharBudget: defaultAgentSettings.historyCharBudget }, apply: 'save' },
   { id: 'agent.transport', category: 'agent', title: 'Verbindung & Fehlerbehandlung', description: 'Anbieterwartezeit und Wiederholungen bei Übertragungsfehlern', keywords: 'agent verbindung anbieter provider wartezeit timeout request fehler übertragung wiederholung wiederholungen retry retries versuche streaming stream werkzeugantwort transport', defaultValue: { requestTimeoutSeconds: defaultAgentSettings.requestTimeoutSeconds, transportRetries: defaultAgentSettings.transportRetries }, apply: 'save' },
-  { id: 'display.textSize', category: 'display', title: 'Textgröße', description: 'Größerer Text für Mail, Chat und Entwürfe.', keywords: 'darstellung anzeige ansicht aussehen bildschirm schrift schriftgröße text textgröße groß größer klein lesbarkeit', defaultValue: defaultSettings.textSize, apply: 'immediate' },
+  { id: 'display.language', category: 'display', title: 'Oberflächensprache', description: 'Sprache der Bedienoberfläche', keywords: 'display language locale interface anzeigesprache systemsprache menüsprache übersetzung sprache deutsch german englisch english system auto automatic', defaultValue: 'system', apply: 'immediate' },
+  { id: 'display.textSize', category: 'display', title: 'Textgröße', description: 'Größerer Text für Mail, Chat und Entwürfe.', keywords: 'darstellung anzeige ansicht aussehen bildschirm schrift schriftgröße text textgröße groß größer klein lesbarkeit text size larger font readability', defaultValue: defaultSettings.textSize, apply: 'immediate' },
   barAppearanceEntry,
   barBehaviorEntry,
   { id: 'diagnostics.logging', category: 'diagnostics', title: 'Diagnoseprotokoll', description: 'Technische Abläufe aufzeichnen, Protokolle exportieren und leeren.', keywords: 'diagnose debugging debug log logs logging protokoll fehler fehlerbericht support azure foundry responses streaming schnittstelle verbindung anbieter export exportieren herunterladen leeren löschen aktivieren deaktivieren', defaultValue: false, apply: 'immediate' },
@@ -37,6 +52,23 @@ export const settingsEntries = [
   navigationOrderEntry
 ] as const;
 
+// Also index the alternate language so a search still works after switching languages.
+const englishSearch: Record<string, string> = {
+  'ai.connection': 'connection provider sign in authentication endpoint API key',
+  'ai.models': 'models model choice thinking reasoning',
+  'ai.workspace': 'workspace access confirmation tools permissions',
+  'ai.speech': 'voice input dictation speech language microphone settings',
+  'agent.execution': 'execution run tool round call limits',
+  'agent.context': 'context conversation history size',
+  'agent.transport': 'connection error handling timeout retries',
+  'dock.appearance': 'bar layout appearance size orientation',
+  'dock.behavior': 'behavior keep on top collapse hide automatically',
+  'diagnostics.logging': 'diagnostic logging export clear logs',
+  'modules.installed': 'installed modules enable disable',
+  'modules.repositories': 'module repositories catalog install update',
+  'modules.navigationOrder': 'entries order sort reorder modules'
+};
+
 function normalize(text: string): string {
   return text.toLocaleLowerCase('de-DE').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss').replace(/[-_]/g, ' ').trim();
 }
@@ -44,6 +76,8 @@ function normalize(text: string): string {
 export function matchesSettingsEntry(entry: SettingsEntry, query: string, categories: readonly SettingsCategory[] = settingsCategories): boolean {
   const terms = normalize(query).split(/\s+/).filter(Boolean);
   const category = categories.find(item => item.id === entry.category) ?? { title: entry.category, description: '' };
-  const haystack = normalize(`${category.title} ${category.description} ${entry.title} ${entry.description} ${entry.keywords}`);
+  const core = settingsCategories.find(item => item.id === entry.category);
+  const alternate = core && englishCategories[core.id];
+  const haystack = normalize(`${category.title} ${category.description} ${core?.title ?? ''} ${core?.description ?? ''} ${alternate?.title ?? ''} ${alternate?.description ?? ''} ${entry.title} ${entry.description} ${entry.keywords} ${englishSearch[entry.id] ?? ''}`);
   return terms.every(term => haystack.includes(term));
 }

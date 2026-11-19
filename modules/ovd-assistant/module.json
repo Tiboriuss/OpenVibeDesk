@@ -3,7 +3,7 @@
   "id": "ovd-assistant",
   "title": "OVD-Assistent",
   "version": "0.1.0",
-  "description": "Pflichtmodul für Chat und Auftragsstatus: Antworten neu formulieren, unterbrochene Aufträge fortsetzen und Aktionen prüfen; Referenzen, Zeit, Berechnungen, Fenster, OVD-Bar, Einstellungen, Diagnoseprotokolle sowie Module und Modulquellen steuern.",
+  "description": "OVD-Assistent für Chats, Chatentwürfe, Referenzen und Auftragsstatus. Antworten neu formulieren, Aufträge fortsetzen, Aktionen prüfen und Fenster, Zeit, Berechnungen, OVD-Bar, Anzeigesprache, Einstellungen, Diagnose und Modulquellen steuern.",
   "keywords": [
     "assistent",
     "assistant",
@@ -52,8 +52,35 @@
     "transkription",
     "diktieren",
     "speech",
-    "audio"
+    "audio",
+    "speicherstatus speicherfehler",
+    "language sprache deutsch englisch"
   ],
+  "locales": {
+    "en": {
+      "title": "OVD Assistant",
+      "description": "Manage chats, drafts, references, tasks, windows, time, calculations, the OVD-Bar, settings, interface language, diagnostics and module repositories. Rephrase a reply or continue a saved task.",
+      "keywords": ["assistant", "settings", "language", "appearance", "preferences", "German", "English", "save", "retry", "storage", "recovery", "chat", "history", "diagnostics", "tools", "modules", "bar", "dock", "navigation", "order", "reference", "window", "task", "status", "audit", "context", "time", "clock", "date", "timezone", "today", "range", "calculate", "limits", "budget", "repository", "catalog", "install", "update", "notice", "notification", "event", "logging", "provider", "model", "voice", "microphone", "transcription", "dictation"],
+      "tools": {
+        "settings.get": {
+          "label": "Read workspace settings",
+          "description": "Read display and OVD-Bar settings, including the saved interface language and resolved locale."
+        },
+        "settings.update": {
+          "label": "Update workspace settings",
+          "description": "Change interface language (system, de or en), text size, diagnostics or OVD-Bar settings. Changes apply immediately across windows and persist after restart. Use navigation.move to reposition a single entry."
+        },
+        "workspace.save_status": {
+          "label": "Check save status",
+          "description": "Read the current workspace save status, acknowledged revision and any save error."
+        },
+        "workspace.retry_save": {
+          "label": "Retry saving",
+          "description": "Retry saving pending workspace changes and report the acknowledged result. This does not repeat prior Assistant actions."
+        }
+      }
+    }
+  },
   "required": true,
   "capabilities": [
     "context.get",
@@ -68,6 +95,8 @@
     "bar.move",
     "chats.list",
     "chats.read",
+    "chats.read_draft",
+    "chats.set_draft_text",
     "chats.create",
     "chats.use_model",
     "chats.open",
@@ -80,6 +109,8 @@
     "operations.read_result",
     "operations.reconcile",
     "operations.retry",
+    "workspace.save_status",
+    "workspace.retry_save",
     "settings.get",
     "settings.update",
     "settings.open",

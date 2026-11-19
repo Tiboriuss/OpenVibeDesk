@@ -36,6 +36,15 @@
     "signatur",
     "sortieren"
   ],
+  "locales": {
+    "en": {
+      "description": "Set up mail accounts, sender names, signatures and polling. Find, count, read and open messages. Prepare and send drafts, and file accepted messages separately in Sent.",
+      "keywords": ["mail", "inbox", "mailbox", "message", "sender", "recipient", "draft", "save", "recover", "imap", "smtp", "attachment", "invoice", "latest", "count", "unread", "today", "signature", "sort"],
+      "views": { "draft": { "title": "Draft" } },
+      "settings": { "mail": { "title": "Email", "description": "Accounts, sender, signature, polling, IMAP and SMTP", "keywords": ["mail", "email", "account", "mailbox", "outgoing", "incoming", "server", "password", "attachment", "send", "port", "encryption", "login", "address", "sender", "signature", "polling", "interval", "auto refresh"] } },
+      "referenceTypes": { "email": { "title": "Email" } }
+    }
+  },
   "capabilities": [
     "drafts.list",
     "drafts.get",

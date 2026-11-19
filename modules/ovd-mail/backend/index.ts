@@ -23,7 +23,7 @@ import { MailPolling } from './mail-polling';
 import { draftTextWithSignature, mailPreferences, mailPreferencesSchema } from '../../../shared/mail-preferences';
 import { fetchInboxStatus } from './mail-service';
 import { createMailOperationAdapter } from './mail-operation-adapter';
-import { mailSourceLocatorSchema } from '../../../shared/mail-source';
+import { mailSourceLocatorSchema, type MailSourceLocator } from '../../../shared/mail-source';
 import { mailTextPageRequestSchema } from '../../../shared/mail-content';
 import { clearMailContentCache, fetchImapMessageMetadata, fetchImapMessageTextPage } from './mail-service';
 import { MailBodyCache } from './mail-body-cache';
@@ -687,11 +687,10 @@ function loadMailPreviews(rawIds: unknown, context: OperationContext): Promise<M
   return work.finally(() => { pendingPreviewRequests--; });
 }
 function connectionHash(account: MailAccountConfig): string { return createHash('sha256').update(imapConnectionIdentity(account)).digest('hex'); }
-async function ensureMailCached(id: string, context: OperationContext): Promise<LiveMail> {
+async function ensureMailCached(id: string, context: OperationContext, composerSource?: MailSourceLocator): Promise<LiveMail> {
   context.signal.throwIfAborted();
   if (liveMail.has(id)) return cachedMail(id);
-  const saved = savedEmailReference(id, context.sessionId);
-  const source = mailSourceLocatorSchema.safeParse(saved?.source);
+  const source = mailSourceLocatorSchema.safeParse(composerSource ?? savedEmailReference(id, context.sessionId)?.source);
   if (!source.success) throw new Error('Für diese ältere Referenz ist nur der gespeicherte Ausschnitt verfügbar. Bitte die Mail einmal im Postfach auswählen.');
   const snapshot = accountSnapshot(source.data.accountId), locator = source.data;
   const expectedId = createHash('sha256').update(JSON.stringify([snapshot.account.id, imapConnectionIdentity(snapshot.account), locator.folder, locator.uidValidity, locator.uid])).digest('hex');
@@ -858,8 +857,8 @@ async function createWorkspaceDraft(args: MailCapabilityArgs<'drafts.create'>, c
   return { draftId: draft.id, accountId: account?.id, to: draft.to, subject: draft.subject, opened, created: true, sent: false,
     saveState: draftPersistence.getStatus(draft.id), ...(persistenceError ? { outcome: 'failed' as const, error: persistenceError } : { saved: true }) };
 }
-async function snapshotLiveReference(id: string, signal: AbortSignal): Promise<EmailReference | undefined> {
-  const live = liveMail.get(id);
+async function snapshotLiveReference(id: string, signal: AbortSignal, source?: MailSourceLocator): Promise<EmailReference | undefined> {
+  const live = liveMail.get(id) ?? (source ? await ensureMailCached(id, { origin: 'ui', signal }, source) : undefined);
   if (!live) return undefined;
   const message = await loadMailMessage(id, { origin: 'ui', signal });
   return boundedEmailReference(externalMail({ ...live, message }), message.truncated);

@@ -15,6 +15,16 @@ export interface ModuleReferenceContribution { id: string; title: string; snapsh
 export interface ModuleMemoryContribution { retrieveTool: string; }
 export interface ModuleEventContribution { subscriptions: string[]; publications: string[]; }
 export interface ModuleEventStatus { moduleId: string; title: string; availableTopics: string[]; enabledTopics: string[]; pending: number; failed: number; lastError?: string; }
+export interface ModuleLocaleCatalog {
+  title?: string;
+  description?: string;
+  keywords?: string[];
+  views?: Record<string, { title?: string }>;
+  navigation?: Record<string, { title?: string }>;
+  settings?: Record<string, { title?: string; description?: string; keywords?: string[] }>;
+  referenceTypes?: Record<string, { title?: string }>;
+  tools?: Record<string, { label?: string; description?: string; keywords?: string[] }>;
+}
 export interface ModuleManifest {
   apiVersion: 1;
   id: string;
@@ -22,6 +32,7 @@ export interface ModuleManifest {
   version: string;
   description: string;
   keywords?: string[];
+  locales?: Record<string, ModuleLocaleCatalog>;
   required?: boolean;
   capabilities: string[];
   permissions: string[];

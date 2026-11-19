@@ -18,6 +18,14 @@
     "anmelden",
     "abmelden"
   ],
+  "locales": {
+    "en": {
+      "title": "MCP connections",
+      "description": "Connect configured local or remote MCP servers. Discover approved server tools on demand, manage connections and review the call log.",
+      "keywords": ["mcp", "connection", "tools", "server", "permissions", "access", "audit"],
+      "settings": { "mcp": { "description": "Servers and tool permissions", "keywords": ["mcp", "server", "stdio", "http", "tools", "connection", "token", "bearer", "authorization url", "token url", "program", "cwd", "permission", "access", "log", "audit", "connect", "disconnect", "autostart", "oauth", "sign in", "sign out", "client id", "issuer", "pkce", "scope"] } }
+    }
+  },
   "capabilities": [
     "mcp.servers",
     "mcp.connect",

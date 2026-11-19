@@ -38,7 +38,7 @@ export function renameSession(state: WorkspaceState, id: string, rawTitle: strin
 }
 
 /** A fork contains the history before the chosen user message; the selected message is returned as an editable draft. */
-export function forkSession(state: WorkspaceState, messageId: string, replacementText?: string, now = new Date().toISOString()): { state: WorkspaceState; result: ForkChatResult } {
+export function forkSession(state: WorkspaceState, messageId: string, replacementText?: string, now = new Date().toISOString()): { state: WorkspaceState; result: ForkChatResult; sourceMessageId: string } {
   const source = state.sessions.find(s => s.id === state.activeSessionId);
   if (!source) throw new Error('Chat nicht gefunden.');
   if (source.messages.some(m => m.status === 'streaming')) throw new Error('Bitte warte, bis die laufende Antwort beendet ist.');
@@ -56,7 +56,7 @@ export function forkSession(state: WorkspaceState, messageId: string, replacemen
   const emailReference = original.emailReference ? { ...original.emailReference, attachments: original.emailReference.attachments.map(attachment => ({ ...attachment })) } : undefined;
   const emailRef = emailReference?.id ?? (original.emailRef && state.mails.some(m => m.id === original.emailRef) ? original.emailRef : undefined);
   const sessionRefId = original.sessionRef?.id && original.sessionRef.id !== session.id && state.sessions.some(s => s.id === original.sessionRef?.id) ? original.sessionRef.id : undefined;
-  return { state: { ...state, sessions: [session, ...state.sessions], activeSessionId: session.id, chat: session.messages }, result: { sessionId: session.id, text, ...(emailRef ? { emailRef } : {}), ...(emailReference ? { emailReference } : {}), ...(sessionRefId ? { sessionRefId } : {}), ...(original.references?.length ? { references: copyReferences(original.references) } : {}) } };
+  return { sourceMessageId: original.id, state: { ...state, sessions: [session, ...state.sessions], activeSessionId: session.id, chat: session.messages }, result: { sessionId: session.id, text, ...(emailRef ? { emailRef } : {}), ...(emailReference ? { emailReference } : {}), ...(sessionRefId ? { sessionRefId } : {}), ...(original.references?.length ? { references: copyReferences(original.references) } : {}) } };
 }
 
 export function updateSessionMessages(state: WorkspaceState, id: string, update: (messages: ChatMessage[]) => ChatMessage[], now = new Date().toISOString()): WorkspaceState {

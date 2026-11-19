@@ -2,9 +2,23 @@
   "apiVersion": 1,
   "id": "sample-notes",
   "title": "Notizen",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lokale Notizen anzeigen und hinzufügen. Die Notizoberfläche und der OVD-Assistent verwenden dieselben Funktionen.",
   "keywords": ["notiz", "notizen", "notes", "merken", "gedanke"],
+  "locales": {
+    "en": {
+      "title": "Notes",
+      "description": "Save and search local notes from the Notes window or the Assistant.",
+      "keywords": ["notes", "memo", "ideas", "thoughts"],
+      "views": { "notes": { "title": "Notes" } },
+      "navigation": { "notes": { "title": "Notes" } },
+      "settings": { "settings": { "title": "Notes", "description": "Local storage and use of the Notes module", "keywords": ["notes", "memo", "local", "storage"] } },
+      "tools": {
+        "sample-notes.list": { "label": "List notes", "description": "List local notes or search their text. Returns a bounded page and an optional continuation offset.", "keywords": ["lookup", "retrieve"] },
+        "sample-notes.add": { "label": "Add note", "description": "Save a new local note in this module’s data directory." }
+      }
+    }
+  },
   "capabilities": ["sample-notes.list", "sample-notes.add"],
   "permissions": ["storage.module-data"],
   "runtime": { "type": "process", "entry": "backend.cjs" },
