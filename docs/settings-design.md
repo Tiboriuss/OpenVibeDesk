@@ -27,6 +27,14 @@ Module-contributed category icons can show a small attention dot, shared with th
 
 Under **KI & Verbindung**, **Chat** and **Spracheingabe** are peer expandable groups with independent forms. Chat contains the connection, models and workspace-access sections, followed by **Chat-Einstellungen speichern** inside its border. Speech settings have their own save action inside their group. Saving one preserves pending changes in the other. Search and Assistant preparation reveal the relevant group; ordinary category navigation and collapse keep unsaved inputs intact.
 
+### Selection controls
+
+In **Appearance**, **Interface language** and **Text size** use the same compact row. Each has one visible label and a native dropdown showing the current value. The choice applies immediately. Use this pattern for other independent preferences with a short list of options. Use an expandable group when several related fields belong together, as in an account’s connection settings.
+
+Inside the host renderer, use [SettingsChoiceRow](../src/SettingsChoiceRow.tsx) for standalone choices. Adjacent selects align to the same trailing edge and share `--settings-choice-width`. In a multi-field form, a select may fill its field column. Host and bundled module settings share [the settings stylesheet](../src/settings-view.css), which defines the control’s height, typography, padding, border, background, indicator and focus treatment. Allow the label and control to reflow when translated text or a larger font needs more space.
+
+Associate each label with its select and preserve native keyboard interaction. Check the rows together in English and German at the largest supported text size and in a narrow window. For an isolated module settings page, reproduce the same pattern inside its [self-contained HTML entry](../CONTRIBUTING.md#html-views). The iframe owns its styles.
+
 ## Search and extensibility
 
 - Search across categories, including closed groups. Use labels, descriptions, IDs and common synonyms.

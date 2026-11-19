@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#install-or-update-the-app) · [Development](../CONTRIBUTING.md#development)
 
-The [changelog](../CHANGELOG.md) records v0.1.10's speech input and settings changes, the earlier OVD-Bar and maturation work, and their verification scope. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
+The [changelog](../CHANGELOG.md) records v0.1.11's interface languages, settings controls and workspace recovery, along with earlier releases and their verification scope. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
 
 The [release workflow](../.github/workflows/release.yml) builds macOS and Windows installer downloads when a GitHub release is published. It is an explicitly requested exception to the project's preference for local checks. Routine pushes and pull requests do not start this workflow.
 

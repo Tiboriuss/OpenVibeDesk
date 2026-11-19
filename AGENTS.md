@@ -7,7 +7,7 @@
 
 # Settings
 
-- Follow the [settings design](docs/settings-design.md): category navigation, global search, and compact expandable groups with state summaries.
+- Follow the [settings design](docs/settings-design.md) for category navigation, global search and compact expandable groups with state summaries. Put standalone choices in labeled rows using the [shared selection pattern](docs/settings-design.md#selection-controls).
 - Make settings discoverable through common synonyms and usable in narrow windows.
 - Support keyboard operation and understandable labels. Clearly communicate saves, immediately applied changes, and errors.
 - Keep permanent interface copy focused on the current task and actual controls. Put background implementation details and migration notes in documentation instead of adding unrelated informational panels.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X } from 'lucide-react';
+import { SettingsChoiceRow } from './SettingsChoiceRow';
 import { SpeechSettings } from './SpeechSettings';
 import { AiSettings } from './AiSettings';
 import { AgentSettings } from './AgentSettings';
@@ -21,19 +22,17 @@ import { ModuleRepositories } from './ModuleRepositories';
 import { ModuleEventSettings } from './ModuleEventSettings';
 import type { ModuleEventStatus } from '../shared/modules';
 
-type GroupId = 'display' | 'installed';
 const groupStorageKey = 'openvibedesk.settings.groups';
 const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, diagnostics: Activity, modules: Package };
 
-function initialGroups(): Record<GroupId, boolean> {
+function initialInstalledOpen(): boolean {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(groupStorageKey) ?? '{}');
     if (stored && typeof stored === 'object') {
-      const values = stored as Partial<Record<GroupId, unknown>>;
-      return { display: values.display === true, installed: values.installed !== false };
+      return (stored as { installed?: unknown }).installed !== false;
     }
   } catch { /* Use defaults when local storage is unavailable or invalid. */ }
-  return { display: false, installed: true };
+  return true;
 }
 
 export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettings; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
@@ -52,13 +51,14 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   }
   const [speechNavigation, setSpeechNavigation] = useState(0);
   const languageSelect = useRef<HTMLSelectElement>(null);
+  const textSizeSelect = useRef<HTMLSelectElement>(null);
   const [languageNavigation, setLanguageNavigation] = useState(0);
   const [preparation, setPreparation] = useState<SettingsSuggestion>();
   const preparationToken = useRef(0);
   const [search, setSearch] = useState('');
   const [active, setActive] = useState<SettingsCategoryId>('ai');
-  const [groups, setGroups] = useState(initialGroups);
-  const [searchGroups, setSearchGroups] = useState<Record<GroupId, boolean>>({ display: true, installed: true });
+  const [installedOpen, setInstalledOpen] = useState(initialInstalledOpen);
+  const [searchInstalledOpen, setSearchInstalledOpen] = useState(true);
   const content = useRef<HTMLElement>(null);
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention();
@@ -83,7 +83,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       if (!request || typeof request !== 'object') return;
       if (request.category && (categoryIds.current.has(request.category) || ['mail', 'modules'].includes(request.category))) setActive(request.category);
       const query = typeof request.search === 'string' ? request.search.slice(0, 200) : '';
-      if (query.trim()) setSearchGroups({ display: true, installed: true });
+      if (query.trim()) setSearchInstalledOpen(true);
       setSearch(query);
       if (request.sectionId === 'ai.speech') setSpeechNavigation(value => value + 1);
       if (request.sectionId === 'display.language') setLanguageNavigation(value => value + 1);
@@ -141,7 +141,7 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
   }, [availableModuleSettings, visibleModuleSettings]);
 
   function updateSearch(value: string) {
-    if (value.trim()) setSearchGroups({ display: true, installed: true });
+    if (value.trim()) setSearchInstalledOpen(true);
     setSearch(value);
   }
 
@@ -153,17 +153,14 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
     if (owner && ids.length) void window.workspace.acknowledgeModuleAttention(owner, ids).catch(() => {});
   }
 
-  function toggleGroup(id: GroupId) {
-    if (searching) { setSearchGroups(current => ({ ...current, [id]: !current[id] })); return; }
-    setGroups(current => {
-      const next = { ...current, [id]: !current[id] };
-      try { localStorage.setItem(groupStorageKey, JSON.stringify(next)); } catch { /* The current session remains usable. */ }
-      return next;
-    });
+  function toggleInstalled() {
+    if (searching) { setSearchInstalledOpen(!searchInstalledOpen); return; }
+    const next = !installedOpen;
+    setInstalledOpen(next);
+    try { localStorage.setItem(groupStorageKey, JSON.stringify({ installed: next })); } catch { /* The current session remains usable. */ }
   }
 
   const matches = (id: string) => !searching || matchesSettingsEntry(settingsEntries.find(item => item.id === id)!, search, categories);
-  const isOpen = (id: GroupId) => searching ? searchGroups[id] : groups[id];
   return <div className="settings-view">
     <aside className="settings-sidebar">
       <div className="settings-sidebar-title"><span className="settings-view-icon"><Settings size={18} /></span><h1>{hostText.settings}</h1></div>
@@ -190,17 +187,21 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       </section>
       <section hidden={!visible('display')} aria-label={categoryTitle('display')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('display')}</h3>}
-        <div className="workspace-settings-group language-setting" hidden={!matches('display.language')}>
-          <label htmlFor="interface-language">{copy.language}</label>
-          <select ref={languageSelect} id="interface-language" value={settings.language ?? defaultSettings.language} onChange={event => void updateAppearance('language', event.target.value as LanguagePreference)}>
+        <div className="workspace-settings-group settings-choices">
+          <SettingsChoiceRow id="interface-language" ref={languageSelect} label={copy.language} hidden={!matches('display.language')}
+            value={settings.language ?? defaultSettings.language} error={appearanceError === 'language' ? copy.languageSaveFailed : undefined}
+            onChange={event => void updateAppearance('language', event.target.value as LanguagePreference)}>
             <option value="system">{copy.system}</option><option lang="de" value="de">Deutsch</option><option lang="en" value="en">English</option>
-          </select>
-          {appearanceError === 'language' && <p className="settings-feedback error" role="alert">{copy.languageSaveFailed}</p>}
+          </SettingsChoiceRow>
+          <SettingsChoiceRow id="text-size" ref={textSizeSelect} label={copy.textSize} hidden={!matches('display.textSize')}
+            value={settings.textSize} error={appearanceError === 'textSize' ? copy.textSizeSaveFailed : undefined}
+            onChange={event => void updateAppearance('textSize', event.target.value as WorkspaceSettings['textSize'])}
+            action={settings.textSize !== defaultSettings.textSize &&
+              <button type="button" className="settings-choice-reset" title={copy.reset} aria-label={copy.reset}
+                onClick={() => { textSizeSelect.current?.focus(); void updateAppearance('textSize', defaultSettings.textSize); }}><RotateCcw size={14} aria-hidden="true" /></button>}>
+            <option value="standard">{copy.standard}</option><option value="large">{copy.large}</option>
+          </SettingsChoiceRow>
         </div>
-        <details className="workspace-settings-group" open={isOpen('display')} hidden={!matches('display.textSize')}>
-          <summary onClick={event => { event.preventDefault(); toggleGroup('display'); }}><span><strong>{copy.textSize}</strong><small>{settings.textSize === 'large' ? copy.large : copy.standard}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
-          <div className="workspace-settings-content"><div className="setting-row workspace-setting-row"><div><label htmlFor="text-size">{copy.textSize}</label></div><select id="text-size" value={settings.textSize} onChange={event => void updateAppearance('textSize', event.target.value as WorkspaceSettings['textSize'])}><option value="standard">{copy.standard}</option><option value="large">{copy.large}</option></select></div>{settings.textSize !== defaultSettings.textSize && <button type="button" className="settings-reset" onClick={() => void updateAppearance('textSize', defaultSettings.textSize)}><RotateCcw size={13} /> {copy.reset}</button>}{appearanceError === 'textSize' && <p className="settings-feedback error" role="alert">{copy.textSizeSaveFailed}</p>}</div>
-        </details>
       </section>
       <section hidden={!visible('dock')} aria-label={categoryTitle('dock')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('dock')}</h3>}
@@ -214,8 +215,8 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       <section hidden={!visible('modules')} aria-label={categoryTitle('modules')} className="module-management">
         {searching && <h3 className="settings-result-category">{categoryTitle('modules')}</h3>}
         {(moduleError || moduleState.error) && <p className="settings-feedback error" role="alert">{moduleError || moduleState.error}</p>}
-        <details className="workspace-settings-group installed-module-settings" open={isOpen('installed')} hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
-        <summary onClick={event => { event.preventDefault(); toggleGroup('installed'); }}><span><strong>{copy.installed}</strong><small>{moduleState.loading ? copy.loading : copy.moduleCount(moduleState.modules.filter(module => module.status === 'ready').length, moduleState.modules.length)}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+        <details className="workspace-settings-group installed-module-settings" open={searching ? searchInstalledOpen : installedOpen} hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.installed')!, search, categories)}>
+        <summary onClick={event => { event.preventDefault(); toggleInstalled(); }}><span><strong>{copy.installed}</strong><small>{moduleState.loading ? copy.loading : copy.moduleCount(moduleState.modules.filter(module => module.status === 'ready').length, moduleState.modules.length)}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
         <div className="installed-module-list">
         {moduleState.loading && <p role="status">{copy.loadingModules}</p>}
         {eventStatusError && <p className="module-event-error" role="alert">{copy.eventsFailed}</p>}

@@ -34,11 +34,60 @@
 .workspace-settings-content{padding:14px 12px 15px;border-top:1px solid var(--line)}
 .settings-view .workspace-setting-row{border:0;margin:0;padding:0}
 .settings-view .ai-settings{padding:0;margin:0;border:0;border-radius:0;box-shadow:none}
-.language-setting:not([hidden]){display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 12px;min-height:42px}
-.language-setting .settings-feedback{flex-basis:100%;margin:0}
-.language-setting label{font-size:12px;font-weight:700}
-.language-setting select{max-width:100%;min-height:30px;padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--ink);font:inherit;font-size:12px}
-.language-setting select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* All host-rendered settings forms use the same native dropdown. Layout belongs to the field. */
+.settings-view {
+  --settings-choice-width: 9rem;
+  --settings-field-size: 12px;
+  --settings-field-border: color-mix(in srgb, var(--ovd-muted) 75%, var(--ovd-white));
+}
+.large-text .settings-view { --settings-field-size: 14px; }
+.settings-view :where(select:not([multiple]):is(:not([size]), [size="1"])) {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--settings-field-border);
+  border-radius: 6px;
+  background-color: var(--ovd-white);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--settings-field-size);
+  font-weight: 400;
+  line-height: 1.4;
+}
+.settings-view select:enabled:hover { border-color: var(--muted); }
+.settings-view select:enabled:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-view select:disabled { opacity: .65; cursor: not-allowed; }
+
+.settings-choices { container-type: inline-size; }
+.settings-choice-row:not([hidden]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--settings-choice-width));
+  align-items: center;
+  gap: 6px 12px;
+  padding: 7px 12px;
+}
+.settings-choice-row:not([hidden]) + .settings-choice-row:not([hidden]) { border-top: 1px solid var(--line); }
+.settings-choice-label { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.settings-choice-label label { font-size: var(--settings-field-size); font-weight: 700; overflow-wrap: anywhere; }
+.settings-choice-reset {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+.settings-choice-reset:hover { color: var(--accent-dark); background: var(--accent-soft); }
+.settings-choice-row .settings-feedback { grid-column: 1 / -1; margin: 0; }
+@container (max-width: 285px) {
+  .settings-choice-row:not([hidden]) { grid-template-columns: minmax(0, 1fr); }
+}
 .settings-reset{display:inline-flex;align-items:center;gap:5px;margin-top:13px;padding:5px 0;border:0;background:none;color:var(--accent-dark);font-size:11px;font-weight:700}
 .settings-reset:hover{text-decoration:underline}
 .installed-module-list{border-top:1px solid var(--line);padding:0 10px}

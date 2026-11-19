@@ -2,6 +2,26 @@
 
 [Repository overview](README.md) · [Documentation](docs/README.md) · [Installer and update guide](docs/releases.md)
 
+## v0.1.11 — 19 November 2026
+
+This alpha update adds English and German interface support, consistent settings controls and recovery for workspace saves and unsent chats.
+
+### Interface and modules
+
+- English is the default for new profiles and profiles without a saved language. A saved language or System preference carries over. The Assistant, Settings, OVD-Bar and daily workflows in Mail, Files and MCP switch language in open windows. Mail account setup retains its existing labels.
+- Appearance puts language and text size in matching rows with immediate application. Native dropdowns share one visual style across host and bundled module settings while fitting their own form layouts.
+- Module authors can translate manifest contributions, lazy tool descriptions and isolated views using the [localization guide](docs/localization.md). The refreshed [README gallery](README.md#a-look-inside) uses the English interface and fictional data.
+
+### Workspace recovery
+
+- OVD reports when a workspace write fails and can retry a recoverable write with the latest in-memory state. The Assistant can inspect and retry a pending save through the same service.
+- Each chat restores its unsent draft and selected references after restart. Accepting a message and clearing its draft happen in the same workspace write.
+- If the workspace file cannot be loaded, a recovery dialog can open the data folder, save a copy or retry after repair. The original file is preserved. See the [recovery and localization acceptance records](docs/maturation-plan.md).
+
+### Verification and installers
+
+The production build and all 51 existing tests passed. Isolated macOS Electron profiles exercised language and text size changes, keyboard navigation, narrow settings windows, Assistant access, persistence and recovery. The release provides Apple Silicon and Intel macOS installers with ad-hoc signatures and an unsigned Windows x64 installer. See the [installation guide](docs/releases.md) and [release downloads](https://github.com/Tiboriuss/OpenVibeDesk/releases/tag/v0.1.11).
+
 ## v0.1.10 — 16 November 2026
 
 This alpha update adds separately configured speech input to the existing Assistant and groups Chat and speech settings into independently saved sections.
