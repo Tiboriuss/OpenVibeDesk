@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { AppUpdateStatus } from '../shared/app-updates';
 import type { WorkspaceApi } from '../shared/model';
 import type { WorkspaceSaveStatus } from '../shared/workspace-save';
 
@@ -51,6 +52,15 @@ let pendingMailQuery: { result: import('../shared/mail-query').MailQueryResult; 
 ipcRenderer.on('mail:query-results', (_event, payload) => { if (showMailQuery) showMailQuery(payload); else pendingMailQuery = payload; });
 
 const api: WorkspaceApi = {
+  getAppUpdateStatus: () => ipcRenderer.invoke('updates:status'),
+  checkAppUpdates: () => ipcRenderer.invoke('updates:check'),
+  openAppUpdate: (version, destination) => ipcRenderer.invoke('updates:open', version, destination),
+  openAppUpdateSettings: () => ipcRenderer.invoke('updates:settings'),
+  onAppUpdateStatus: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, status: AppUpdateStatus) => callback(status);
+    ipcRenderer.on('updates:status-changed', listener);
+    return () => ipcRenderer.removeListener('updates:status-changed', listener);
+  },
   getWorkspaceSaveStatus: () => ipcRenderer.invoke('workspace:save-status'),
   retryWorkspaceSave: () => ipcRenderer.invoke('workspace:retry-save'),
   onWorkspaceSaveStatus: callback => {

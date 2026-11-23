@@ -7,7 +7,7 @@ import { workspaceDraftSchema, workspaceEmailReferenceSchema, workspaceMailFolde
 import type { WorkspaceState } from '../shared/model';
 import { memoryRecallSnapshotSchema } from '../shared/module-memory';
 import { moduleReferenceSchema } from '../shared/references';
-import { settingsPatchSchema } from '../shared/settings';
+import { storedSettingsSchema } from '../shared/settings';
 
 export type WorkspaceOpenReason = 'missing' | 'unreadable' | 'invalid' | 'unsupported' | 'sidecar';
 
@@ -54,7 +54,7 @@ const snapshot = z.object({
   version: z.literal(1), windows: z.array(windowRecord).refine(uniqueIds), mails: z.array(workspaceMailSchema).refine(uniqueIds),
   drafts: z.array(workspaceDraftSchema).refine(uniqueIds), chat: messages, sessions: z.array(session).refine(uniqueIds).optional(),
   chatComposers: z.record(id, storedChatComposerSchema).optional(), activeSessionId: text.optional(), activeDraftId: id.optional(), selectedMailId: id.optional(),
-  settings: settingsPatchSchema.optional(), agentSettings: agentSettingsPatchSchema.optional(), ai: ai.optional(),
+  settings: storedSettingsSchema.optional(), agentSettings: agentSettingsPatchSchema.optional(), ai: ai.optional(),
   folder: workspaceMailFolderSchema, provider: text, mailLayoutRevision: count.optional()
 });
 

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Activity, Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X } from 'lucide-react';
+import { Activity, Bot, ChevronDown, Monitor, Package, PanelsTopLeft, RotateCcw, Search, Settings, Workflow, X, Download } from 'lucide-react';
+import { UpdateSettings } from './UpdateSettings';
+import type { AppUpdateStatus } from '../shared/app-updates';
+import { appUpdateText } from '../shared/app-update-copy';
 import { SettingsChoiceRow } from './SettingsChoiceRow';
 import { SpeechSettings } from './SpeechSettings';
 import { AiSettings } from './AiSettings';
@@ -23,7 +26,7 @@ import { ModuleEventSettings } from './ModuleEventSettings';
 import type { ModuleEventStatus } from '../shared/modules';
 
 const groupStorageKey = 'openvibedesk.settings.groups';
-const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, diagnostics: Activity, modules: Package };
+const icons = { ai: Bot, agent: Workflow, display: Monitor, dock: PanelsTopLeft, diagnostics: Activity, updates: Download, modules: Package };
 
 function initialInstalledOpen(): boolean {
   try {
@@ -35,7 +38,7 @@ function initialInstalledOpen(): boolean {
   return true;
 }
 
-export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettings; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
+export function SettingsView({ settings, updateStatus, onUpdate }: { settings: WorkspaceSettings; updateStatus?: AppUpdateStatus; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
   const locale = useUiLocale();
   const copy = settingsText[locale];
   const hostText = uiText[locale];
@@ -169,12 +172,13 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
         const Icon = icons[item.id as keyof typeof icons] ?? moduleIcon(item.icon);
         const owner = contributedSettings.find(category => category.categoryId === item.id)?.moduleId;
         const notices = owner ? moduleAttention.filter(notice => notice.moduleId === owner) : [];
-        const label = notices.length ? `${item.title} · ${hostText.notices(notices.length)}` : item.title;
-        return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-label={label} title={notices.length ? notices.map(notice => notice.message).join(' · ') : undefined} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><span className="module-attention-icon"><Icon size={16} aria-hidden="true" />{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span><span>{item.title}</span></button>;
+        const updateNotice = item.id === 'updates' && !!updateStatus?.update && !updateStatus.ignored;
+        const label = updateNotice ? `${item.title} · ${appUpdateText[locale].available}` : notices.length ? `${item.title} · ${hostText.notices(notices.length)}` : item.title;
+        return <button type="button" key={item.id} className={!searching && active === item.id ? 'active' : ''} aria-label={label} title={notices.length ? notices.map(notice => notice.message).join(' · ') : undefined} aria-current={!searching && active === item.id ? 'page' : undefined} onClick={() => chooseCategory(item.id)}><span className="module-attention-icon"><Icon size={16} aria-hidden="true" />{updateNotice && <ModuleAttentionDot pulseUntil={0} />}{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span><span>{item.title}</span></button>;
       })}</nav>
     </aside>
     <main className="settings-view-content" ref={content}>
-      <header className="settings-content-heading"><h2>{searching ? copy.results : category.title}</h2><p>{searching ? copy.searchFor(search.trim()) : category.description}</p></header>
+      <header className="settings-content-heading"><h2>{searching ? copy.results : category.title}</h2>{(searching || category.description) && <p>{searching ? copy.searchFor(search.trim()) : category.description}</p>}</header>
       {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>{copy.noResults}</strong><span>{copy.searchAgain}</span></div>}
       <section hidden={!visible('ai')} aria-label={categoryTitle('ai')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('ai')}</h3>}
@@ -211,6 +215,10 @@ export function SettingsView({ settings, onUpdate }: { settings: WorkspaceSettin
       <section hidden={!visible('diagnostics')} aria-label={categoryTitle('diagnostics')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('diagnostics')}</h3>}
         <DiagnosticsSettings active={visible('diagnostics')} enabled={settings.diagnosticsEnabled ?? false} searchQuery={search} />
+      </section>
+      <section hidden={!visible('updates')} aria-label={categoryTitle('updates')}>
+        {searching && <h3 className="settings-result-category">{categoryTitle('updates')}</h3>}
+        <UpdateSettings status={updateStatus} settings={settings} onUpdate={onUpdate} />
       </section>
       <section hidden={!visible('modules')} aria-label={categoryTitle('modules')} className="module-management">
         {searching && <h3 className="settings-result-category">{categoryTitle('modules')}</h3>}

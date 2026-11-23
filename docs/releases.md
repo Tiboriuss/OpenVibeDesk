@@ -2,11 +2,19 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#install-or-update-the-app) · [Development](../CONTRIBUTING.md#development)
 
-The [changelog](../CHANGELOG.md) records v0.1.11's interface languages, settings controls and workspace recovery, along with earlier releases and their verification scope. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
+The [changelog](../CHANGELOG.md) records the update checks introduced in v0.1.12, earlier releases and their verification scope. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
 
 The [release workflow](../.github/workflows/release.yml) builds macOS and Windows installer downloads when a GitHub release is published. It is an explicitly requested exception to the project's preference for local checks. Routine pushes and pull requests do not start this workflow.
 
-The initial release pipeline produces packages without trusted publisher certificates. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. Installing a newer version over the existing app is supported through the installer/application identity and stable local data path; an in-app automatic updater is not implemented.
+The initial release pipeline produces packages without trusted publisher certificates. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. Installing a newer version over the existing app is supported through the installer/application identity and stable local data path; OVD can check for installers and open their downloads from Settings.
+
+## Check for updates in OVD
+
+Open **Settings → Updates** to see the installed version, run **Check for updates now** or change the startup check and release channel. Installed macOS and Windows builds check at startup by default. Choose **Preview and stable** for current alpha and beta releases, or **Stable only** for full releases. Both preferences are saved locally. A manual check also works with startup checking turned off.
+
+OVD reads the public release list from this repository and compares semantic versions. It offers an update once GitHub shows the matching installer, release manifest and checksums as uploaded. The update dialog shows the version and opens the installer download or full release notes in your browser. The dot on the OVD-Bar's Settings icon leads to **Updates**. **Later** closes the dialog for the current session. **Don’t remind me about this version again** also clears the dot and keeps that version quiet after restart. You can still find it with a manual check and download it from Settings.
+
+The Assistant can use the same update check, inspect the available release and change the saved preferences. Installation remains a separate action using the OS installer. A development checkout or a platform without a matching release installer reports its running version and leaves update checks unavailable.
 
 ## Download and update
 
@@ -70,7 +78,7 @@ The release version comes from its tag. Tags must use `MAJOR.MINOR.PATCH`, optio
 
 Consequently, the checkout's `package.json` version may differ from the newest published installer. Read the release tag and `RELEASE.json` for the packaged version and source commit; a local development build is not automatically stamped with the latest release number.
 
-Only the upload job has `contents: write`; platform builds use read access. The workflow uses GitHub's built-in token rather than a separate personal token or signing secret. It does not publish an additional release or enable in-app updates.
+Only the upload job has `contents: write`; platform builds use read access. The workflow uses GitHub's built-in token rather than a separate personal token or signing secret. It attaches assets to the original published release. OVD reads that same release list for its update checks.
 
 ### Retry a failed run
 

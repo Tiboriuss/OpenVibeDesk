@@ -20,6 +20,9 @@ import { storedChatComposer, withComposer, sameComposerContent } from './chat-co
 import { chatSessionListRequestSchema } from '../shared/sessions';
 import { listChatSessions, WorkspaceViewProjector, type WorkspaceView } from './workspace-view';
 import { settingsPatchSchema, normalizeSettings, coreSettingsCategoryIds } from '../shared/settings';
+import { AppUpdates } from './app-updates';
+import { defaultUpdateChannel, maxIgnoredUpdateVersions, updateVersionSchema } from '../shared/app-updates';
+import { appUpdateText } from '../shared/app-update-copy';
 import { diagnosticsSettingsSchema } from '../shared/diagnostics';
 import { initializeDiagnostics, setDiagnosticsEnabled, getDiagnosticsStatus, exportDiagnostics, clearDiagnostics, beginAgentDiagnostics } from './diagnostics';
 import { initializeCredentialStore } from './credential-store';
@@ -118,6 +121,7 @@ async function retryWorkspaceSave() {
 function saveCurrent(publications: readonly ModuleEventPublication[] = []) {
   return checkpoints.writeNow(() => persistWorkspace(undefined, publications));
 }
+let appUpdates: AppUpdates;
 let settingsWrites: Promise<unknown> = Promise.resolve();
 let quitting = false;
 let readyToQuit = false;
@@ -550,6 +554,7 @@ async function persistSettingsPatch(input: unknown): Promise<void> {
   await persistWorkspace(() => ({ ...currentState, settings }));
   if (patch.diagnosticsEnabled !== undefined) await setDiagnosticsEnabled(patch.diagnosticsEnabled);
   commit({ ...currentState, settings });
+  appUpdates?.setChannel(settings.updateChannel ?? defaultUpdateChannel);
   if (previousLocale !== uiLocale()) refreshNativeLocale();
   else ovdBar?.layout();
 }
@@ -557,6 +562,75 @@ function changeSettings(input: unknown, _context: OperationContext, isCurrent?: 
   const patch = settingsPatchSchema.parse(input);
   return queueSettingsWrite(async () => { if (!isCurrent || isCurrent()) await persistSettingsPatch(patch); });
 }
+async function openUpdateLink(version: string, destination: 'release' | 'installer'): Promise<void> {
+  const url = appUpdates.urlFor(version, destination);
+  if (!url) throw new Error(appUpdateText[uiLocale()].noUpdate);
+  try { await shell.openExternal(url); }
+  catch { throw new Error(appUpdateText[uiLocale()].openFailed); }
+}
+
+async function ignoreUpdate(version: string, signal?: AbortSignal): Promise<boolean> {
+  return queueSettingsWrite(async () => {
+    signal?.throwIfAborted();
+    const status = appUpdates.status();
+    if (status.update?.version !== version) return false;
+    if (status.ignored) return true;
+    const ignored = currentState.settings.ignoredUpdateVersions ?? [];
+    const settings = {
+      ...currentState.settings,
+      ignoredUpdateVersions: [...ignored, version].slice(-maxIgnoredUpdateVersions)
+    };
+    await persistWorkspace(() => ({ ...currentState, settings }));
+    commit({ ...currentState, settings });
+    publishAppUpdate();
+    return true;
+  });
+}
+
+const announcedUpdates = new Set<string>();
+let updateDialogOpen = false;
+
+function publishAppUpdate(): void {
+  const status = appUpdates.status();
+  for (const win of [dock, panels.get('settings')]) {
+    if (win && !win.isDestroyed()) win.webContents.send('updates:status-changed', status);
+  }
+  if (!quitting) void showAppUpdateNotice();
+}
+
+async function showAppUpdateNotice(): Promise<void> {
+  const { currentVersion, update, ignored, phase } = appUpdates.status();
+  if (quitting || updateDialogOpen || phase !== 'available' || !update || ignored || announcedUpdates.has(update.version)) return;
+  updateDialogOpen = true;
+  announcedUpdates.add(update.version);
+  const copy = appUpdateText[uiLocale()];
+  try {
+    const options: Electron.MessageBoxOptions = {
+      type: 'info', title: 'OpenVibeDesk', message: copy.available,
+      detail: [copy.versionAvailable(update.version), copy.description(currentVersion, update.prerelease), update.summary].filter(Boolean).join('\n\n'),
+      checkboxLabel: copy.ignore,
+      buttons: [copy.later, copy.download, copy.notes],
+      defaultId: 1, cancelId: 0, noLink: true
+    };
+    const owner = BrowserWindow.getFocusedWindow();
+    const result = owner && owner !== dock ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    if (result.checkboxChecked) {
+      try { await ignoreUpdate(update.version); }
+      catch { dialog.showErrorBox(copy.available, copy.ignoreFailed); }
+    }
+    if (result.response === 1 || result.response === 2) {
+      try { await openUpdateLink(update.version, result.response === 1 ? 'installer' : 'release'); }
+      catch (error) { dialog.showErrorBox(copy.available, error instanceof Error ? error.message : copy.openFailed); }
+    }
+  } catch {
+    // The settings badge and update actions are still available if the native dialog cannot open.
+  } finally {
+    updateDialogOpen = false;
+    const latest = appUpdates.status().update;
+    if (latest && latest.version !== update.version) void showAppUpdateNotice();
+  }
+}
+
 async function updateDiagnosticSettings(input: unknown, context: OperationContext) {
   const { enabled } = diagnosticsSettingsSchema.parse(input);
   await changeSettings({ diagnosticsEnabled: enabled }, context);
@@ -769,6 +843,17 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('settings.agent_save', args => prepareSettings('agent', args));
   workspaceCapabilities.register('settings.get', () => ({ ...currentState.settings, locale: uiLocale() }));
   workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return { ...currentState.settings, locale: uiLocale() }; });
+  workspaceCapabilities.register('updates.status', () => appUpdates.status());
+  workspaceCapabilities.register('updates.check', () => appUpdates.check());
+  workspaceCapabilities.register('updates.ignore', async ({ version }, context) => {
+    if (await ignoreUpdate(version, context.signal)) return { ignored: true, version };
+    return { outcome: 'cancelled', cancelled: true, message: appUpdateText[uiLocale()].noUpdate };
+  });
+  workspaceCapabilities.register('updates.open', async ({ version, destination }, context) => {
+    context.signal.throwIfAborted();
+    await openUpdateLink(version, destination);
+    return { opened: true, version, destination };
+  });
   workspaceCapabilities.register('diagnostics.status', () => getDiagnosticsStatus());
   workspaceCapabilities.register('diagnostics.update', (args, context) => updateDiagnosticSettings(args, context));
   workspaceCapabilities.register('diagnostics.export', (_args, context) => exportDiagnosticLogs(context));
@@ -1318,7 +1403,7 @@ async function initializeModules(): Promise<void> {
     changed: () => { const win = panels.get('settings'); if (win && !win.isDestroyed()) win.webContents.send('modules:repositories:changed'); } });
   await moduleRepositories.initialize();
   await moduleHost.initialize();
-  const coreReads = new Set(['workspace.save_status', 'context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'chats.read_draft', 'settings.get', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.speech_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
+  const coreReads = new Set(['workspace.save_status', 'context.get', 'time.now', 'time.resolve_range', 'time.difference', 'math.calculate', 'windows.list', 'bar.get', 'chats.list', 'chats.read', 'chats.read_draft', 'settings.get', 'updates.status', 'updates.check', 'diagnostics.status', 'navigation.get', 'modules.list', 'modules.events_status', 'modules.attention', 'modules.repositories_list', 'modules.repository_catalog', 'settings.agent_get', 'settings.speech_get', 'settings.ai_get', 'settings.ai_models', 'operations.get_run', 'operations.read_result', 'operations.reconcile']);
   moduleHost.registerOperationAdapter('ovd-assistant', { prepare(action, args) {
     if (coreReads.has(action)) return { args, effect: 'read' };
     if (action === 'chats.set_draft_text') {
@@ -1326,7 +1411,7 @@ async function initializeModules(): Promise<void> {
       if (draft.revision !== args.expectedRevision) throw new Error(chatText().composerChanged);
       return { args, effect: 'write', resource: { id: `chat-composer:${draft.sessionId}`, version: String(draft.revision) } };
     }
-    const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
+    const revision = action === 'modules.set_enabled' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, status: moduleHost?.registry.getModule(String(args.moduleId))?.status } : action === 'modules.events_subscribe' ? { fingerprint: moduleHost?.registry.getRuntimeRecord(String(args.moduleId))?.fingerprint, topics: moduleHost?.getEventStatus().find(item => item.moduleId === args.moduleId)?.enabledTopics } : action === 'bar.move' ? { settings: currentState.settings, bounds: ovdBar?.status().expandedBounds } : action === 'settings.update' || action === 'updates.ignore' || action === 'diagnostics.update' || action === 'navigation.move' ? currentState.settings : action === 'chats.rename' ? currentState.sessions.find(item => item.id === args.sessionId)?.title : args;
     return { args, effect: 'write', resource: { id: `workspace:${action}:${typeof args.sessionId === 'string' ? args.sessionId : ''}`, version: createHash('sha256').update(JSON.stringify(revision ?? null)).digest('hex') } };
   } });
   if (moduleHost.isReady('ovd-mcp')) moduleHost.registerOperationAdapter('ovd-mcp', { prepare(action, args) { return { args, effect: ['mcp.servers', 'mcp.tools', 'mcp.audit'].includes(action) ? 'read' : 'unknown' }; } });
@@ -1380,6 +1465,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   operationJournal = new OperationJournal(path.join(app.getPath('userData'), 'operation-journal'));
   await operationJournal.initialize().catch(error => dialog.showErrorBox(startupText.journalUnavailable, error instanceof Error ? error.message : startupText.journalFailure));
   currentState = normalizeSessions({ ...loaded, settings, agentSettings: normalizeAgentSettings(loaded.agentSettings), ...(loaded.ai ? { ai: normalizeAiConfig(loaded.ai) } : {}) }, startupLocale);
+  appUpdates = new AppUpdates(app.getVersion(), app.isPackaged, settings.updateChannel,
+    () => currentState.settings.ignoredUpdateVersions ?? [], publishAppUpdate);
   await initializeDiagnostics({ dataDirectory: app.getPath('userData'), appVersion: app.getVersion(), enabled: currentState.settings.diagnosticsEnabled === true });
   await initializeCredentialStore({ dataDirectory: app.getPath('userData') }).catch(() => dialog.showErrorBox(native().vaultUnavailable, native().vaultFailure));
   let previousChatGptProfile: string | undefined;
@@ -1428,6 +1515,17 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   });
   ipcMain.handle('workspace:quit', (event) => { verifySender(event); return confirmQuit(uiOperationContext(event)); });
   ipcMain.handle('settings:update', (event, input: unknown) => { verifySender(event); return changeSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('updates:status', event => {
+    if (dock && event.sender === dock.webContents) verifyBar(event);
+    else verifyPanel(event, ['settings']);
+    return appUpdates.status();
+  });
+  ipcMain.handle('updates:check', event => { verifyPanel(event, ['settings']); return appUpdates.check(); });
+  ipcMain.handle('updates:open', (event, rawVersion: unknown, rawDestination: unknown) => {
+    verifyPanel(event, ['settings']);
+    return openUpdateLink(updateVersionSchema.parse(rawVersion), z.enum(['release', 'installer']).parse(rawDestination));
+  });
+  ipcMain.handle('updates:settings', event => { verifyBar(event); return openSettingsCategory('updates'); });
   ipcMain.handle('diagnostics:status', event => { verifyPanel(event, ['settings', 'chat']); return getDiagnosticsStatus(); });
   ipcMain.handle('diagnostics:update', (event, input: unknown) => { verifyPanel(event, ['settings', 'chat']); return updateDiagnosticSettings(input, uiOperationContext(event)); });
   ipcMain.handle('diagnostics:export', event => { verifyPanel(event, ['settings', 'chat']); return exportDiagnosticLogs(uiOperationContext(event)); });
@@ -1509,6 +1607,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   await initializeModules();
   await openDock();
   for (const kind of currentState.windows.filter(w => !w.minimized && (!panelModules[w.kind] || moduleHost?.isReady(panelModules[w.kind]!))).map(w => w.kind)) await openPanel(kind);
+  if (currentState.settings.checkUpdatesOnStartup) void appUpdates.check();
+
 });
 function handleQuitSaveFailure(error: unknown): void {
   console.error('Workspace save failed', error);
@@ -1530,6 +1630,7 @@ function handleQuitSaveFailure(error: unknown): void {
   quitting = false; allowSettingsUnload = false;
   if (moduleHost?.isReady('ovd-mail')) mailModule?.startPolling();
 }
+app.on('will-quit', () => appUpdates?.dispose());
 app.on('before-quit', event => {
   if (readyToQuit || !currentState) return;
   event.preventDefault();

@@ -1,3 +1,4 @@
+import type { AppUpdateStatus, UpdateChannel } from './app-updates';
 import type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 import type { ChatEvidence } from './chat-evidence';
 import type { MemoryRecallSnapshot } from './module-memory';
@@ -6,7 +7,7 @@ import type { WorkspaceSaveStatus } from './workspace-save';
 export type { AiProvider, AiProtocol, AiAuthMode } from './ai-providers';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 export type WindowKind = 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions';
-export interface Settings { language?: import('./locale').LanguagePreference; textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; diagnosticsEnabled?: boolean; barOrientation?: 'vertical' | 'horizontal'; barSize?: number; barOpacity?: number; barPosition?: 'free' | 'left' | 'right' | 'top' | 'bottom'; barAutoHide?: boolean; }
+export interface Settings { language?: import('./locale').LanguagePreference; textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; diagnosticsEnabled?: boolean; updateChannel?: UpdateChannel; checkUpdatesOnStartup?: boolean; ignoredUpdateVersions?: string[]; barOrientation?: 'vertical' | 'horizontal'; barSize?: number; barOpacity?: number; barPosition?: 'free' | 'left' | 'right' | 'top' | 'bottom'; barAutoHide?: boolean; }
 export type Thinking = 'off' | 'low' | 'medium' | 'high';
 export type ModelTier = 'smart' | 'simple';
 export type ConfirmationMode = 'ask' | 'never';
@@ -44,6 +45,11 @@ export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachme
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  getAppUpdateStatus(): Promise<AppUpdateStatus>;
+  checkAppUpdates(): Promise<AppUpdateStatus>;
+  openAppUpdate(version: string, destination: 'release' | 'installer'): Promise<void>;
+  openAppUpdateSettings(): Promise<void>;
+  onAppUpdateStatus(callback: (status: AppUpdateStatus) => void): () => void;
   getWorkspaceSaveStatus(): Promise<WorkspaceSaveStatus>;
   retryWorkspaceSave(): Promise<WorkspaceSaveStatus>;
   onWorkspaceSaveStatus(callback: (status: WorkspaceSaveStatus) => void): () => void;

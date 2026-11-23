@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { LocaleProvider, uiText, useUiLocale } from './locale';
 import { defaultUiLocale } from '../shared/locale';
 import { X } from 'lucide-react';
+import { useAppUpdateStatus } from './useAppUpdateStatus';
 import { OvdBar } from './OvdBar';
 import { ChatView } from './ChatView';
 import { SessionsView } from './SessionsView';
@@ -44,6 +45,7 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
   const saveFeedback = useWorkspaceSaveFeedback();
   const moduleState = useWorkspaceModules();
   const moduleAttention = useModuleAttention(view === 'dock');
+  const updateStatus = useAppUpdateStatus(view === 'dock' || view === 'settings');
   const contributedViews = moduleViews(moduleState.modules);
   const contributedView = view === 'module' ? contributedViews.find(item => item.moduleId === moduleId && item.id === moduleViewId) : contributedViews.find(item => item.moduleId === (view === 'files' ? 'ovd-files' : 'ovd-mail') && item.id === view);
   const ModuleComponent = contributedView?.Component;
@@ -184,9 +186,10 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
   }
   if (view === 'dock') {
     const dockItems = workspaceNavigation(moduleState.modules, state?.settings.navigationOrder, locale);
-    return <OvdBar settings={state?.settings} entries={dockItems} attention={moduleAttention} error={error || moduleState.error} saveIssue={saveFeedback.issue?.message} onShowSaveIssue={() => action({ type: 'open_window', kind: 'chat' })} onError={setError} onNavigate={async (item, notices) => {
+    return <OvdBar settings={state?.settings} entries={dockItems} attention={moduleAttention} updateAvailable={!!updateStatus?.update && !updateStatus.ignored} error={error || moduleState.error} saveIssue={saveFeedback.issue?.message} onShowSaveIssue={() => action({ type: 'open_window', kind: 'chat' })} onError={setError} onNavigate={async (item, notices) => {
       const seen = notices.map(notice => notice.id);
-      if (item.action) await window.workspace.dispatchAction(item.action);
+      if (item.id === 'settings' && updateStatus?.update && !updateStatus.ignored) await window.workspace.openAppUpdateSettings();
+      else if (item.action) await window.workspace.dispatchAction(item.action);
       else if (item.view) await window.workspace.openModuleView(item.moduleId, item.view);
       if (seen.length) await window.workspace.acknowledgeModuleAttention(item.moduleId, seen);
       setError('');
@@ -206,7 +209,7 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
     </div>}
     {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} composerLocked={locked} composerIssue={composer.issue} savedComposer={composer.host?.content} onResolveComposer={keep => { if (sessionId) void composer.resolve(sessionId, keep); }} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id)} onReformulate={id => void reformulateMessage(id)} onContinue={id => void continueMessage(id)} sending={sending || !!state.presentation?.streamingSessionId} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
     {view === 'sessions' && <SessionsView state={state} onCreate={() => void createChat()} onOpen={id => void openChat(id)} onRename={(id, title) => window.workspace.renameChatSession(id, title)} onReference={id => void window.workspace.referenceChatSession(id).catch(err => setError(String(err)))} />}
-    {view === 'settings' && <SettingsView settings={state.settings} onUpdate={patch => window.workspace.updateSettings(patch)} />}
+    {view === 'settings' && <SettingsView settings={state.settings} updateStatus={updateStatus} onUpdate={patch => window.workspace.updateSettings(patch)} />}
     </div>
     {error && <div className="native-error" role="alert"><span>{error}</span><button type="button" aria-label={copy.dismissError} title={copy.close} onClick={() => setError('')}><X size={15}/></button></div>}
   </div>;

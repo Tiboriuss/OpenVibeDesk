@@ -2,6 +2,17 @@
 
 [Repository overview](README.md) · [Documentation](docs/README.md) · [Installer and update guide](docs/releases.md)
 
+## v0.1.12 — 23 November 2026
+
+OpenVibeDesk now checks GitHub Releases for updates on macOS and Windows.
+
+- **Settings → Updates** shows the installed version and provides a manual check, a release channel and a startup check toggle. Startup checks and the **Preview and stable** channel are enabled by default so current alpha releases are included.
+- When the matching installer and release files are ready, OVD shows a dialog with the release details and marks the Settings icon on the OVD-Bar. The dialog can open the release notes or the installer download.
+- **Don’t remind me about this version again** persists across restarts and clears the notification dot. The installer remains available through a manual check. New versions receive their own notification.
+- The Assistant can check for updates, read the current status and use the same saved preferences. Install the downloaded package over the existing app to update. See the [update guide](docs/releases.md#check-for-updates-in-ovd).
+
+The production build and all 51 existing tests passed. An isolated macOS Electron profile with fictional releases covered the update dialog, both channels, incomplete and wrong-platform releases, a saved startup opt-out, per-version reminders across restart and checking through the Assistant. A separate check used the live GitHub Releases API.
+
 ## v0.1.11 — 19 November 2026
 
 This alpha update adds English and German interface support, consistent settings controls and recovery for workspace saves and unsent chats.

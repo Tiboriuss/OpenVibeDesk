@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { CircleAlert, Ellipsis, GripHorizontal, GripVertical } from 'lucide-react';
 import type { Settings } from '../shared/model';
 import type { ModuleAttention } from '../shared/module-attention';
+import { appUpdateText } from '../shared/app-update-copy';
 import { resolveBarSettings } from '../shared/ovd-bar';
 import { uiText, useUiLocale } from './locale';
 import { BrandMark } from './BrandMark';
@@ -13,17 +14,20 @@ const MENU_ID = '__ovd_bar_menu__';
 const SAVE_ISSUE_ID = '__workspace_save_issue__';
 
 /** Presentation only: module navigation and Bar configuration keep their Host services. */
-export function OvdBar({ settings, entries, attention, error, saveIssue, onShowSaveIssue, onNavigate, onError }: {
+export function OvdBar({ settings, entries, attention, updateAvailable, error, saveIssue, onShowSaveIssue, onNavigate, onError }: {
   settings?: Settings;
   entries: WorkspaceNavigationEntry[];
   attention: ModuleAttention[];
+  updateAvailable: boolean;
   error?: string;
   saveIssue?: string;
   onShowSaveIssue(): void;
   onNavigate(entry: WorkspaceNavigationEntry, notices: ModuleAttention[]): Promise<void>;
   onError(message: string): void;
 }) {
-  const copy = uiText[useUiLocale()];
+  const locale = useUiLocale();
+  const copy = uiText[locale];
+  const updateNotice = appUpdateText[locale].available;
   const bar = resolveBarSettings(settings);
   const horizontal = bar.barOrientation === 'horizontal';
   const [collapsed, setCollapsed] = useState(false);
@@ -102,7 +106,8 @@ export function OvdBar({ settings, entries, attention, error, saveIssue, onShowS
 
   const iconSize = Math.round(bar.barSize * .55);
   const visibleError = error || presentationError;
-  const revealLabel = saveIssue ? copy.revealBarSave : copy.revealBar;
+  const revealTitle = saveIssue ? copy.revealBarSave : copy.revealBar;
+  const revealLabel = updateAvailable ? `${revealTitle} · ${updateNotice}` : revealTitle;
   const style = { '--bar-size': `${bar.barSize}px`, '--bar-icon-size': `${iconSize}px`, '--bar-opacity': bar.barOpacity / 100 } as CSSProperties;
   return <div ref={element} className={`ovd-bar ${horizontal ? 'is-horizontal' : 'is-vertical'}${collapsed ? ' is-collapsed' : ''}`} style={style}
     role="toolbar" aria-label="OVD-Bar" aria-orientation={bar.barOrientation}
@@ -132,7 +137,7 @@ export function OvdBar({ settings, entries, attention, error, saveIssue, onShowS
     }}
     onFocusCapture={() => reportInteraction({ focused: true })} onKeyDown={onKeyDown}
     onContextMenu={event => { event.preventDefault(); void showMenu(); }}>
-    {collapsed ? <button type="button" className="ovd-bar-button ovd-bar-reveal" aria-label={revealLabel} title={revealLabel} onClick={() => { revealPointerArea.current = undefined; void reveal(); }} onFocus={() => void reveal()}><BrandMark variant="app" size={Math.round(bar.barSize * .75)} />{attention.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...attention.map(notice => notice.pulseUntil))} />}{saveIssue && <span className="ovd-bar-error ovd-bar-save-dot" aria-hidden="true" />}</button> : <>
+    {collapsed ? <button type="button" className="ovd-bar-button ovd-bar-reveal" aria-label={revealLabel} title={revealLabel} onClick={() => { revealPointerArea.current = undefined; void reveal(); }} onFocus={() => void reveal()}><BrandMark variant="app" size={Math.round(bar.barSize * .75)} />{(attention.length > 0 || updateAvailable) && <ModuleAttentionDot pulseUntil={Math.max(0, ...attention.map(notice => notice.pulseUntil))} />}{saveIssue && <span className="ovd-bar-error ovd-bar-save-dot" aria-hidden="true" />}</button> : <>
       <div className="ovd-bar-grip" title={copy.moveBar} aria-hidden="true">{horizontal ? <GripVertical size={13} /> : <GripHorizontal size={13} />}</div>
       <div ref={navigation} className="ovd-bar-navigation">
       {saveIssue && <button type="button" className="ovd-bar-button ovd-bar-save-issue" data-bar-id={SAVE_ISSUE_ID}
@@ -142,12 +147,13 @@ export function OvdBar({ settings, entries, attention, error, saveIssue, onShowS
         const Icon = moduleIcon(entry.icon);
         const primary = entries.find(item => item.moduleId === entry.moduleId)?.id === entry.id;
         const notices = primary ? attention.filter(notice => notice.moduleId === entry.moduleId) : [];
-        const label = notices.length ? `${entry.title} · ${copy.notices(notices.length)}: ${notices.map(notice => notice.message).join(' · ')}` : entry.title;
+        const hasUpdate = entry.id === 'settings' && updateAvailable;
+        const label = hasUpdate ? `${entry.title} · ${updateNotice}` : notices.length ? `${entry.title} · ${copy.notices(notices.length)}: ${notices.map(notice => notice.message).join(' · ')}` : entry.title;
         return <button type="button" className={`ovd-bar-button${entry.id === 'assistant' ? ' ovd-bar-assistant' : ''}`} key={entry.id} data-bar-id={entry.id}
           tabIndex={activeId === entry.id ? 0 : -1} aria-label={label} title={label}
           onFocus={() => { setFocusedId(entry.id); }}
           onClick={() => { setFocusedId(entry.id); void onNavigate(entry, notices).catch(reason => onError(reason instanceof Error ? reason.message : String(reason))); }}>
-          <span className="module-attention-icon">{entry.id === 'assistant' ? <BrandMark variant="app" size={Math.round(bar.barSize * .75)} /> : <Icon size={iconSize} aria-hidden="true" />}{notices.length > 0 && <ModuleAttentionDot pulseUntil={Math.max(...notices.map(notice => notice.pulseUntil))} />}</span>
+          <span className="module-attention-icon">{entry.id === 'assistant' ? <BrandMark variant="app" size={Math.round(bar.barSize * .75)} /> : <Icon size={iconSize} aria-hidden="true" />}{(notices.length > 0 || hasUpdate) && <ModuleAttentionDot pulseUntil={Math.max(0, ...notices.map(notice => notice.pulseUntil))} />}</span>
         </button>;
       })}</div>
       <button type="button" className="ovd-bar-button ovd-bar-menu" data-bar-id={MENU_ID} tabIndex={activeId === MENU_ID ? 0 : -1}

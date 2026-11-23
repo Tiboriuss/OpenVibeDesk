@@ -1,3 +1,4 @@
+import { appUpdateText } from '../shared/app-update-copy';
 import { defaultSettings, type CoreSettingsCategoryId } from '../shared/settings';
 import type { UiLocale } from '../shared/locale';
 import { defaultAgentSettings } from '../shared/agent-settings';
@@ -17,6 +18,7 @@ export const settingsCategories = [
   { id: 'display', title: 'Darstellung', description: 'Sprache und Textgröße', order: 50 },
   { id: 'dock', title: 'OVD-Bar', description: 'Anordnung, Aussehen und Verhalten', order: 60 },
   { id: 'diagnostics', title: 'Diagnose', description: 'Fehler nachvollziehen und Protokolle exportieren', order: 90 },
+  { id: 'updates', title: 'Updates', description: '', order: 95 },
   { id: 'modules', title: 'Module', description: 'Zusatzmodule und ihre verfügbaren Funktionen', order: 1000 }
 ] as const satisfies readonly (SettingsCategory & { id: CoreSettingsCategoryId })[];
 
@@ -26,6 +28,7 @@ const englishCategories: Record<CoreSettingsCategoryId, { title: string; descrip
   display: { title: 'Appearance', description: 'Language and text size' },
   dock: { title: 'OVD-Bar', description: 'Layout, appearance and behavior' },
   diagnostics: { title: 'Diagnostics', description: 'Investigate errors and export logs' },
+  updates: { title: 'Updates', description: '' },
   modules: { title: 'Modules', description: 'Add-ons and their available features' }
 };
 
@@ -47,6 +50,10 @@ export const settingsEntries = [
   barAppearanceEntry,
   barBehaviorEntry,
   { id: 'diagnostics.logging', category: 'diagnostics', title: 'Diagnoseprotokoll', description: 'Technische Abläufe aufzeichnen, Protokolle exportieren und leeren.', keywords: 'diagnose debugging debug log logs logging protokoll fehler fehlerbericht support azure foundry responses streaming schnittstelle verbindung anbieter export exportieren herunterladen leeren löschen aktivieren deaktivieren', defaultValue: false, apply: 'immediate' },
+  { id: 'updates.app', category: 'updates', title: 'App-Updates', description: 'Installierte Version, Release-Kanal und Update-Suche beim Start', keywords: [
+    'aktualisierung aktuell neu version update software release installer download alpha beta vorschau stabil start startup github automatische updates preview stable',
+    ...Object.values(appUpdateText).flatMap(copy => [copy.currentVersion, copy.channel, copy.atStartup, copy.check])
+  ].join(' '), apply: 'immediate' },
   { id: 'modules.installed', category: 'modules', title: 'Installierte Module', description: 'Module aktivieren, deaktivieren und ihren Zustand prüfen', keywords: 'modul module plugin plugins erweiterung zusatz addon aktiv deaktiv status freigabe ereignis ereignisse event events abonnement abonnements hintergrund gedächtnis memory lernen automatisch zustellung warteschlange quellen', apply: 'immediate' },
   { id: 'modules.repositories', category: 'modules', title: 'Modulquellen & Katalog', description: 'Öffentliche und private Repositories, Module installieren und aktualisieren', keywords: 'repository repositories repo github quelle quellen katalog catalog modul module herunterladen download installieren installation aktualisieren update updates token privat private firma unternehmen zugang erweiterung plugin', apply: 'save' },
   navigationOrderEntry

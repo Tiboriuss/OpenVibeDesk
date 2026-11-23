@@ -1,3 +1,4 @@
+import { compareVersions } from '../shared/semver';
 import { localCredentialEntry } from './credential-store';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -51,23 +52,6 @@ export function normalizeRepositoryUrl(raw: string): { url: string; kind: 'githu
   return { url: url.toString(), kind: 'https' };
 }
 
-/** SemVer precedence; never offer a downgrade or silently replace a published version. */
-function compareVersions(left: string, right: string): number {
-  const [a, apre] = left.split(/-(.*)/s), [b, bpre] = right.split(/-(.*)/s);
-  const an = a.split('.').map(BigInt), bn = b.split('.').map(BigInt);
-  for (let index = 0; index < 3; index++) if (an[index] !== bn[index]) return an[index] > bn[index] ? 1 : -1;
-  if (apre === undefined || bpre === undefined) return apre === bpre ? 0 : apre === undefined ? 1 : -1;
-  const ap = apre.split('.'), bp = bpre.split('.');
-  for (let index = 0; index < Math.max(ap.length, bp.length); index++) {
-    if (ap[index] === bp[index]) continue;
-    if (ap[index] === undefined || bp[index] === undefined) return ap[index] === undefined ? -1 : 1;
-    const ai = /^\d+$/.test(ap[index]), bi = /^\d+$/.test(bp[index]);
-    if (ai && bi) { if (BigInt(ap[index]) === BigInt(bp[index])) continue; return BigInt(ap[index]) > BigInt(bp[index]) ? 1 : -1; }
-    if (ai !== bi) return ai ? -1 : 1;
-    return ap[index] > bp[index] ? 1 : -1;
-  }
-  return 0;
-}
 function message(error: unknown): string {
   if (error instanceof z.ZodError || error instanceof SyntaxError) return 'Der Modulkatalog entspricht nicht dem unterstützten Format (Version 1).';
   return error instanceof Error ? error.message.slice(0, 500) : 'Die Modulquelle konnte nicht verarbeitet werden.';

@@ -109,7 +109,7 @@ The Assistant can also inspect module sources, refresh catalogs, find updates an
 
 Installer downloads appear on [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) after the release build finishes: a macOS DMG for Apple Silicon, a macOS DMG for Intel, and a Windows x64 installer. Mac apps use an ad-hoc signature to seal their packaged code and resources, without an Apple Developer ID certificate or notarization. Windows installers are unsigned. The operating system may therefore warn or require approval before opening them; see the [installation guide](docs/getting-started.md#install-or-update-the-app).
 
-To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and locally stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Updates are installed manually; there is no in-app automatic updater yet.
+To update, quit OVD and install the newer version over the existing app: replace it in Applications on Mac, or run the newer Windows installer using the same Windows account. The app's local profile and locally stored credentials are retained. See [installation and updates](docs/getting-started.md#install-or-update-the-app) and the [release guide](docs/releases.md). Use [Settings → Updates](docs/releases.md#check-for-updates-in-ovd) to check for a newer version and open the matching installer download.
 
 ## Run locally
 
