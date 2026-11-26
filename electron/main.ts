@@ -359,13 +359,32 @@ function commit(next: WorkspaceState): void {
   broadcast();
   checkpoints.changed();
 }
+function moduleDocument(url: string) {
+  // Manifest IDs are URL-safe. Accept only the canonical document address.
+  const match = /^ovd-module:\/\/view\/([a-z][a-z0-9.-]{0,79})\/([a-z][a-z0-9_.-]{0,99})$/.exec(url);
+  return match ? { moduleId: match[1], viewId: match[2] } : undefined;
+}
+function canLoadModuleDocument(contents: Electron.WebContents, moduleId: string, viewId: string): boolean {
+  if (!moduleHost?.isReady(moduleId)) return false;
+  if (panels.get('settings')?.webContents === contents) {
+    return !!moduleHost.registry.getModule(moduleId)?.manifest?.contributions.settings.some(item => item.id === viewId && item.entry);
+  }
+  return moduleWindows.get(`${moduleId}:${viewId}`)?.window.webContents === contents;
+}
 function setupWindow(win: BrowserWindow): void {
   win.on('page-title-updated', event => event.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', event => event.preventDefault());
+  win.webContents.on('will-redirect', event => event.preventDefault());
   win.webContents.on('will-frame-navigate', event => {
-    // Static srcdoc readers may be replaced by their parent, but never navigate away.
-    if (event.isMainFrame || (event.frame?.url === 'about:srcdoc' && event.url !== 'about:srcdoc')) event.preventDefault();
+    // Only the host may mount or replace a direct child document. A WindowProxy
+    // survives navigation, so a module bridge must never follow the child elsewhere.
+    const host = win.webContents.mainFrame;
+    if (!event.isMainFrame && event.frame?.parent === host && event.initiator === host) {
+      if (win === panels.get('mail') && event.url === 'about:srcdoc') return;
+      const document = moduleDocument(event.url);
+      if (document && canLoadModuleDocument(win.webContents, document.moduleId, document.viewId)) return;
+    }
+    event.preventDefault();
   });
 }
 function panelTitle(kind: WindowKind): string {
@@ -1168,7 +1187,7 @@ async function sendChat(text: unknown, emailRef: unknown, rawOptions: unknown, c
     }
     else {
       new AgentContext().fit(providerMessages, config, options, agentSettings, () => undefined);
-      await streamCompletion(config, key, providerMessages, options, controller.signal, onDelta, agentSettings.requestTimeoutSeconds * 1000, agentSettings);
+      await streamCompletion(config, key, providerMessages, options, controller.signal, onDelta, agentSettings.requestTimeoutSeconds * 1000, agentSettings, agentSettings.transportRetries);
       updateAssistant({ evidence: textEvidence.finish('completed') });
     }
     flush(); updateAssistant({ status: runLimit ? 'limited' : 'completed' });
@@ -1247,7 +1266,7 @@ async function reformulateChat(rawMessageId: unknown, rawOptions: unknown): Prom
     new AgentContext().fit(messages, config, options, settings, () => undefined);
     const key = await getKey(config);
     controller.signal.throwIfAborted();
-    await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000, settings);
+    await streamReformulation(config, key, messages, options, controller.signal, delta => { buffered += delta; if (!flushTimer) flushTimer = setTimeout(flush, 50); }, settings.requestTimeoutSeconds * 1000, settings, settings.transportRetries);
     flush(); update({ status: 'completed' });
     await saveCurrent();
   } catch (error) {
@@ -1299,6 +1318,7 @@ async function initializeMcpModule(): Promise<void> {
   if (mcpModule) { await mcpModule.activate(); return; }
   const { createMcpModule } = await import('../modules/ovd-mcp/backend');
   const module = createMcpModule({
+    getLocale: uiLocale,
     operationFingerprint: hostOperationFingerprint,
     dataRoot: path.join(app.getPath('userData'), 'module-data', 'ovd-mcp'),
     verifySender: event => { requireMcpModule(); verifySender(event); },
@@ -1417,9 +1437,9 @@ async function initializeModules(): Promise<void> {
   if (moduleHost.isReady('ovd-mcp')) moduleHost.registerOperationAdapter('ovd-mcp', { prepare(action, args) { return { args, effect: ['mcp.servers', 'mcp.tools', 'mcp.audit'].includes(action) ? 'read' : 'unknown' }; } });
   protocol.handle('ovd-module', async request => {
     try {
-      const url = new URL(request.url), parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent);
-      if (request.method !== 'GET' || url.hostname !== 'view' || parts.length !== 2 || url.search || url.username || url.password) throw new Error('Ungültige Modulansicht.');
-      const html = await moduleHost!.readView(parts[0], parts[1]);
+      const document = moduleDocument(request.url);
+      if (request.method !== 'GET' || !document) throw new Error('Ungültige Modulansicht.');
+      const html = await moduleHost!.readView(document.moduleId, document.viewId);
       return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'" } });
     } catch { return new Response(native().moduleViewUnavailable, { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Security-Policy': "default-src 'none'" } }); }
   });
@@ -1436,7 +1456,11 @@ async function initializeModules(): Promise<void> {
   ipcMain.handle('modules:attention:acknowledge', (event, input: unknown) => { verifySender(event); const { moduleId, ids } = attentionAcknowledgementSchema.parse(input); return moduleHost!.acknowledgeAttention(moduleId, ids); });
   ipcMain.handle('modules:set-enabled', (event, id: unknown, enabled: unknown) => { verifyPanel(event, ['settings']); if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('Ungültige Modulaktion.'); return moduleHost!.setEnabled(id, enabled, uiOperationContext(event)); });
   ipcMain.handle('modules:open-view', (event, id: unknown, viewId: unknown) => { verifySender(event); if (typeof id !== 'string' || typeof viewId !== 'string') throw new Error('Ungültige Modulansicht.'); return moduleHost!.openView(id, viewId); });
-  ipcMain.handle('modules:read-view', (event, id: unknown, viewId: unknown) => { const moduleId = verifyModuleFrame(event, id); if (typeof viewId !== 'string' || viewId.length > 100) throw new Error('Ungültige Modulansicht.'); return moduleHost!.readView(moduleId, viewId); });
+  ipcMain.handle('modules:read-view', (event, id: unknown, viewId: unknown) => {
+    verifySender(event);
+    if (typeof id !== 'string' || id.length > 80 || typeof viewId !== 'string' || viewId.length > 100 || !canLoadModuleDocument(event.sender, id, viewId)) throw new Error('Ungültige Modulansicht.');
+    return moduleHost!.readView(id, viewId);
+  });
   ipcMain.handle('modules:invoke', (event, id: unknown, tool: unknown, args: unknown) => { const moduleId = verifyModuleFrame(event, id); if (typeof tool !== 'string' || tool.length > 128) throw new Error('Ungültige Modulfunktion.'); return moduleHost!.invoke(moduleId, tool, args, uiOperationContext(event), true); });
   ipcMain.handle('modules:reference', async (event, id: unknown, raw: unknown) => {
     const moduleId = verifyModuleFrame(event, id), reference = moduleReferenceInputSchema.parse(raw);
@@ -1540,16 +1564,16 @@ if (hasInstanceLock) app.whenReady().then(async () => {
   ipcMain.handle('agent:settings:save', async (event, input: unknown) => { verifyPanel(event, ['settings']); const agentSettings = agentSettingsSchema.parse(input); await persistWorkspace(() => ({ ...currentState, agentSettings })); commit({ ...currentState, agentSettings }); });
   ipcMain.on('agent:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) agentSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.on('mcp:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) mcpSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
-  ipcMain.handle('ai:settings:get', (event) => { verifySender(event); return readAiSettings(uiOperationContext(event)); });
+  ipcMain.handle('ai:settings:get', (event) => { verifyPanel(event, ['settings']); return readAiSettings(uiOperationContext(event)); });
   ipcMain.handle('ai:chatgpt:status', event => { verifyPanel(event, ['settings', 'chat']); return chatGptAuth().status(); });
   ipcMain.handle('ai:chatgpt:login', (event, input: unknown) => { verifyPanel(event, ['settings']); return chatGptAuth().startLogin(z.object({ profileId: z.string().uuid().optional(), newProfile: z.boolean().optional(), consent: z.boolean().optional() }).strict().optional().parse(input)); });
   ipcMain.handle('ai:chatgpt:cancel', event => { verifyPanel(event, ['settings']); return chatGptAuth().cancelLogin(); });
   ipcMain.handle('ai:chatgpt:logout', event => { verifyPanel(event, ['settings']); if (activeStream?.provider === 'chatgpt') activeStream.controller.abort(); return chatGptAuth().logout(); });
   ipcMain.handle('ai:chatgpt:select', (event, input: unknown) => { verifyPanel(event, ['settings']); if (activeStream?.provider === 'chatgpt') activeStream.controller.abort(); return chatGptAuth().selectProfile(z.string().uuid().parse(input)); });
   ipcMain.handle('ai:chatgpt:usage', async event => { verifyPanel(event, ['settings', 'chat']); await shell.openExternal('https://chatgpt.com/settings/usage'); });
-  ipcMain.handle('ai:settings:save', (event, input: unknown) => { verifySender(event); return saveAiSettings(input, uiOperationContext(event)); });
-  ipcMain.handle('ai:models:list', async event => { verifySender(event); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)).catch(localizeModelListError); });
-  ipcMain.handle('ai:key:clear', async event => { verifySender(event); await deleteKey(currentState.ai ?? defaultAiConfig); });
+  ipcMain.handle('ai:settings:save', (event, input: unknown) => { verifyPanel(event, ['settings']); return saveAiSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('ai:models:list', async event => { verifyPanel(event, ['settings']); const config = currentState.ai ?? defaultAiConfig; return listModels(config, await getKey(config)).catch(localizeModelListError); });
+  ipcMain.handle('ai:key:clear', async event => { verifyPanel(event, ['settings']); await deleteKey(currentState.ai ?? defaultAiConfig); });
   ipcMain.handle('chat:sessions:list', (event, input: unknown) => {
     verifyPanel(event, ['sessions', 'chat']);
     const { query, offset, limit, revision } = chatSessionListRequestSchema.parse(input ?? {});

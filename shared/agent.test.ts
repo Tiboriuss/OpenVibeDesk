@@ -267,6 +267,37 @@ describe('workspace agent integration', () => {
     } finally { await server.close(); }
   });
 
+  it('retries an early Responses server failure without replaying a completed action', async () => {
+    const requests: any[] = [];
+    const server = await serve((req, res) => collect(req, payload => {
+      requests.push(payload);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      const send = (value: unknown) => res.end(`data: ${JSON.stringify(value)}\n\n`);
+      const complete = (item: unknown) => send({ type: 'response.completed', response: { status: 'completed', output: [item] } });
+      if (requests.length <= 2) {
+        const first = requests.length === 1;
+        return complete({
+          type: 'function_call', call_id: first ? 'discovery' : 'open', name: first ? 'get_module_tools' : 'mail_open', status: 'completed',
+          arguments: first ? '{"moduleId":"mail"}' : '{"emailId":"m1"}'
+        });
+      }
+      if (requests.length === 3) {
+        return send({ type: 'response.failed', response: { status: 'failed', output: [], error: { code: 'server_error', message: 'Synthetic provider detail' } } });
+      }
+      return complete({ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Opened.' }] });
+    }));
+    const deps = workspace();
+    let visible = '';
+    try {
+      await runAgent({ ...server.config, protocol: 'responses' }, null, [{ role: 'user', content: 'Open mail m1.' }],
+        { tier: 'smart' }, new AbortController().signal, delta => { visible += delta; }, deps);
+      expect(requests.map(request => request.stream)).toEqual([true, true, true, true]);
+      expect(requests[3]).toEqual(requests[2]);
+      expect(deps.actions).toEqual([{ type: 'read_email', emailId: 'm1' }]);
+      expect(visible).toBe('Opened.');
+    } finally { await server.close(); }
+  });
+
   it('stops at the configured round limit with counts and retained results', async () => {
     let requests = 0, visible = '';
     const limits: AgentRunLimit[] = [], events: ToolEvent[] = [];

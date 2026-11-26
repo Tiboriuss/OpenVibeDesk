@@ -1,3 +1,4 @@
+import { connectFailureText } from '../connection-feedback';
 import { useUiLocale } from '../../../src/locale';
 import { mcpText } from './mcp-locale';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -86,7 +87,8 @@ export function McpSettings({ searchQuery = '' }: { searchQuery?: string }) {
 }
 
 function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChange, onSaved, onRefresh, onCancel, prepared }: { server?: McpServerSummary; editorKey: string; open: boolean; hidden?: boolean; onToggle(value: boolean): void; onStatusChange(key: string, status?: FormStatus): void; onSaved(server: McpServerSummary): void; onRefresh(): Promise<void>; onCancel?(): void; prepared?: Prepared }) {
-  const copy = mcpText[useUiLocale()];
+  const locale = useUiLocale();
+  const copy = mcpText[locale];
   const [values, setValues] = useState(() => toForm(server)), [baseline, setBaseline] = useState(() => toForm(server));
   const [allowed, setAllowed] = useState<string[]>(server?.allowedTools ?? []), [allowedBaseline, setAllowedBaseline] = useState<string[]>(server?.allowedTools ?? []);
   const [toolsPage, setToolsPage] = useState<McpToolPage>(), [toolsLoading, setToolsLoading] = useState(false), [toolsError, setToolsError] = useState('');
@@ -166,6 +168,10 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
     finally { setCancellingSignIn(false); }
   }
   function changeAllowed(update: (previous: string[]) => string[]) { setAllowed(update); setError(''); setNotice(''); }
+  const failure = server?.connectFailure;
+  const serverError = failure ? connectFailureText[locale][failure] : server?.error;
+  // A failed Connect is retained on the server card, including across language changes.
+  const repeatedError = error === server?.error || !!failure && (error === connectFailureText.en[failure] || error === connectFailureText.de[failure]);
   const statusLabels = { disconnected: copy.disconnected, connecting: copy.connecting, connected: copy.connected, error: copy.connectionError };
   const oauthLabels = { signed_out: copy.signedOut, signing_in: copy.signingIn, signed_in: copy.signedIn, required: copy.signInRequired, error: copy.authError };
   const name = values.name || server?.name || copy.newServer;
@@ -173,8 +179,8 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
   return <details className="mcp-server" hidden={hidden} open={open} onToggle={event => onToggle(event.currentTarget.open)}>
     <summary><Server size={17} aria-hidden="true"/><span><strong>{name}</strong><small>{server ? statusLabels[server.status] : copy.unsaved} · {values.transport === 'stdio' ? copy.localProcess : 'HTTP'}{dirty ? copy.dirty : server ? ` · ${statusCount}` : ''}</small></span><ChevronDown size={16} aria-hidden="true"/></summary>
     <div className="mcp-server-content">
-      {server && <div className="mcp-connection-row"><span className={`mcp-status ${server.status}`}>{connected ? <CircleCheck size={13} aria-hidden="true"/> : server.status === 'error' ? <CircleAlert size={13} aria-hidden="true"/> : connecting ? <LoaderCircle size={13} aria-hidden="true"/> : <Unplug size={13} aria-hidden="true"/>}{statusLabels[server.status]}</span><div>{connected || connecting ? <button type="button" disabled={busy || signingIn} onClick={() => void action(async () => { const result = await window.workspace.mcpDisconnectServer(server.id); await onRefresh(); if (result.status === 'connected' || result.status === 'connecting') throw new Error(result.error || copy.disconnectFailed); }, 'didDisconnect')}><Unplug size={13}/>{copy.disconnect}</button> : <button type="button" className="mcp-primary" disabled={busy || signingIn || configDirty} title={configDirty ? copy.saveFirst : undefined} onClick={() => void action(async () => { const result = await window.workspace.mcpConnectServer(server.id); await onRefresh(); if (result.status !== 'connected') throw new Error(result.error || copy.connectFailed); }, 'didConnect')}><Cable size={13}/>{copy.connect}</button>}</div></div>}
-      {server?.error && <p className="mcp-feedback error" role="alert">{server.error}</p>}
+      {server && <div className="mcp-connection-row"><span className={`mcp-status ${server.status}`}>{connected ? <CircleCheck size={13} aria-hidden="true"/> : server.status === 'error' ? <CircleAlert size={13} aria-hidden="true"/> : connecting ? <LoaderCircle size={13} aria-hidden="true"/> : <Unplug size={13} aria-hidden="true"/>}{statusLabels[server.status]}{server.protocolVersion && ` · MCP ${server.protocolVersion}`}</span><div>{connected || connecting ? <button type="button" disabled={busy || signingIn} onClick={() => void action(async () => { const result = await window.workspace.mcpDisconnectServer(server.id); await onRefresh(); if (result.status === 'connected' || result.status === 'connecting') throw new Error(result.error || copy.disconnectFailed); }, 'didDisconnect')}><Unplug size={13}/>{copy.disconnect}</button> : <button type="button" className="mcp-primary" disabled={busy || signingIn || configDirty} title={configDirty ? copy.saveFirst : undefined} onClick={() => void action(async () => { const result = await window.workspace.mcpConnectServer(server.id); await onRefresh(); if (result.status !== 'connected') throw new Error(result.error || copy.connectFailed); }, 'didConnect')}><Cable size={13}/>{copy.connect}</button>}</div></div>}
+      {serverError && <p className="mcp-feedback error" role="alert">{serverError}</p>}
       <form noValidate onSubmit={event => { event.preventDefault(); void save(); }}><fieldset disabled={busy || signingIn}>
         <label className="mcp-field"><span>{copy.name}</span><input aria-label={`${name}: ${copy.name}`} maxLength={100} value={values.name} placeholder={copy.namePlaceholder} onChange={event => update('name', event.target.value)}/></label>
         <label className="mcp-field"><span>{copy.description}</span><input aria-label={`${name}: ${copy.description}`} maxLength={500} value={values.description} placeholder={copy.descriptionPlaceholder} onChange={event => update('description', event.target.value)}/><small>{copy.descriptionHint}</small></label>
@@ -230,7 +236,7 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
         </>}
       </div></details>}
       <div className="mcp-editor-footer">{dirty && <button type="button" disabled={busy || signingIn} onClick={discard}>{copy.discard}</button>}{!server && onCancel && <button type="button" disabled={busy || signingIn} onClick={onCancel}>{copy.cancelAdd}</button>}{server && <button type="button" className="mcp-danger" disabled={busy || signingIn || dirty} title={dirty ? copy.saveOrDiscard : undefined} onClick={() => void action(async () => { const removed = await window.workspace.mcpRemoveServer(server.id); if (removed) await onRefresh(); })}><Trash2 size={12}/>{copy.remove}</button>}</div>
-      {error && <p className="mcp-feedback error" role="alert">{error}</p>}{notice && <p className="mcp-feedback success" role="status">{copy[notice]}</p>}
+      {error && !repeatedError && <p className="mcp-feedback error" role="alert">{error}</p>}{notice && <p className="mcp-feedback success" role="status">{copy[notice]}</p>}
     </div>
   </details>;
 }

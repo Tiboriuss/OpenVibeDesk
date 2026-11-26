@@ -13,6 +13,22 @@ Add a server under **Settings → MCP** (German: **Einstellungen → MCP**):
 
 Save, connect, select the required tools, then save their permissions separately. New tools are denied by default. Changing the executable, arguments, working directory or HTTP target clears the saved tool allowlist. Automatic connection at app startup is optional and off by default; saved opt-in connections start in the background. The assistant can prepare public configuration and permissions in the form, but only the user can save them. It cannot save a configuration or grant itself tools.
 
+### Protocol compatibility
+
+Expand a connected server in Settings to see the negotiated MCP revision. The Assistant can read the same revision through `mcp.servers`. An unsuccessful connection has no negotiated revision. The connection card distinguishes sign-in problems, a rejected protocol version, an unavailable `initialize` method and rejected routing headers when the server supplies that evidence.
+
+| Server behavior checked on 26 November 2026 | Stdio | Streamable HTTP |
+| --- | --- | --- |
+| Accepts the November 2025 handshake | Read succeeded at `2025-11-25` | Read succeeded at `2025-11-25` |
+| Selects the earlier June 2025 revision | Read succeeded at `2025-06-18` | Read succeeded at `2025-06-18` |
+| Supports both the November 2025 and July 2026 protocols | Read succeeded at `2025-11-25` | Read succeeded at `2025-11-25` |
+| Requires the July 2026 protocol | Fixture rejected `initialize` | Fixture rejected the missing routing headers |
+| Returns an unknown revision during initialization | Stopped before tool discovery | Stopped before tool discovery |
+
+The two July-only errors describe the fixture responses. Other servers or proxies can respond differently. OVD uses SDK v1's `initialize` handshake. A server requiring `2026-07-28` needs a handshake-compatible endpoint to work with this build. An ordinary HTTP 400 or 404 alone leaves the cause open. [MCP versioning](https://modelcontextprotocol.io/docs/2026-07-28/learn/versioning) · [HTTP transport rules](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http)
+
+**Repeat the read locally.** For Stdio, set the executable to Node and supply the absolute [fixture path](../../scripts/mcp-compat-fixture.cjs), `stdio` and `dual` as three separate arguments. For HTTP, run `node scripts/mcp-compat-fixture.cjs http dual` and use the printed loopback URL. Connect, approve the fixture's read tool and ask the Assistant for the workshop's opening hours. Repeat with `legacy` and `modern` to compare the three server modes. The broader assessment also checked cancellation before dispatch, a lost reply after a synthetic change and reconnect. [Acceptance record and migration gates](../../docs/maturation-plan.md#r07-mcp-protocol-compatibility)
+
 Bearer tokens, OAuth credentials and configured environment values live in the local encrypted credential store and are write-only from the settings UI. Public configuration, credential-presence flags, environment key names and tool permissions are stored in `servers.json` under `<userData>/module-data/ovd-mcp/`. Writes are serialized and atomic. Unreadable configuration is not silently overwritten. Unsaved forms survive category changes and settings searches and participate in the app's unsaved-settings close protection. Existing Bearer-token configurations retain their authentication method.
 
 The vault's key is stored beside the encrypted file under the user profile. This removes normal-use OS password prompts while providing weaker protection than an OS keychain. Upgrading from builds through v0.1.7 needs one-time token/secret reentry and OAuth sign-in; old OS entries are not imported or deleted automatically. Public server configuration is retained, and missing local credentials are not advertised as stored. See [credential storage](../../docs/getting-started.md#credential-storage).
@@ -69,6 +85,8 @@ The Assistant can inspect authentication status through `mcp.servers`, start an 
 A connected server with permitted, supported tools appears as the virtual module `ovd-mcp.<serverId>`. Its name and description come from the user's configuration. The model receives short source metadata; `find_modules` locates the source and `get_module_tools` loads only the schemas needed for the current task. The complete server inventory is not attached to every AI request.
 
 The shared contract is [`ModuleToolProvider`](../../shared/module-tool-provider.ts). The host checks source availability and the actual schema offered to the model. The MCP service also checks the live connection, current permission and arguments before execution. Tool names bind the connection, configuration, permissions and catalog revision; an old offer cannot silently acquire a different meaning after any of them changes.
+
+Saved tool permissions currently follow the server's tool name. A changed input schema invalidates an outstanding offer, but the Assistant can discover the replacement under the existing name grant. Requiring fresh user review of changed definitions is the next permissions change in R07.
 
 Object input schemas are limited to 12,000 serialized JSON characters. JSON Schema Draft-07, 2019-09 and 2020-12 are supported, with local references only. Asynchronous schemas and unsupported dialects are rejected. Original schemas remain unchanged in the tool offer; unsupported tools show a reason in the UI. Inventory loading is limited to 500 tools or 25 server pages and reports a warning when that limit is reached. UI inventory pages include schemas; the assistant's `mcp.tools` management result contains metadata only. It must use `get_module_tools` to load executable definitions.
 

@@ -35,8 +35,6 @@ const messages = {
   invalidStream: ["Der Endpunkt hat ungültige Streaming-Daten geliefert.", "The endpoint returned invalid streaming data."],
   conflictingOutput: ["Der Endpunkt hat widersprüchliche Responses-Ausgabedaten geliefert.", "The endpoint returned inconsistent Responses output."],
   conflictingText: ["Der Endpunkt hat widersprüchliche Streaming-Texte geliefert.", "The streamed text conflicts with the completed response."],
-  completeError: ["Der Endpunkt meldet auch ohne Streaming einen Fehler.", "The endpoint reported an error in non-streaming mode."],
-  streamError: ["Der Endpunkt meldet einen Fehler beim Streaming.", "The endpoint reported an error while streaming."],
   tooLarge: ["Die Antwort des Endpunkts ist zu groß.", "The endpoint response exceeds the size limit."],
   streamEnded: ["Die Streaming-Antwort wurde vorzeitig beendet.", "The stream ended before the response was complete."],
   connection: ["Die Verbindung zum Endpunkt ist fehlgeschlagen. Bitte URL und Erreichbarkeit prüfen.", "Could not connect to the endpoint. Check the URL and network connection."],

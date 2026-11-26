@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { AiConfig, ChatOptions } from '../shared/model';
 import type { DiagnosticsExportResult, DiagnosticsStatus } from '../shared/diagnostics';
 import { ContextBudgetError } from './provider-request';
+import { knownProviderErrorCode, ProviderHttpError } from './ai-provider';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_FILES = 3;
@@ -19,7 +20,6 @@ const providers = new Set(['openai-compatible', 'openai', 'azure', 'chatgpt']);
 const authModes = new Set(['bearer', 'api-key', 'none']);
 const diagnosticReasons = new Set(['reasoning_metadata_invalid', 'reasoning_not_completed', 'tool_structure_invalid', 'fallback_items_unfinished', 'item_index_invalid', 'item_id_invalid', 'item_type_invalid', 'item_id_changed', 'item_type_changed', 'item_id_reused', 'terminal_output_invalid', 'terminal_item_missing', 'terminal_item_type_changed', 'terminal_item_id_changed', 'message_role_changed', 'message_content_changed', 'reasoning_summary_changed', 'reasoning_encrypted_conflict', 'completed_function_call_id_changed', 'completed_function_name_changed', 'completed_function_arguments_changed', 'finalized_call_id_changed', 'finalized_call_name_changed', 'finalized_call_arguments_changed', 'event_json_invalid', 'text_after_item_done', 'duplicate_item_added', 'duplicate_item_done', 'function_item_id_changed', 'function_call_id_changed', 'function_name_changed', 'function_arguments_changed', 'function_arguments_prefix_changed', 'function_delta_without_item', 'function_delta_id_changed', 'function_arguments_after_done', 'function_arguments_done_prefix_changed', 'stream_text_changed', 'completed_call_missing', 'completed_function_arguments_prefix_changed', 'chat_tool_structure_invalid']);
 const diagnosticFields = new Set(['index', 'id', 'type', 'role', 'name', 'arguments', 'tool_calls', 'function', 'summary', 'encrypted_content', 'status', 'content', 'output', 'delta']);
-const errorCodes = new Set(['DeploymentNotFound', 'ResourceNotFound', 'InvalidApiKey', 'Unauthorized', 'PermissionDenied', 'BadRequest', 'InvalidRequest', 'OperationNotSupported', 'InvalidApiVersionParameter', 'AuthenticationError', 'ContentFilter', 'content_filter', 'invalid_api_key', 'invalid_request_error', 'insufficient_quota', 'rate_limit_exceeded', 'quota_exceeded', 'model_not_found', 'unsupported_parameter', 'unsupported_value', 'missing_required_parameter', 'invalid_api_version', 'context_length_exceeded']);
 const appendRecord = Symbol('append sanitized diagnostic record');
 const agentContext = new AsyncLocalStorage<{ agentRunId: string }>();
 type LogRecord = { version: 1; at: string; sessionId: string; appVersion: string; event: string; requestId?: string; agentRunId?: string; details: Record<string, unknown> };
@@ -123,15 +123,20 @@ export class DiagnosticsLog {
     if (object(value.response)) result.response = this.output(value.response);
     if ('output' in value) result.output = this.output(value);
     if (Array.isArray(value.choices)) result.choices = value.choices.slice(0, 8).map(choice => object(choice) ? { index: typeof choice.index === 'number' ? choice.index : undefined, finish_reason: this.token(choice.finish_reason, statuses), ...(object(choice.delta) ? { delta: this.chatMessage(choice.delta) } : {}), ...(object(choice.message) ? { message: this.chatMessage(choice.message) } : {}) } : this.fingerprint(choice));
-    if ('error' in value) result.error = object(value.error) ? { code: typeof value.error.code === 'string' && errorCodes.has(value.error.code) ? value.error.code : this.fingerprint(value.error.code), type: this.fingerprint(value.error.type) } : this.fingerprint(value.error);
+    if ('error' in value) result.error = this.providerError(value.error);
+    if (value.type === 'error' && 'code' in value) result.code = knownProviderErrorCode(value.code) ?? this.fingerprint(value.code);
     return result;
+  }
+  private providerError(value: unknown) {
+    if (!object(value)) return this.fingerprint(value);
+    return { code: knownProviderErrorCode(value.code) ?? this.fingerprint(value.code), type: this.fingerprint(value.type) };
   }
   private chatMessage(value: Record<string, unknown>) {
     return { ...(value.role !== undefined ? { role: this.token(value.role, roles) } : {}), ...(value.content !== undefined ? { content: this.fingerprint(value.content) } : {}), ...(Array.isArray(value.tool_calls) ? { tool_calls: value.tool_calls.slice(0, 16).map(call => object(call) ? { index: typeof call.index === 'number' ? call.index : undefined, id: this.fingerprint(call.id), type: this.token(call.type, itemTypes), ...(object(call.function) ? { function: this.item({ ...call.function, type: 'function' }) } : {}) } : this.fingerprint(call)) } : {}) };
   }
   output(value: unknown): Record<string, unknown> {
     if (!object(value)) return this.fingerprint(value);
-    return { id: this.fingerprint(value.id), status: this.token(value.status, statuses), output: Array.isArray(value.output) ? { count: value.output.length, items: value.output.slice(0, 16).map(item => this.item(item)) } : this.fingerprint(value.output), error: this.fingerprint(value.error), incomplete_details: this.fingerprint(value.incomplete_details) };
+    return { id: this.fingerprint(value.id), status: this.token(value.status, statuses), output: Array.isArray(value.output) ? { count: value.output.length, items: value.output.slice(0, 16).map(item => this.item(item)) } : this.fingerprint(value.output), error: this.providerError(value.error), incomplete_details: this.fingerprint(value.incomplete_details) };
   }
   comparison(value?: DiagnosticComparison) {
     if (!value) return {};
@@ -276,7 +281,7 @@ export class ProviderDiagnosticsTrace {
     const contentType = response.headers.get('content-type')?.split(';')[0];
     this.write('provider.http', { status: response.status, contentType: contentType === 'text/event-stream' || contentType === 'application/json' ? contentType : 'other', contentLength: /^\d{1,10}$/.test(response.headers.get('content-length') ?? '') ? Number(response.headers.get('content-length')) : undefined, requestIds });
   }
-  event(value: unknown) { if (!this.active || this.ended || !diagnosticsLog.isEnabled()) return; const terminal = object(value) && (['response.completed', 'response.failed', 'response.incomplete', 'error'].includes(String(value.type)) || Array.isArray(value.choices) && value.choices.some(choice => object(choice) && choice.finish_reason != null)); if (++this.events > MAX_TRACE_EVENTS && !terminal) { this.omittedEvents++; return; } this.write('provider.event', diagnosticsLog.event(value)); }
+  event(value: unknown) { if (!this.active || this.ended || !diagnosticsLog.isEnabled()) return; const terminal = object(value) && (['response.completed', 'response.failed', 'response.incomplete', 'error'].includes(String(value.type)) || !!value.error || Array.isArray(value.choices) && value.choices.some(choice => object(choice) && choice.finish_reason != null)); if (++this.events > MAX_TRACE_EVENTS && !terminal) { this.omittedEvents++; return; } this.write('provider.event', diagnosticsLog.event(value)); }
   failure(reason: string, comparison?: DiagnosticComparison) { if (!this.active || !diagnosticsLog.isEnabled()) return; this.write('provider.protocol_failure', { reason: diagnosticReasons.has(reason) ? reason : 'unrecognized_protocol_failure', ...(!diagnosticReasons.has(reason) ? { reasonSignature: diagnosticsLog.fingerprint(reason) } : {}), ...diagnosticsLog.comparison(comparison) }); }
   finish(textLength: number, toolCount: number, wireBytes?: number) { if (this.ended) return; this.ended = true; this.write('provider.completed', { elapsedMs: Date.now() - this.started, textLength, toolCount, events: this.events, omittedEvents: this.omittedEvents, ...(wireBytes !== undefined ? { wireBytes } : {}) }); }
   error(error: unknown, signal?: AbortSignal, timeout?: AbortSignal) {
@@ -286,7 +291,7 @@ export class ProviderDiagnosticsTrace {
     const diagnostic = object(source.diagnostics) ? source.diagnostics : {};
     const errorType = typeof source.name === 'string' && ['ToolStreamError', 'ProviderHttpError', 'ChatGptAuthError', 'AbortError', 'TypeError', 'Error'].includes(source.name) ? source.name : 'other';
     const allocation = error instanceof ContextBudgetError ? Object.fromEntries(Object.entries({ requestBytes: error.observedBytes, estimatedInputTokens: error.estimatedInputTokens, inputTokenBudget: error.inputTokenBudget, outputTokenReserve: error.outputTokenReserve }).filter(([, value]) => Number.isSafeInteger(value) && value >= 0)) : {};
-    this.write('provider.failed', { elapsedMs: Date.now() - this.started, kind: signal?.aborted ? 'cancelled' : timeout?.aborted ? 'timeout' : error instanceof ContextBudgetError ? 'context_budget' : errorType, ...allocation, errorMessage: diagnosticsLog.fingerprint(source.message), ...(typeof source.httpStatus === 'number' ? { httpStatus: source.httpStatus } : {}), ...(typeof source.code === 'string' ? { code: errorCodes.has(source.code) ? source.code : diagnosticsLog.fingerprint(source.code) } : {}), ...(typeof source.requestId === 'string' ? { providerRequestId: diagnosticsLog.fingerprint(source.requestId) } : {}), ...(typeof diagnostic.reason === 'string' && ['finish', 'metadata', 'arguments', 'duplicate_ids', 'structure', 'size'].includes(diagnostic.reason) ? { toolFailure: diagnostic.reason } : {}), ...(typeof diagnostic.field === 'string' && ['tool_calls', 'index', 'type', 'id', 'function', 'name', 'arguments'].includes(diagnostic.field) ? { field: diagnostic.field } : {}), events: this.events, omittedEvents: this.omittedEvents });
+    this.write('provider.failed', { elapsedMs: Date.now() - this.started, kind: signal?.aborted ? 'cancelled' : timeout?.aborted ? 'timeout' : error instanceof ContextBudgetError ? 'context_budget' : errorType, ...allocation, ...(error instanceof ProviderHttpError ? { retryable: error.retryable } : {}), errorMessage: diagnosticsLog.fingerprint(source.message), ...(typeof source.httpStatus === 'number' ? { httpStatus: source.httpStatus } : {}), ...(typeof source.code === 'string' ? { code: knownProviderErrorCode(source.code) ?? diagnosticsLog.fingerprint(source.code) } : {}), ...(typeof source.requestId === 'string' ? { providerRequestId: diagnosticsLog.fingerprint(source.requestId) } : {}), ...(typeof diagnostic.reason === 'string' && ['finish', 'metadata', 'arguments', 'duplicate_ids', 'structure', 'size'].includes(diagnostic.reason) ? { toolFailure: diagnostic.reason } : {}), ...(typeof diagnostic.field === 'string' && ['tool_calls', 'index', 'type', 'id', 'function', 'name', 'arguments'].includes(diagnostic.field) ? { field: diagnostic.field } : {}), events: this.events, omittedEvents: this.omittedEvents });
   }
 }
 export const beginProviderDiagnostics = (config: AiConfig, options: ChatOptions, protocol: 'responses' | 'chat-completions', transport: 'stream' | 'complete', inputCount: number, toolCount: number) => new ProviderDiagnosticsTrace(config, options, protocol, transport, inputCount, toolCount);

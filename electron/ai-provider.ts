@@ -41,33 +41,107 @@ const chatGptErrorHints: Record<string, readonly [string, string]> = {
   chatpass_v2_scope_not_authorized: ['Für diese Verbindung fehlt die Freigabe zur Nutzung deines ChatGPT-Tarifs.', "Grant this connection access to your ChatGPT plan."],
   chatpass_v2_invalid_authorization_context: ['Die ChatGPT-Freigabe passt nicht zu dieser Anfrage. Bitte die Verbindung prüfen.', "Check the ChatGPT connection. The authorization does not match this request."]
 };
-const publicCodes = new Set(['DeploymentNotFound', 'ResourceNotFound', 'InvalidApiKey', 'Unauthorized', 'PermissionDenied', 'BadRequest', 'InvalidRequest', 'OperationNotSupported', 'InvalidApiVersionParameter', 'AuthenticationError', 'ContentFilter', 'content_filter', 'invalid_api_key', 'invalid_request_error', 'insufficient_quota', 'rate_limit_exceeded', 'quota_exceeded', 'model_not_found', 'unsupported_parameter', 'unsupported_value', 'missing_required_parameter', 'invalid_api_version', 'context_length_exceeded', ...Object.keys(chatGptErrorHints)]);
-export class ProviderHttpError extends ProviderDisplayError {
-  constructor(message: string, readonly httpStatus: number | undefined, readonly code?: string, readonly requestId?: string, readonly bodyShape?: 'error' | 'detail' | 'other', english = message) { super(message, english); this.name = 'ProviderHttpError'; }
+const transientCodes = new Set(['server_error', 'internal_server_error', 'server_is_overloaded', 'server_overloaded']);
+const rateLimitCodes = new Set(['rate_limit_exceeded', 'rate_limit_error', 'slow_down']);
+const quotaCodes = new Set([
+  'insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached',
+  'organization_usage_limit_exceeded', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded'
+]);
+const publicCodes = new Set([
+  'DeploymentNotFound', 'ResourceNotFound', 'InvalidApiKey', 'Unauthorized', 'PermissionDenied', 'BadRequest', 'InvalidRequest',
+  'OperationNotSupported', 'InvalidApiVersionParameter', 'AuthenticationError', 'ContentFilter', 'content_filter', 'invalid_api_key',
+  'invalid_request_error', 'model_not_found', 'unsupported_parameter', 'unsupported_value', 'missing_required_parameter', 'invalid_api_version',
+  'context_length_exceeded', 'invalid_prompt', ...transientCodes, ...rateLimitCodes, ...quotaCodes, ...Object.keys(chatGptErrorHints)
+]);
+
+export function knownProviderErrorCode(value: unknown): string | undefined {
+  return typeof value === 'string' && publicCodes.has(value) ? value : undefined;
 }
-export function providerReportedError(config: Connection, error: unknown, status?: number, requestId?: string, context: 'request' | 'complete' | 'models' = 'request', shape?: 'error' | 'detail' | 'other'): ProviderHttpError {
-  const raw = error && typeof error === 'object' ? error as Record<string, unknown> : {};
-  const code = typeof raw.code === 'string' && publicCodes.has(raw.code) ? raw.code : '';
-  const azure = config.provider === 'azure';
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return;
+  const { code, type } = error as { code?: unknown; type?: unknown };
+  // Use the type only when no specific code was supplied. An unknown code
+  // must not accidentally inherit automatic retries from a broader type.
+  return knownProviderErrorCode(code ?? type);
+}
+
+type FailureContext = 'request' | 'stream' | 'complete' | 'models';
+type BodyShape = 'error' | 'detail' | 'other';
+
+export class ProviderHttpError extends ProviderDisplayError {
+  constructor(
+    message: string, readonly httpStatus: number | undefined, readonly code: string | undefined,
+    readonly requestId: string | undefined, readonly bodyShape: BodyShape | undefined, english: string,
+    readonly retryable: boolean, readonly retryAfterMs?: number
+  ) { super(message, english); this.name = 'ProviderHttpError'; }
+}
+
+function providerReportedError(config: Connection, error: unknown, options: {
+  context: FailureContext;
+  status?: number;
+  requestId?: string;
+  shape?: BodyShape;
+  beforeOutput?: boolean;
+  retryAfterMs?: number;
+}): ProviderHttpError {
+  const { context, status, requestId, shape, beforeOutput, retryAfterMs } = options;
+  const code = errorCode(error);
+  const transient = code && transientCodes.has(code);
   const hints = config.provider === 'chatgpt' && code && chatGptErrorHints[code] ? chatGptErrorHints[code]
+    : code && quotaCodes.has(code) ? ['Das API-Kontingent ist erschöpft. Prüfe Guthaben und Ausgabenlimits beim Anbieter.', 'Check your API credits and spending limits with the provider.']
+    : code === 'context_length_exceeded' ? ['Der Kontext ist zu groß für das gewählte Modell. Kürze die Anfrage oder starte einen neuen Chat.', 'The context exceeds the selected model’s limit. Shorten the request or start a new chat.']
+    : code === 'ContentFilter' || code === 'content_filter' ? ['Der Anbieter hat die Anfrage oder Antwort durch einen Inhaltsfilter gestoppt.', 'The provider’s content filter stopped the request or response.']
     : status === 401 || status === 403 ? config.provider === 'chatgpt' ? ['Prüfe die ChatGPT-Anmeldung und die Freigabe zur Tarifnutzung.', 'Check the ChatGPT sign-in and permission to use your plan.'] : ['Prüfe Schlüssel, Anmeldeart und Zugriffsrechte.', 'Check the key, authentication method and permissions.']
-    : status === 404 ? azure ? ['Prüfe Ressourcen-URL und Deployment-Namen; /openai/v1 verwendet den Deployment-Namen als Modell.', 'Check the resource URL and deployment name. With /openai/v1, use the deployment name as the model.'] : ['Prüfe Basis-URL, API-Schnittstelle und Modellnamen.', 'Check the base URL, API protocol and model name.']
-    : status === 429 ? ['Das Kontingent oder Anfragelimit ist erreicht. Warte vor einer neuen Anfrage.', 'The quota or rate limit has been reached. Wait before retrying.']
+    : status === 404 ? config.provider === 'azure' ? ['Prüfe Ressourcen-URL und Deployment-Namen. /openai/v1 verwendet den Deployment-Namen als Modell.', 'Check the resource URL and deployment name. With /openai/v1, use the deployment name as the model.'] : ['Prüfe Basis-URL, API-Schnittstelle und Modellnamen.', 'Check the base URL, API protocol and model name.']
+    : status === 429 || code && rateLimitCodes.has(code) ? ['Das Anfragelimit ist erreicht. Warte vor einer neuen Anfrage.', 'The rate limit has been reached. Wait before retrying.']
+    : transient ? ['Der Anbieter meldet einen vorübergehenden Serverfehler.', 'The provider reported a temporary server error.']
+    : status && status >= 500 ? ['Der Anbieter meldet einen Serverfehler.', 'The provider reported a server error.']
+    : code === 'invalid_prompt' ? ['Der Anbieter hat die Anfrage abgelehnt. Prüfe die Eingabe.', 'The provider rejected the input. Review the request.']
     : status === 400 || status === 422 ? ['Prüfe API-Schnittstelle, Modell beziehungsweise Deployment und Thinking-Einstellung.', 'Check the API protocol, model or deployment, and reasoning setting.']
-    : status && status >= 500 ? ['Der Anbieter meldet einen Serverfehler.', 'The provider reported a server error.'] : [];
-  const subjects = {
-    request: ['die Anfrage', 'the request'], complete: ['auch ohne Streaming die Anfrage', 'the non-streaming request'], models: ['die Modellabfrage', 'the model list request']
+    : [];
+  const descriptions = {
+    request: ['Der Endpunkt hat die Anfrage abgelehnt', 'The endpoint rejected the request'],
+    stream: ['Der Endpunkt meldet einen Fehler beim Streaming', 'The endpoint reported an error while streaming'],
+    complete: status ? ['Der Endpunkt hat auch ohne Streaming die Anfrage abgelehnt', 'The endpoint rejected the non-streaming request']
+      : ['Der Endpunkt meldet auch ohne Streaming einen Fehler', 'The endpoint reported an error in non-streaming mode'],
+    models: ['Der Endpunkt hat die Modellabfrage abgelehnt', 'The endpoint rejected the model list request']
   } as const;
-  const [de, en] = subjects[context];
+  const [de, en] = descriptions[context];
   const details = [status ? `HTTP ${status}` : '', code].filter(Boolean).join(' · ');
   const suffix = details ? ` (${details}).` : '.';
-  return new ProviderHttpError(`Der Endpunkt hat ${de} abgelehnt${suffix}${hints[0] ? ' ' + hints[0] : ''}`, status, code || undefined, requestId, shape,
-    `The endpoint rejected ${en}${suffix}${hints[1] ? ' ' + hints[1] : ''}`);
+  const retryable = beforeOutput === true && (context === 'stream'
+    ? !!transient
+    : context === 'request' && !!status && [500, 502, 503, 504].includes(status) && (code ? !!transient : !hasProviderErrorCode(error)));
+  return new ProviderHttpError(`${de}${suffix}${hints[0] ? ' ' + hints[0] : ''}`, status, code, requestId, shape,
+    `${en}${suffix}${hints[1] ? ' ' + hints[1] : ''}`, retryable, retryAfterMs);
+}
+
+function hasProviderErrorCode(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { code?: unknown }).code != null;
+}
+
+function retryAfter(response: Response): number | undefined {
+  const value = response.headers.get('retry-after');
+  if (!value) return;
+  const delay = /^\d+$/.test(value) ? Number(value) * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(delay) ? Math.max(0, delay) : undefined;
+}
+
+export function providerPayloadError(config: Connection, error: unknown, response: Response, context: 'stream' | 'complete', beforeOutput = false): ProviderHttpError {
+  return providerReportedError(config, error, {
+    context, beforeOutput, requestId: responseRequestId(response), retryAfterMs: retryAfter(response)
+  });
+}
+
+function responseRequestId(response: Response): string | undefined {
+  const request = response.headers.get('x-request-id');
+  return request && /^req_[a-zA-Z0-9_-]{1,120}$/.test(request) ? request : undefined;
 }
 
 /** Preserve safe protocol diagnostics without copying raw provider messages. */
 export async function providerHttpError(config: Connection, response: Response, context: 'request' | 'complete' | 'models' = 'request'): Promise<Error> {
-  let code = '';
+  let reported: unknown;
   let bodyShape: 'error' | 'detail' | 'other' = 'other';
   const reader = response.body?.getReader();
   if (reader) {
@@ -77,12 +151,10 @@ export async function providerHttpError(config: Connection, response: Response, 
       if (size <= 16_384) {
         const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         bodyShape = data?.error && typeof data.error === 'object' ? 'error' : typeof data?.detail === 'string' ? 'detail' : 'other';
-        const candidate = data?.error?.code ?? data?.code;
-        if (typeof candidate === 'string' && publicCodes.has(candidate)) code = candidate;
+        reported = bodyShape === 'error' ? data.error : data;
       }
     } catch { /* HTTP status still carries a useful diagnostic. */ }
     finally { await reader.cancel().catch(() => {}); }
   }
-  const request = response.headers.get('x-request-id');
-  return providerReportedError(config, { code }, response.status, request && /^req_[a-zA-Z0-9_-]{1,120}$/.test(request) ? request : undefined, context, bodyShape);
+  return providerReportedError(config, reported, { context, status: response.status, requestId: responseRequestId(response), shape: bodyShape, beforeOutput: true, retryAfterMs: retryAfter(response) });
 }

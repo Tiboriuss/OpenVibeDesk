@@ -7,7 +7,7 @@ import type { ChatMessage, ChatSession, WorkspaceState } from '../shared/model';
 import { normalizeChatEvidence } from '../shared/chat-evidence';
 import { moduleReferenceSchema } from '../shared/references';
 import type { ProviderMessage } from './stream';
-import { streamTurn } from './stream';
+import { requestTurnWithRecovery } from './stream';
 import type { AiConfig, ReformulateChatOptions } from '../shared/model';
 
 export const reformulateChatOptionsSchema = z.object({ tier: z.enum(['smart', 'simple']), sessionId: z.string().min(1).max(128).optional() }).strict();
@@ -67,7 +67,7 @@ export function reformulationMessages(source: ReturnType<typeof reformulationSou
 }
 
 /** Deliberately accepts no tool dependencies. Even unsolicited provider calls cannot execute. */
-export async function streamReformulation(config: AiConfig, key: string | null, messages: ProviderMessage[], options: ReformulateChatOptions, signal: AbortSignal, onDelta: (text: string) => void, timeoutMs: number, budget?: import('./provider-request').ProviderRequestBudget): Promise<void> {
-  const turn = await streamTurn(config, key, messages, options, signal, onDelta, undefined, timeoutMs, budget);
+export async function streamReformulation(config: AiConfig, key: string | null, messages: ProviderMessage[], options: ReformulateChatOptions, signal: AbortSignal, onDelta: (text: string) => void, timeoutMs: number, budget?: import('./provider-request').ProviderRequestBudget, retries = 0): Promise<void> {
+  const turn = await requestTurnWithRecovery(config, key, messages, options, signal, onDelta, { budget, timeoutMs, retries });
   if (turn.toolCalls.length) throw providerFailure('rephrasingTools');
 }

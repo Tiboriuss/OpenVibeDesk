@@ -1,6 +1,6 @@
 import { providerFailure, ProviderDisplayError } from './provider-errors';
 import type { AiConfig, ChatOptions } from '../shared/model';
-import { providerEndpoint, providerHeaders, providerHttpError, providerReportedError } from './ai-provider';
+import { providerEndpoint, providerHeaders, providerHttpError, providerPayloadError } from './ai-provider';
 import { chatGptAuth } from './chatgpt-auth';
 import { beginProviderDiagnostics, type DiagnosticComparison, type ProviderDiagnosticsTrace } from './diagnostics';
 import { ContextBudgetError, serializeProviderRequest, type ProviderRequestBudget } from './provider-request';
@@ -105,6 +105,7 @@ export async function requestResponsesTurn(
     let value: unknown;
     try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw providerFailure('completeJson'); }
     diagnostics.event(value);
+    if (record(value) && (value.status === 'failed' || value.error)) throw providerPayloadError(config, value.error, response, 'complete');
     const result = parseOutput(value, tools, 'complete', false, diagnostics);
     diagnostics.finish(result.text.length, result.toolCalls.length, size);
     return result;
@@ -206,6 +207,7 @@ export async function streamResponsesTurn(
       if (answer.length > MAX_TEXT_CHARS) throw providerFailure('tooLarge');
       if (text) { onDelta(text); signal.throwIfAborted(); }
     };
+    let outputObserved = false;
     function dispatch() {
       if (!data.length || result) { data = []; eventSize = 0; return; }
       const raw = data.join('\n'); data = []; eventSize = 0;
@@ -213,11 +215,16 @@ export async function streamResponsesTurn(
       let value: unknown;
       try { value = JSON.parse(raw); } catch { diagnostics.failure('event_json_invalid', { actual: raw }); throw providerFailure('invalidStream'); }
       diagnostics.event(value);
-      if (!record(value) || typeof value.type !== 'string') throw providerFailure('invalidEvent');
-      if (value.type === 'error' || value.type === 'response.failed') {
-        if (config.provider === 'chatgpt') throw providerReportedError(config, record(value.response) ? value.response.error : value.error ?? value);
-        throw providerFailure('streamError');
+      if (!record(value)) throw providerFailure('invalidEvent');
+      if (value.type === 'error' || value.type === 'response.failed' || value.error) {
+        const failed = record(value.response) ? value.response : undefined;
+        const beforeOutput = !outputObserved
+          && (failed?.output === undefined || Array.isArray(failed.output) && failed.output.length === 0);
+        throw providerPayloadError(config, failed?.error ?? value.error ?? value, response, 'stream', beforeOutput);
       }
+      if (typeof value.type !== 'string') throw providerFailure('invalidEvent');
+      if (!['response.created', 'response.queued', 'response.in_progress'].includes(value.type)
+        || record(value.response) && Array.isArray(value.response.output) && value.response.output.length > 0) outputObserved = true;
       if (value.type === 'response.incomplete') throw toolCallError('finish', [...calls.values()].map(item => item.call), 'incomplete');
       if (value.type === 'response.output_text.delta' || value.type === 'response.refusal.delta') {
         if (typeof value.delta !== 'string') throw providerFailure('unsupportedText');

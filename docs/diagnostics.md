@@ -15,7 +15,7 @@ The same workflow works on another computer. Exporting can be cancelled without 
 
 ## What is recorded
 
-Reports contain application/runtime/platform information, technical provider configuration, per-request correlation IDs, HTTP status and recognised provider request IDs, stream event types, item indexes, completion states, and specific parser failure categories. Request bodies and complete provider replies are never written to the log.
+Reports contain application/runtime/platform information, technical provider configuration, per-request correlation IDs, HTTP status and recognised provider request IDs, stream event types, item indexes, completion states, and specific parser failure categories. For failed streams, known provider codes are retained and unknown values are fingerprinted. Request bodies and raw provider error messages are excluded.
 
 Agent records also show provider-turn boundaries, tool start/result, entry into recovery and the reason execution ended (`answer`, `handoff`, `cancelled`, `limit` or `error`). Tool results include the host's read/write/unknown policy and recorded effect when available. A random `agentRunId` connects these records to the individual provider requests; it is unrelated to saved chat or operation IDs. Tool and module names are fingerprinted, and no tool arguments, results, question text or error messages are copied. This distinguishes a provider failure from a host stop or a model answer after a tool result. A generated answer is not itself proof that an uncertain action succeeded; the operation journal remains authoritative.
 

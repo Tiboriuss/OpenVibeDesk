@@ -1,5 +1,5 @@
 import { inspectToolResult, ModuleToolRuntime } from './agent-tools';
-import { streamTurn, requestCompleteTurn, ToolStreamError, type ProviderMessage, type StreamTurn, type ToolCall } from './stream';
+import { requestTurnWithRecovery, ToolStreamError, type ProviderMessage, type ToolCall } from './stream';
 import { normalizeAgentSettings } from '../shared/agent-settings';
 import { createChatEvidenceCollector, type ChatEvidence, type ChatEvidenceStatus } from '../shared/chat-evidence';
 import type { AgentRunLimit, AgentSettings, AiConfig, ChatOptions, ToolEvent } from '../shared/model';
@@ -105,26 +105,14 @@ export async function runAgent(
         if (!startedText && visibleText) emit('\n\n');
         startedText = true; emit(delta);
       };
-      let turn: StreamTurn;
-      try {
-        progress({ phase: 'provider_turn' });
-        turn = await streamTurn(config, key, conversation, options, combined, emitTurnText, offeredTools, settings.requestTimeoutSeconds * 1000, settings);
-      } catch (error) {
-        if (!(error instanceof ToolStreamError) || combined.aborted || settings.transportRetries === 0) throw error;
-        // Retry only rejected, effect-free protocol turns, using this same offer.
-        // A completed call or domain failure never enters this retry path.
-        let retryError: unknown = error;
-        let recovered: StreamTurn | undefined;
-        for (let attempt = 0; attempt < settings.transportRetries; attempt++) {
-          try { recovered = await requestCompleteTurn(config, key, conversation, options, combined, offeredTools, settings.requestTimeoutSeconds * 1000, settings); break; }
-          catch (cause) { retryError = cause; if (!(cause instanceof ToolStreamError) || combined.aborted) throw cause; }
+      progress({ phase: 'provider_turn' });
+      const turn = await requestTurnWithRecovery(config, key, conversation, options, combined, emitTurnText, {
+        tools: offeredTools, timeoutMs: settings.requestTimeoutSeconds * 1000, budget: settings, retries: settings.transportRetries,
+        replacePartialText: () => {
+          if (deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
+          startedText = false;
         }
-        if (!recovered) throw retryError;
-        turn = recovered;
-        if (deps.onReplaceText && visibleText !== turnPrefix) replace(turnPrefix);
-        startedText = false;
-        if (turn.text) emitTurnText(turn.text);
-      }
+      });
       if (checkAbort()) return;
       if (!turn.toolCalls.length) {
         if (!deps.onReplaceText && turn.text) emitMessage(turn.text);

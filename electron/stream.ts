@@ -1,6 +1,7 @@
 import { providerFailure, ProviderDisplayError } from './provider-errors';
 import type { AiConfig, ChatOptions } from '../shared/model';
-import { providerEndpoint, providerHeaders, providerHttpError } from './ai-provider';
+import { setTimeout as wait } from 'node:timers/promises';
+import { providerEndpoint, providerHeaders, providerHttpError, providerPayloadError, ProviderHttpError } from './ai-provider';
 import { requestResponsesTurn, streamResponsesTurn } from './responses';
 import { beginProviderDiagnostics } from './diagnostics';
 import { ContextBudgetError, serializeProviderRequest, type ProviderRequestBudget } from './provider-request';
@@ -120,7 +121,7 @@ export async function requestCompleteTurn(
     try { result = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
     catch { throw providerFailure('completeJson'); }
     diagnostics.event(result);
-    if (result?.error) throw providerFailure('completeError');
+    if (result?.error) throw providerPayloadError(config, result.error, response, 'complete');
     const choice = result?.choices?.[0];
     if (!choice || typeof choice !== 'object' || (choice.finish_reason !== undefined && choice.finish_reason !== null && typeof choice.finish_reason !== 'string')) throw providerFailure('completeInvalid');
     const message = choice.message;
@@ -162,12 +163,46 @@ export async function requestCompleteTurn(
   }
 }
 
+/** Retry only the provider turn. The agent receives calls after a complete, accepted response. */
+export async function requestTurnWithRecovery(
+  config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
+  signal: AbortSignal, onDelta: (text: string) => void, request: {
+    budget?: ProviderRequestBudget;
+    timeoutMs: number;
+    retries: number;
+    tools?: readonly unknown[];
+    replacePartialText?(): void;
+  }
+): Promise<StreamTurn> {
+  const { budget, timeoutMs, retries, tools, replacePartialText } = request;
+  let useComplete = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (!useComplete) return await streamTurn(config, key, messages, options, signal, onDelta, tools, timeoutMs, budget);
+      const turn = await requestCompleteTurn(config, key, messages, options, signal, tools, timeoutMs, budget);
+      replacePartialText?.();
+      if (turn.text) onDelta(turn.text);
+      return turn;
+    } catch (error) {
+      if (signal.aborted || attempt >= retries) throw error;
+      if (error instanceof ToolStreamError && tools?.length) {
+        useComplete = true;
+        continue;
+      }
+      if (useComplete || !(error instanceof ProviderHttpError) || !error.retryable) throw error;
+      const delay = Math.max(error.retryAfterMs ?? 0, 750 * 2 ** attempt + Math.random() * 250);
+      if (delay >= timeoutMs) throw error;
+      await wait(delay, undefined, { signal });
+    }
+  }
+}
+
 /** A text-only stream, retained for providers and callers that do not use tools. */
 export async function streamCompletion(
   config: AiConfig, key: string | null, messages: ProviderMessage[], options: ChatOptions,
-  signal: AbortSignal, onDelta: (text: string) => void, requestTimeoutMs = 60_000, budget?: ProviderRequestBudget
+  signal: AbortSignal, onDelta: (text: string) => void, requestTimeoutMs = 60_000, budget?: ProviderRequestBudget, retries = 0
 ): Promise<string> {
-  return (await streamTurn(config, key, messages, options, signal, onDelta, undefined, requestTimeoutMs, budget)).text;
+  return (await requestTurnWithRecovery(config, key, messages, options, signal, onDelta, { budget, timeoutMs: requestTimeoutMs, retries })).text;
 }
 
 /** Assemble a complete streaming turn before returning any tool calls for execution. */
@@ -196,7 +231,7 @@ export async function streamTurn(
     reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let line = '', pendingCR = false, data: string[] = [], eventSize = 0, wireSize = 0;
-    let answer = '', complete = false, finishReason: string | undefined;
+    let answer = '', complete = false, outputObserved = false, finishReason: string | undefined;
     const calls = new Map<number, ToolCall>();
     const invalid = (field: ToolCallField): never => { diagnostics.failure('chat_tool_structure_invalid', { field }); throw toolCallError('structure', [...calls.values()], finishReason, 'stream', field); };
     // Some compatible endpoints repeat metadata or send cumulative snapshots.
@@ -217,8 +252,9 @@ export async function streamTurn(
       let parsed: any;
       try { parsed = JSON.parse(value); } catch { throw providerFailure('invalidStream'); }
       diagnostics.event(parsed);
-      if (parsed?.error) throw providerFailure('streamError');
+      if (parsed?.error) throw providerPayloadError(config, parsed.error, response, 'stream', !outputObserved && !parsed.choices?.length);
       const choice = parsed?.choices?.[0];
+      if (choice && (choice.finish_reason || Object.keys(choice.delta ?? {}).some(field => field !== 'role' && choice.delta[field] != null && choice.delta[field] !== ''))) outputObserved = true;
       if (choice?.finish_reason != null) {
         if (typeof choice.finish_reason !== 'string') throw providerFailure('invalidStream');
         finishReason = choice.finish_reason;

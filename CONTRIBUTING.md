@@ -199,7 +199,7 @@ HTML views run in an isolated iframe without Node or the workspace API. Package 
 parent.postMessage({ type: 'ovd:invoke', requestId, tool, args }, '*');
 ```
 
-They receive `ovd:result` with the same `requestId`, `ok`, and either `result` or `error`. Check `event.source === parent` when handling replies. The host accepts only the corresponding sender window and that module's own tools. The sample uses inline assets; arbitrary external content is not loaded. See the [view host](src/ModuleViewHost.tsx) and [sample view](examples/notes-module/notes.html).
+They receive `ovd:result` with the same `requestId`, `ok`, and either `result` or `error`. Check `event.source === parent` when handling replies. The host accepts only the corresponding sender window and that module's own tools. Keep in-view navigation within the same document, for example by switching panels in the DOM. The host mounts each declared view in its owning window and each settings entry in Settings. [View host](src/ModuleViewHost.tsx) · [Sample view](examples/notes-module/notes.html)
 
 To select one of the module's own declared references in chat without dragging, send `parent.postMessage({ type: 'ovd:reference', requestId, reference: { moduleId, type, id } }, '*')`. The reply uses the same `ovd:result` envelope. The host validates the sender, owning module and reference, resolves its metadata, and opens chat with the reference selected. Selection does not submit a question or execute the reference's instructions. This is the keyboard-accessible alternative to a draggable resource.
 

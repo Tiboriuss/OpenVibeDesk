@@ -5,20 +5,55 @@ import Ajv from 'ajv';
 import type { ValidateFunction } from 'ajv';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ErrorCode, McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { CapabilityContext } from '../../../electron/workspace-capabilities';
 import type { ModuleToolProvider } from '../../../shared/module-tool-provider';
 import type { ModuleSummary, ModuleToolDescriptor, ModuleToolQuery } from '../../../shared/modules';
 import type { OperationBinding } from '../../../shared/operations';
-import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, mcpServerInputSchema, mcpToolQuerySchema, type McpAuditEntry, type McpAuditPage, type McpAuditQuery, type McpCallResult, type McpServerConfig, type McpServerInput, type McpServerSummary, type McpToolInfo, type McpToolPermissions, type McpToolQuery } from '../../../shared/mcp';
+import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, mcpServerInputSchema, mcpToolQuerySchema, type McpAuditEntry, type McpAuditPage, type McpAuditQuery, type McpCallResult, type McpConnectFailure, type McpServerConfig, type McpServerInput, type McpServerSummary, type McpToolInfo, type McpToolPermissions, type McpToolQuery } from '../../../shared/mcp';
 import { McpConfigStore, mcpOAuthBinding, validateMcpUrl } from './store';
 import { McpOAuthSession } from './oauth';
+import { defaultUiLocale, type UiLocale } from '../../../shared/locale';
+import { connectFailureText } from '../connection-feedback';
+
+// SDK v1 publishes the negotiated revision through this hook on both transports.
+// Its HTTP transport already stores it for subsequent request headers.
+class McpStdioTransport extends StdioClientTransport {
+  protocolVersion?: string;
+  setProtocolVersion(version: string) { this.protocolVersion = version; }
+}
+type McpTransport = McpStdioTransport | StreamableHTTPClientTransport;
+
+function initializeErrorCode(error: unknown): number | undefined {
+  if (error instanceof McpError) return error.code;
+  // A non-2xx POST in SDK v1 wraps the response body in a transport error.
+  const prefix = 'Streamable HTTP error: Error POSTing to endpoint: ';
+  if (!(error instanceof StreamableHTTPError) || (error.code !== 400 && error.code !== 404) || error.message.length > 8192 || !error.message.startsWith(prefix)) return;
+  try {
+    const reply = JSON.parse(error.message.slice(prefix.length));
+    if (reply?.jsonrpc !== '2.0' || !('id' in reply) || 'result' in reply || !Number.isInteger(reply.error?.code)) return;
+    if (error.code === 400 || reply.error.code === ErrorCode.MethodNotFound) return reply.error.code;
+  } catch { /* A proxy or non-RPC error body gives no protocol evidence. */ }
+}
+
+function classifyConnectFailure(error: unknown, initializing: boolean, cancelled: boolean, needsLogin: boolean): McpConnectFailure {
+  if (cancelled) return 'cancelled';
+  if (needsLogin) return 'oauth_required';
+  const authRejected = error instanceof StreamableHTTPError && (error.code === 401 || error.code === 403);
+  if (authRejected || (error instanceof Error && error.message === 'MCP_TOKEN_MISSING')) return 'authentication';
+  if (initializing) {
+    const code = initializeErrorCode(error);
+    if (code === -32022 || (error instanceof Error && error.message.startsWith("Server's protocol version is not supported: "))) return 'unsupported_version';
+    if (code === ErrorCode.MethodNotFound) return 'initialize_unavailable';
+    if (code === -32020) return 'header_mismatch';
+  }
+  return 'connection_failed';
+}
 
 type CachedTool = { name: string; info: McpToolInfo; validate?: ValidateFunction; fingerprint: string };
-type Connection = { id: string; generation: string; client: Client; transport: Transport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; oauth?: McpOAuthSession; abort: AbortController; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
-type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string; openExternal?(url: string): Promise<void> };
+type Connection = { id: string; generation: string; client: Client; transport: McpTransport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; oauth?: McpOAuthSession; abort: AbortController; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
+type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string; openExternal?(url: string): Promise<void>; getLocale?(): UiLocale };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const fold = (value: string) => value.normalize('NFKC').toLocaleLowerCase('de-DE');
 
@@ -88,7 +123,7 @@ export class McpService {
   private lifecycle = 0;
   private readonly connections = new Map<string, Connection>();
   private readonly connecting = new Map<string, string>();
-  private readonly errors = new Map<string, string>();
+  private readonly errors = new Map<string, McpConnectFailure>();
   private readonly audits: McpAuditEntry[] = [];
   private readonly changing = new Set<string>();
   private readonly signingIn = new Map<string, AbortController>();
@@ -148,7 +183,21 @@ export class McpService {
   }
   async deactivate() { this.active = false; this.lifecycle++; for (const controller of [...this.signingIn.values(), ...this.connectControllers.values()]) controller.abort(); this.connecting.clear(); await Promise.all([...this.connections.keys()].map(id => this.close(id))); this.host.changed(); }
   listServers(): McpServerSummary[] {
-    return this.store.list().map(server => { const connection = this.connections.get(server.id), error = connection?.error ?? this.errors.get(server.id), oauth = this.oauthStates.get(server.id); return { ...server, status: connection?.status ?? (this.connecting.has(server.id) ? 'connecting' : error ? 'error' : 'disconnected'), toolCount: connection?.tools.size ?? 0, allowedToolCount: [...(connection?.tools.values() ?? [])].filter(tool => this.allowed(server.id, tool)).length, ...(server.authMode === 'oauth' ? { oauthStatus: this.signingIn.has(server.id) ? 'signing_in' as const : oauth?.status ?? (server.hasOAuthTokens ? 'signed_in' as const : 'signed_out' as const), ...(oauth?.error ? { oauthError: oauth.error } : {}) } : {}), ...(error ? { error } : {}), ...(connection?.warning ? { warning: connection.warning } : {}), ...(connection?.connectedAt ? { connectedAt: connection.connectedAt } : {}) }; });
+    return this.store.list().map(server => {
+      const connection = this.connections.get(server.id);
+      const connectFailure = this.errors.get(server.id);
+      const error = connection?.error ?? (connectFailure && connectFailureText[this.host.getLocale?.() ?? defaultUiLocale][connectFailure]);
+      const oauth = this.oauthStates.get(server.id);
+      const status = connection?.status ?? (this.connecting.has(server.id) ? 'connecting' : error ? 'error' : 'disconnected');
+      return {
+        ...server, status, toolCount: connection?.tools.size ?? 0,
+        allowedToolCount: [...(connection?.tools.values() ?? [])].filter(tool => this.allowed(server.id, tool)).length,
+        ...(status === 'connected' && connection?.transport.protocolVersion ? { protocolVersion: connection.transport.protocolVersion } : {}),
+        ...(server.authMode === 'oauth' ? { oauthStatus: this.signingIn.has(server.id) ? 'signing_in' as const : oauth?.status ?? (server.hasOAuthTokens ? 'signed_in' as const : 'signed_out' as const), ...(oauth?.error ? { oauthError: oauth.error } : {}) } : {}),
+        ...(connectFailure ? { connectFailure } : {}), ...(error ? { error } : {}),
+        ...(connection?.warning ? { warning: connection.warning } : {}), ...(connection?.connectedAt ? { connectedAt: connection.connectedAt } : {})
+      };
+    });
   }
   private oauthRequired(id: string) {
     const error = 'OAuth-Anmeldung erforderlich. Bitte in den MCP-Einstellungen erneut anmelden; der Aufruf wird nicht wiederholt.';
@@ -237,7 +286,7 @@ export class McpService {
   async connect(id: string, context: CapabilityContext, automatic = false) {
     this.assertActive(context); id = mcpServerIdSchema.parse(id);
     const server = this.store.get(id), previous = this.connections.get(id), start = Date.now(), lifecycle = this.lifecycle, attempt = randomUUID();
-    if (previous?.status === 'connected') return { serverId: id, connected: true, alreadyConnected: true };
+    if (previous?.status === 'connected') return { serverId: id, connected: true, alreadyConnected: true, protocolVersion: previous.transport.protocolVersion };
     if (previous?.status === 'connecting' || this.changing.has(id) || this.connecting.has(id) || this.signingIn.has(id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.');
     this.connecting.set(id, attempt); this.errors.delete(id); this.host.changed();
     const secretValues: string[] = [];
@@ -251,11 +300,11 @@ export class McpService {
       if (this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
       await this.close(id);
       const client = new Client({ name: 'OpenVibeDesk', version: '0.1.0' }, { capabilities: {} });
-      let transport: Transport;
+      let transport: McpTransport;
       if (server.transport === 'stdio') {
         const env = getDefaultEnvironment();
         for (const key of server.envKeys) { const value = await this.store.secrets.get(id, `env:${key}`); if (value === null) throw new Error('MCP_ENV_MISSING'); env[key] = value; secretValues.push(value); }
-        transport = new StdioClientTransport({ command: server.command!, args: server.args, ...(server.cwd ? { cwd: server.cwd } : {}), env, stderr: 'ignore', maxBufferSize: 2_000_000 });
+        transport = new McpStdioTransport({ command: server.command!, args: server.args, ...(server.cwd ? { cwd: server.cwd } : {}), env, stderr: 'ignore', maxBufferSize: 2_000_000 });
       } else {
         const url = new URL(validateMcpUrl(server.url!)), token = server.authMode === 'bearer' && server.hasToken ? await this.store.secrets.get(id, 'token') : null;
         if (server.authMode === 'bearer' && !token) throw new Error('MCP_TOKEN_MISSING');
@@ -288,21 +337,22 @@ export class McpService {
       client.onclose = () => { if (this.connections.get(id) === current) { current.status = current.status === 'error' ? 'error' : 'disconnected'; current.tools.clear(); this.host.changed(); } };
       client.onerror = () => { if (this.connections.get(id) === current && current.status === 'connected') { current.status = 'error'; current.error = 'Die MCP-Verbindung wurde unterbrochen. Laufende Aufrufe werden nicht automatisch wiederholt.'; current.tools.clear(); this.host.changed(); void current.client.close().catch(() => {}); } };
       client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { if (this.connections.get(id) === current && current.status === 'connected') try { await this.refresh(id, new AbortController().signal); } catch { current.warning = 'Der Werkzeugkatalog konnte nicht aktualisiert werden. Bitte erneut laden.'; this.host.changed(); } });
-      await client.connect(transport, { signal: context.signal, timeout: this.timeout() });
+      await client.connect(transport, { signal: abort.signal, timeout: this.timeout() });
       this.assertActive(context);
       if (this.connections.get(id) !== connection || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
       connection.status = 'connected'; connection.connectedAt = new Date().toISOString();
       await this.refresh(id, context.signal);
       if (oauth) this.oauthStates.set(id, { status: 'signed_in' });
       this.audit(server, 'connect', 'completed', start);
-      return { serverId: id, connected: true, toolCount: connection.tools.size };
+      return { serverId: id, connected: true, protocolVersion: transport.protocolVersion, toolCount: connection.tools.size };
     } catch (error) {
-      const message = context.signal.aborted || abort.signal.aborted ? 'Verbinden wurde abgebrochen.' : this.oauthStates.get(id)?.status === 'required' ? 'OAuth-Anmeldung erforderlich. Bitte in den MCP-Einstellungen anmelden.' : /401|403|Unauthorized|TOKEN_MISSING/.test(String(error)) ? 'MCP-Anmeldung fehlgeschlagen. In den Einstellungen OAuth wählen und anmelden oder den Bearer-Token prüfen.' : 'MCP-Verbindung fehlgeschlagen. Programm, Argumente, Arbeitsordner beziehungsweise URL und Zugangsdaten in den Einstellungen prüfen.';
+      const cancelled = context.signal.aborted || abort.signal.aborted || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt;
+      const initializing = !!connection && !connection.transport.protocolVersion;
+      const issue = classifyConnectFailure(error, initializing, cancelled, this.oauthStates.get(id)?.status === 'required');
       if (connection) { if (this.connections.get(id) === connection) await this.close(id); else try { await connection.client.close(); } catch { /* Only this attempt owns this transport. */ } }
-      const cancelled = context.signal.aborted || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt;
-      if (this.active && this.lifecycle === lifecycle && this.connecting.get(id) === attempt) this.errors.set(id, message);
+      if (this.active && this.lifecycle === lifecycle && this.connecting.get(id) === attempt) this.errors.set(id, issue);
       this.audit(server, 'connect', cancelled ? 'cancelled' : 'failed', start);
-      throw new Error(message);
+      throw new Error(connectFailureText[this.host.getLocale?.() ?? defaultUiLocale][issue]);
     } finally { context.signal.removeEventListener('abort', cancel); if (!connection || this.connections.get(id) !== connection) { abort.abort(); oauth?.dispose(); } if (this.connectControllers.get(id) === abort) this.connectControllers.delete(id); if (this.connecting.get(id) === attempt) this.connecting.delete(id); this.host.changed(); }
   }
   async refresh(id: string, signal: AbortSignal) {

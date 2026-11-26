@@ -2,6 +2,16 @@
 
 [Repository overview](README.md) · [Documentation](docs/README.md) · [Installer and update guide](docs/releases.md)
 
+## v0.1.13 — 26 November 2026
+
+This alpha improves recovery from interrupted Assistant replies and makes MCP connection problems easier to diagnose.
+
+- Chat shows localized guidance for recognized provider errors. OVD can retry a temporary failure before output within the configured retry limit. Partial replies remain visible after a stream failure, and completed workspace actions stay recorded. [Diagnostics](docs/diagnostics.md)
+- **Settings → MCP** displays the negotiated protocol revision. The Assistant can report it as well. Connection errors distinguish sign-in problems from recognized handshake failures. Stdio and Streamable HTTP were checked with `2025-06-18` and `2025-11-25`. Servers that require `2026-07-28` need a compatible endpoint for this release. [Compatibility matrix](modules/ovd-mcp/README.md#protocol-compatibility)
+- The host checks that Mail, Settings and external module windows load the embedded documents they own. API-key management stays in Settings, while the Assistant can still inspect public connection settings, list models and prepare changes. [Host boundaries](docs/architecture.md#processes-and-trust-boundaries)
+
+The production build and all 52 tests passed. Isolated macOS Electron checks covered Assistant streaming and recovery, MCP over both transports, HTML Mail and Chat links, module views and provider settings. The release targets Apple Silicon and Intel macOS with ad-hoc signatures and Windows x64 with an unsigned installer.
+
 ## v0.1.12 — 23 November 2026
 
 OpenVibeDesk now checks GitHub Releases for updates on macOS and Windows.

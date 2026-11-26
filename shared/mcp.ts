@@ -65,7 +65,8 @@ export type McpServerConfig = {
   hasOAuthClientSecret: boolean; hasOAuthTokens: boolean; oauthRevision: string;
 };
 export type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-export interface McpServerSummary extends McpServerConfig { status: McpConnectionStatus; error?: string; warning?: string; toolCount: number; allowedToolCount: number; connectedAt?: string; oauthStatus?: 'signed_out' | 'signing_in' | 'signed_in' | 'required' | 'error'; oauthError?: string; }
+export type McpConnectFailure = 'cancelled' | 'oauth_required' | 'authentication' | 'unsupported_version' | 'initialize_unavailable' | 'header_mismatch' | 'connection_failed';
+export interface McpServerSummary extends McpServerConfig { status: McpConnectionStatus; protocolVersion?: string; connectFailure?: McpConnectFailure; error?: string; warning?: string; toolCount: number; allowedToolCount: number; connectedAt?: string; oauthStatus?: 'signed_out' | 'signing_in' | 'signed_in' | 'required' | 'error'; oauthError?: string; }
 export interface McpToolInfo { name: string; title?: string; description: string; inputSchema: Record<string, unknown>; allowed: boolean; supported: boolean; reason?: string; readOnly: boolean; }
 export interface McpToolPage { serverId: string; tools: McpToolInfo[]; total: number; hasMore: boolean; nextOffset?: number; observedAt: string; }
 export const mcpToolQuerySchema = z.object({ serverId: mcpServerIdSchema, query: z.string().max(200).optional(), offset: z.number().int().min(0).max(10000).optional(), limit: z.number().int().min(1).max(50).optional(), refresh: z.boolean().optional() }).strict();
