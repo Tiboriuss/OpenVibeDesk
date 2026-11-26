@@ -58,20 +58,35 @@ export const mcpServerInputSchema = z.object({
   if (Object.keys(value.env ?? {}).length > 100) ctx.addIssue({ code: 'custom', path: ['env'], message: 'Höchstens 100 Umgebungsvariablen sind möglich.' });
 });
 export type McpServerInput = z.input<typeof mcpServerInputSchema>;
+const toolNameSchema = z.string().min(1).max(200);
+export const mcpReviewedToolSchema = z.object({
+  name: toolNameSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/)
+}).strict();
+// Name-only grants from older configurations share this initial revision until edited.
+export const mcpPermissionRevisionSchema = z.union([z.string().uuid(), z.literal('legacy')]);
 export type McpServerConfig = {
   id: string; name: string; description: string; transport: 'stdio' | 'http'; command?: string; args: string[]; cwd?: string; url?: string;
-  autoConnect: boolean; allowedTools: string[]; hasToken: boolean; envKeys: string[];
+  autoConnect: boolean; hasToken: boolean; envKeys: string[];
+  /** Includes legacy names awaiting review. Execution requires a matching reviewedTools entry. */
+  allowedTools: string[];
+  reviewedTools: z.infer<typeof mcpReviewedToolSchema>[];
+  permissionRevision: string;
   authMode: z.infer<typeof mcpAuthModeSchema>; oauthClientId?: string; oauthIssuer?: string; oauthScopes?: string; oauthAuthorizationUrl?: string; oauthTokenUrl?: string; oauthClientAuthMethod?: z.infer<typeof mcpOAuthClientAuthMethodSchema>; oauthRedirectPort: number;
   hasOAuthClientSecret: boolean; hasOAuthTokens: boolean; oauthRevision: string;
 };
 export type McpConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type McpConnectFailure = 'cancelled' | 'oauth_required' | 'authentication' | 'unsupported_version' | 'initialize_unavailable' | 'header_mismatch' | 'connection_failed';
-export interface McpServerSummary extends McpServerConfig { status: McpConnectionStatus; protocolVersion?: string; connectFailure?: McpConnectFailure; error?: string; warning?: string; toolCount: number; allowedToolCount: number; connectedAt?: string; oauthStatus?: 'signed_out' | 'signing_in' | 'signed_in' | 'required' | 'error'; oauthError?: string; }
-export interface McpToolInfo { name: string; title?: string; description: string; inputSchema: Record<string, unknown>; allowed: boolean; supported: boolean; reason?: string; readOnly: boolean; }
-export interface McpToolPage { serverId: string; tools: McpToolInfo[]; total: number; hasMore: boolean; nextOffset?: number; observedAt: string; }
+export interface McpServerSummary extends McpServerConfig { status: McpConnectionStatus; protocolVersion?: string; connectFailure?: McpConnectFailure; error?: string; warning?: string; toolCount: number; allowedToolCount: number; reviewRequiredCount: number; catalogRevision?: string; connectedAt?: string; oauthStatus?: 'signed_out' | 'signing_in' | 'signed_in' | 'required' | 'error'; oauthError?: string; }
+export interface McpToolInfo { name: string; title?: string; description: string; inputSchema: Record<string, unknown>; allowed: boolean; supported: boolean; reason?: string; readOnly: boolean; fingerprint: string; reviewStatus?: 'changed' | 'legacy'; definition?: Record<string, unknown>; }
+export interface McpToolPage { serverId: string; tools: McpToolInfo[]; total: number; hasMore: boolean; nextOffset?: number; observedAt: string; permissionRevision: string; catalogRevision: string; }
 export const mcpToolQuerySchema = z.object({ serverId: mcpServerIdSchema, query: z.string().max(200).optional(), offset: z.number().int().min(0).max(10000).optional(), limit: z.number().int().min(1).max(50).optional(), refresh: z.boolean().optional() }).strict();
 export type McpToolQuery = z.infer<typeof mcpToolQuerySchema>;
-export const mcpPermissionsSchema = z.object({ serverId: mcpServerIdSchema, allowedTools: z.array(z.string().min(1).max(200)).max(500) }).strict();
+export const mcpPermissionsSchema = z.object({
+  serverId: mcpServerIdSchema,
+  permissionRevision: mcpPermissionRevisionSchema,
+  changes: z.array(mcpReviewedToolSchema.extend({ fingerprint: mcpReviewedToolSchema.shape.fingerprint.nullable() }))
+    .min(1).max(1000).refine(rows => new Set(rows.map(row => row.name)).size === rows.length)
+}).strict();
 export type McpToolPermissions = z.infer<typeof mcpPermissionsSchema>;
 export interface McpAuditEntry { id: string; timestamp: string; serverId: string; serverName: string; action: 'connect' | 'disconnect' | 'call' | 'sign_in' | 'sign_out'; tool?: string; outcome: 'completed' | 'failed' | 'cancelled' | 'uncertain'; durationMs: number; }
 export interface McpAuditPage { entries: McpAuditEntry[]; total: number; hasMore: boolean; nextOffset?: number; }

@@ -6,7 +6,7 @@ OpenVibeDesk is an early desktop app for one user. The release workflow builds m
 
 ## Install or update the app
 
-Open [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) and wait for the release build to finish. Select the installer matching your computer:
+Select the installer matching your computer from the [published releases](https://github.com/Tiboriuss/OpenVibeDesk/releases).
 
 | Computer | Download |
 | --- | --- |
@@ -32,7 +32,7 @@ For a newer version, finish running work, quit OVD, and run the new installer us
 
 ### Data and update scope
 
-These are manual installer upgrades. OVD currently has no automatic update checker or in-app installer. Application releases and updates to optional modules are separate: manage module updates under **Settings → Modules**.
+Installed macOS and Windows builds check GitHub Releases at startup by default. Under **Settings → Updates**, you can check now, turn startup checks off, or choose **Preview and stable** to include alphas. When a matching installer is ready, OVD marks the Settings icon and offers the download. Install it over the current app. Manage independently downloaded modules under **Settings → Modules**. [Update settings and reminders](releases.md#check-for-updates-in-ovd)
 
 App updates retain the `ai-workspace` user profile. Existing legacy OS credential entries are left untouched, but this checkout uses local credential files and does not import those entries automatically. The first update from an OS-store build needs one-time password/key reentry and OAuth sign-in; see [Credential storage](#credential-storage). Do not delete the profile when replacing the app. While OVD is still an early version, keep a backup of important local data before changing versions; downgrading to an older version is not an established recovery method.
 
@@ -81,7 +81,9 @@ Open module windows from the OVD-Bar. Its **…** menu provides common size, ori
 
 The Assistant can make the same changes, for example “Make the OVD-Bar horizontal at the bottom” or “Move Files before Mail.” Position and preferences survive restart. See the [OVD-Bar guide](ovd-bar.md) for keyboard use and display behavior.
 
-Chat initially displays the latest 100 messages; **Frühere Nachrichten laden** reveals earlier messages without deleting or truncating saved history. The Chats manager searches the full saved conversation text and pages its results. Files also offers previous/next directory pages while retaining the selected preview.
+To keep Chat visible while working in another window, click the pin in the Assistant title bar. Click it again to unpin. **Settings → Appearance → Keep Assistant on top** and a request such as “Keep the Assistant on top” control the same preference. The choice survives restart. Changing it while Chat is closed or minimized takes effect the next time you show Chat. Native Wayland sessions do not support this window setting.
+
+Chat initially displays the latest 100 messages; **Load earlier messages** reveals earlier messages without deleting or truncating saved history. The Chats manager searches the full saved conversation text and pages its results. Files also offers previous/next directory pages while retaining the selected preview.
 
 ### Connect an AI provider
 
@@ -98,11 +100,11 @@ API keys and ChatGPT OAuth credentials use the local encrypted credential store.
 
 Expand **Voice input** under **AI & connection**, enable it and select a provider. Choose **Live** or **After recording** for transcription. Save its own transcription URL, model/deployment and API key. Speech and chat providers are independent; a ChatGPT sign-in does not configure an audio API connection.
 
-Use the microphone in Chat, speak, and click Stop. The final transcript is inserted into the message draft for review and editing. Nothing is sent automatically. See [Speech input](speech-input.md) for provider compatibility, microphone permissions and cancellation.
+Click the microphone in Chat to dictate. **Stop recording** releases the microphone and inserts the finished transcript in the editable draft. **Cancel voice input** or Escape discards this dictation and preserves what you typed. See [Speech input](speech-input.md) for provider compatibility, microphone permissions and cancellation.
 
 ### Resume an unsent chat
 
-Open the same conversation from **Chats** to continue typing where you left off. OVD saves the text together with its selected mail, chat and module references. If saving fails, keep the window open and use **Erneut speichern** once storage is available again. After a restart, accepted messages appear in the conversation and unsent drafts return to the input field.
+Open the same conversation from **Chats** to continue typing where you left off. OVD saves the text together with its selected mail, chat and module references. If saving fails, keep the window open and use **Retry save** once storage is available again. After a restart, accepted messages appear in the conversation and unsent drafts return to the input field.
 
 You can also ask the Assistant to prepare text for a specific chat. Open that chat to review, edit and send it.
 
@@ -132,7 +134,9 @@ The Assistant reaches the same workflow with `chats.continue`, `operations.get_r
 
 Open **Settings → Email** (**Einstellungen → E-Mail**) and add an IMAP account. IMAP reception and SMTP sending are configured and checked separately within the same account group. Save both configurations if you intend to send mail. A successful IMAP connection alone does not configure SMTP.
 
-The account's **Absender, Signatur & Abruf** group sets the outgoing sender name, plain-text signature and retrieval interval. These preferences save separately from connection details. With Mail enabled and an interval selected, OVD checks Inbox status while running, even with the Mail window closed; it does not download full message bodies in the background or run after quitting the app. Newly observed Inbox activity can show a dot on the Mail icon.
+Under **Sender, signature & mail checks**, set the outgoing sender name, plain-text signature and retrieval interval. With Mail enabled and an interval selected, OVD checks the Inbox while the app is running, even with the Mail window closed. Newly observed activity can show a dot on the Mail icon. Background checks only request Inbox status.
+
+You can also ask in Chat, for example “For the Workshop account, suggest the sender name Workshop Service and check for mail every 15 minutes.” Settings opens the matching account section and shows the form value and the suggestion for each change. Fields you have already edited start unchecked. Select the changes you want, choose **Apply to form**, then use **Save settings** when ready. Incoming and outgoing server suggestions follow the same review flow, with their own save buttons. Enter any required password directly in the form.
 
 Use the Mail window to browse folders and messages. Drag a message into chat to reference it. The [mail design guide](mail-design.md) describes the intended workflow and identifies work that remains beyond the current implementation.
 
@@ -140,11 +144,13 @@ Use the Mail window to browse folders and messages. Drag a message into chat to 
 
 When a message has a usable HTML alternative, the Mail reader displays it automatically. Use **HTML** or **Text** in the reading pane to switch views. Messages without HTML use text; a partially loaded view is marked accordingly. This does not mark the message read.
 
+In a narrow window, opening a message gives it a dedicated reading view. Use the back button to return to the selected message in the filtered list. **Settings → Appearance → Text size → Larger** also enlarges the HTML content. Wide newsletter layouts adapt to the reading pane. A table that still needs extra space scrolls within the message.
+
 External images start blocked. Select **Load external images** (German: **Externe Bilder laden**) to show them for that message, or **Hide external images** (**Externe Bilder ausblenden**) to block them again. Loading contacts external servers and may reveal your IP address and access time. Embedded supported raster images are handled separately. The choice applies to the loaded message in the current session rather than becoming a permanent account setting.
 
-The assistant can perform the same actions, for example: “Show this email as HTML,” “Switch to the text view,” or “Load the external images in this message.” Image loading follows your saved confirmation mode. Mail links open in the default external application after an intentional click. The reader removes active content and limits sender CSS, so complex layouts may differ from the sender's original. For details, see [HTML mail behavior](mail-design.md#html-email).
+You can ask the Assistant to switch the format or load images for a specific message. To work with links, try “Which links are in this email?” and then “Open the workshop manual.” Listing links reads the available HTML preview. Opening hands the chosen destination to the default browser or mail app and follows your saved confirmation mode. In the reader, click a link or focus it and press Enter. Links within the message stay in the reader. [HTML mail behavior](mail-design.md#html-email)
 
-For a truncated preview, select **Vollständigen Text lesen** to read the underlying message in pages with **Zurück** and **Weiter**. **Vorschau** returns to the preview. The Assistant uses the same source reading and can show its current page in the Mail window; it can also read long local drafts in pages. Newly saved Mail references can recover their exact source after restart. Removed or changed sources and size limits are reported explicitly rather than replaced by a different message. This requires the source account/server; it is not an offline archive.
+For a truncated preview, select **Read full text** to read the underlying message in pages with **Back** and **Next**. **Preview** returns to the preview. The Assistant uses the same source reading and can show its current page in the Mail window; it can also read long local drafts in pages. Newly saved Mail references can recover their exact source after restart. Removed or changed sources and size limits are reported explicitly rather than replaced by a different message. This requires the source account/server; it is not an offline archive.
 
 ### Configure optional modules and MCP
 
@@ -152,13 +158,13 @@ Open **Settings → Modules** (**Einstellungen → Module**) to manage modules. 
 
 #### Install from a module repository
 
-1. Expand **Modulquellen**, then **Repository hinzufügen**.
+1. Expand **Module sources**, then **Add repository**.
 2. Enter a name and repository URL. Start with the public [OpenVibeDesk-Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules), which currently offers Notes, Skill Library and Memory. You can add multiple sources, including private company repositories or direct HTTPS JSON catalogs.
-3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the local encrypted credential store. Save the source with **Quelle hinzufügen**.
-4. Expand **Modulkatalog** and select **Katalog laden**. Search or filter by source, then choose **Installieren** beside a module.
-5. Select **Freigeben & aktivieren**, review its declared access and approve the downloaded code. Its views, settings and Assistant tools are registered without restarting the app.
+3. Leave the token empty for a public source. For a private repository, enter a token with read access to its contents; it is stored in the local encrypted credential store. Save the source with **Add source**.
+4. Expand **Module catalog** and select **Load catalog**. Search or filter by source, then choose **Install** beside a module.
+5. Select **Approve and enable**, review its declared access and approve the downloaded code. Its views, settings and Assistant tools are registered without restarting the app.
 
-To check for updates, load the catalog again and choose **Aktualisieren** where offered. Updated code requires renewed approval. Installed module data stays in its own directory. These are deliberate module updates, separate from app installer updates; OVD does not install new versions in the background.
+To check for updates, load the catalog again and choose **Update** where offered. Updated code requires renewed approval. Installed module data stays in its own directory. These are deliberate module updates, separate from app installer updates; OVD does not install new versions in the background.
 
 The Assistant can help with requests such as “Show available modules,” “Check my module sources for updates,” or “Install Notes from this catalog.” It can prepare a source form, but you save source access and approve new code locally. **Without confirmations** does not replace that code approval.
 
@@ -166,9 +172,9 @@ See the [module repository guide](module-repositories.md) for private access, so
 
 #### Connect an MCP server
 
-To connect a local or remote MCP server, follow the [MCP module guide](../modules/ovd-mcp/README.md). Only saved servers and currently approved tools can be used. The [sample server](../examples/mcp-server/README.md) provides a small local example.
+To connect a local or remote MCP server, follow the [MCP module guide](../modules/ovd-mcp/README.md). A tool approval is tied to the definition advertised by that server. After upgrading from v0.1.13 or earlier, connect the server, review the tools you use, and select **Save permissions**. Later changes to an approved definition also appear for review. [Reviewing tool changes](../modules/ovd-mcp/README.md#reviewing-tool-changes) The [sample server](../examples/mcp-server/README.md) provides a small local example.
 
-For an OAuth-protected HTTP server, select **OAuth · im Browser anmelden**, save its configuration, then use **Im Browser anmelden**. Complete the provider's consent in the browser and approve the required tools separately. The [OAuth setup guide](../modules/ovd-mcp/README.md#oauth-for-http-servers) covers pre-registered clients, optional authorization/token endpoint overrides, callback URLs, cancellation and sign-out. Startup connections never open a login browser automatically.
+For an OAuth-protected HTTP server, select **OAuth · browser sign-in**, save its configuration, then use **Sign in through browser**. Complete the provider's consent in the browser and approve the required tools separately. The [OAuth setup guide](../modules/ovd-mcp/README.md#oauth-for-http-servers) covers pre-registered clients, optional authorization/token endpoint overrides, callback URLs, cancellation and sign-out. Startup connections never open a login browser automatically.
 
 MCP servers supply tools through the MCP module. Configure them in **Settings → MCP**; do not enter their URLs as module repository sources. Module repositories distribute OVD packages with manifests and can add their own views and settings.
 
@@ -176,7 +182,7 @@ MCP servers supply tools through the MCP module. Configure them in **Settings �
 
 Under **Settings → Agent** (**Einstellungen → Agent**), configure round and call limits, run and request timeouts, active tool and schema budgets, retained history, and transport retries. The current defaults and bounds are defined in [shared/agent-settings.ts](../shared/agent-settings.ts).
 
-The **Kontext** group also sets **Gesamtkontext** and **Antwortreserve**. Defaults are 128,000 estimated tokens total and an 8,192-token answer reserve. OVD conservatively counts the complete serialized request in UTF-8 bytes; this is not the provider's exact token count or automatic model-limit detection. Choose values suitable for your model. Older history and completed tool exchanges can be compacted; saved result pages remain readable without repeating their actions. If the current request cannot fit, shorten it or adjust the budget for a deliberately started task.
+The **Context** group also sets **Context budget** and **Response reserve**. Defaults are 128,000 estimated tokens total and an 8,192-token answer reserve. OVD conservatively counts the complete serialized request in UTF-8 bytes; this is not the provider's exact token count or automatic model-limit detection. Choose values suitable for your model. Older history and completed tool exchanges can be compacted; saved result pages remain readable without repeating their actions. If the current request cannot fit, shorten it or adjust the budget for a deliberately started task.
 
 When an agent reaches a limit, the UI retains its results and reports the reason. Changing a setting does not restart a completed run automatically. An uncertain send or external write must be checked before retrying.
 
@@ -211,11 +217,11 @@ Full Mail text reading also uses bounded, unencrypted temporary files under the 
 
 ### If the workspace cannot open
 
-OVD shows a startup dialog before opening any windows. Use **Datenordner öffnen** to locate the profile. If the file is unreadable, correct its access rights. If it requires a newer format, use the OVD version that created it or a compatible update. For SQLite companion files, close the other application that opened the database. Keep the database and its companion files together.
+OVD shows a startup dialog before opening any windows. Use **Open data folder** to locate the profile. If the file is unreadable, correct its access rights. If it requires a newer format, use the OVD version that created it or a compatible update. For SQLite companion files, close the other application that opened the database. Keep the database and its companion files together.
 
-For a damaged or unsupported file, **Kopie sichern …** saves its original bytes to a new file outside the profile. Keep that copy private. It can contain chat history, drafts and selected reference content. Copying lets you or your IT contact investigate while the original stays in place. A full profile backup also needs the other data listed above.
+For a damaged or unsupported file, **Save a copy…** saves its original bytes to a new file outside the profile. Keep that copy private. It can contain chat history, drafts and selected reference content. Copying lets you or your IT contact investigate while the original stays in place. A full profile backup also needs the other data listed above.
 
-After correcting the problem, choose **Erneut öffnen**. OVD checks the file again before starting the workspace. **Beenden** exits from recovery. These steps work without an AI connection.
+After correcting the problem, choose **Reopen**. OVD checks the file again before starting the workspace. **Quit** exits from recovery. These steps work without an AI connection.
 
 ### Credential storage
 
@@ -223,7 +229,7 @@ The current checkout stores API keys, IMAP/SMTP passwords, repository tokens, Ch
 
 This is deliberately weaker than OS-keychain protection: a program or person able to read both files as your OS user can decrypt the credentials. Keep the vault and key together in a private backup, outside a public repository or support-log export. The vault has authenticated contents and serialized atomic writes; an unreadable, corrupted or missing-key store fails visibly without replacing its existing data.
 
-Releases through **v0.1.7** used the OS credential store. On the first update to this checkout, reenter provider keys, mail passwords and private-repository tokens in their existing settings, and sign in to ChatGPT/MCP OAuth again. Public account settings, registrations, chats, drafts and module data remain. Old OS entries are neither read automatically nor deleted; there is no automatic credential migration. A normal restart or later installer replacement retains the new local vault, so these credentials do not need repeated reentry. Downgrading is not a credential migration path.
+Releases through **v0.1.7** used the OS credential store. When updating directly from one of those versions, reenter provider keys, mail passwords and private-repository tokens in their existing settings, and sign in to ChatGPT/MCP OAuth again. Public account settings, registrations, chats, drafts and module data remain. Old OS entries are neither read automatically nor deleted; there is no automatic credential migration. A normal restart or later installer replacement retains the new local vault, so these credentials do not need repeated reentry. Downgrading is not a credential migration path.
 
 ## Troubleshooting
 
@@ -235,9 +241,9 @@ Releases through **v0.1.7** used the OS credential store. On the first update to
 | An agent cannot find module tools | Check the module's enabled/approval state, provider tool-calling support, and configured agent limits. |
 | Mail can be read but not sent | Check and save the account's SMTP settings independently of IMAP. |
 | A module does not appear | Check its `module.json`, runtime files, compatibility, and approval status; see the [module contract](../CONTRIBUTING.md#building-modules). |
-| A saved repository shows no modules | Load its catalog with **Katalog laden**. Catalog lists are session-local; saving a source alone does not fetch it. Check the source's error/status. |
+| A saved repository shows no modules | Load its catalog with **Load catalog**. Catalog lists are session-local; saving a source alone does not fetch it. Check the source's error/status. |
 | A private repository cannot be loaded | Check the source URL and saved token's repository access. See [private sources](module-repositories.md#private-company-repositories). |
-| An installed module is not active | Select **Freigeben & aktivieren** after installation or an update. Downloading does not grant execution approval. |
+| An installed module is not active | Select **Approve and enable** after installation or an update. Downloading does not grant execution approval. |
 | A module update shows a conflict | The installed ID may belong to another source or a manually modified package. OVD will not silently replace it; see [module repositories](module-repositories.md). |
 | Files open at Documents | Navigate with the path bar. Documents is a starting location; access follows OS permissions. |
 | A binary file has no text preview | PDF, Office, and other binary formats currently provide metadata rather than extracted content. |

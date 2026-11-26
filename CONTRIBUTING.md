@@ -92,6 +92,12 @@ The host automatically adds discoverable actions to open each process-module vie
 
 Navigation contributions appear in the [OVD-Bar](docs/ovd-bar.md), whose orientation, size, placement, opacity and ordering belong to the Host. Modules contribute stable IDs, icons and useful titles rather than their own launcher layout or geometry. Keep views usable in narrow native windows and keep hidden settings forms' pending values intact. Attention hints use the shared contract below; they must not create an additional polling loop in the Chat renderer.
 
+### Settings proposals from Chat
+
+Bundled adapters can send the host a [settings proposal](shared/settings.ts) with a category, suggestion kind, optional target ID and public values. The destination form validates the fields it owns. For example, [Mail](modules/ovd-mail/settings-suggestions.ts) lets the user compare a proposal with their current edits and select what to apply. Only saving the account section changes the stored settings.
+
+A repository-installed module uses its own HTML settings entry and declared tools. The host generates the navigation action that opens that entry. To offer a similar review flow, keep pending proposals in the module, provide a tool to read them when the settings page opens, and save accepted fields through the module's normal update function. The public [iframe bridge](#html-views) supports invoking those tools. The bundled adapter's proposal envelope is internal to the host.
+
 ### Localized contributions
 
 Follow the [localization guide](docs/localization.md) for the manifest schema, per-field fallback, live iframe language messages, Assistant discovery and package compatibility. The [Notes module](examples/notes-module/README.md) demonstrates the complete flow.

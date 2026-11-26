@@ -2,7 +2,7 @@
 
 [Repository overview](../../README.md) · [Documentation](../../docs/README.md)
 
-Captured on **19 November 2026** from the English interface of the running Electron app. The examples follow Atlas Studio, a fictional team preparing a website launch.
+The gallery follows Atlas Studio, a fictional team preparing a website launch. The workspace views were captured from the English Electron app on 19 November 2026. The MCP views were refreshed on 26 November for v0.1.14.
 
 | Image | What it shows |
 | --- | --- |
@@ -12,8 +12,8 @@ Captured on **19 November 2026** from the English interface of the running Elect
 | [Mail](mail.png) | A seven-message inbox with the launch email open in the HTML reading pane. |
 | [Draft](draft.png) | The Assistant’s reply with its recipient, quoted email and local save status. |
 | [Files](files.png) | The project brief, its text preview and the action to reference it in chat. |
-| [MCP](mcp.png) | A connected studio server with its saved HTTP configuration. |
-| [MCP tool permissions](mcp-tools.png) | Two approved read tools and a task-creation tool awaiting approval. |
+| [MCP](mcp.png) | The studio's connected HTTP server, negotiated protocol version and two tool definitions awaiting review. |
+| [MCP tool permissions](mcp-tools.png) | Two previously name-approved tools appear unchecked after an upgrade. Open **Tool definition** to review either tool before saving permissions. |
 | [Settings](settings.png) | The required Assistant and the three optional bundled modules. |
 
 ## Refreshing the gallery

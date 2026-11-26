@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CapabilityDefinition, CapabilityMetadata } from '../../../electron/workspace-capabilities';
 import { mailDisplayPatchSchema } from '../../../shared/mail-display';
 import { mailQuerySchema, mailCountSchema } from '../../../shared/mail-query';
-import { mailPreferenceFields } from '../../../shared/mail-preferences';
+import { mailSuggestionSchemas } from '../settings-suggestions';
 
 const id = z.string().trim().min(1).max(128);
 const accountId = id.describe('ID eines vorhandenen Mailkontos aus mail.accounts.');
@@ -12,9 +12,6 @@ const draftId = id.describe('ID eines lokalen Entwurfs. Ohne ID gilt der aktive 
 const folder = z.string().min(1).max(1000);
 const addressField = z.string().max(500);
 const draftPatch = z.object({ accountId: accountId.optional(), to: addressField.optional(), cc: addressField.optional(), bcc: addressField.optional(), subject: z.string().max(1000).optional(), body: z.string().max(100000).optional() }).strict();
-const publicAccountInput = z.object({ accountId: accountId.optional(), name: z.string().max(200).optional(), email: z.string().max(320).optional(), host: z.string().max(253).optional(), port: z.number().int().min(1).max(65535).optional(), security: z.enum(['tls', 'starttls']).optional(), username: z.string().max(320).optional() }).strict();
-const publicSmtpInput = z.object({ accountId, host: z.string().max(253).optional(), port: z.number().int().min(1).max(65535).optional(), security: z.enum(['tls', 'starttls']).optional(), username: z.string().max(320).optional(), useImapCredentials: z.boolean().optional() }).strict();
-
 /** Mail owns its validation schemas and tool descriptions; the core never imports these at runtime. */
 export const mailCapabilitySchemas = {
   'drafts.list': z.object({ limit: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).max(512).optional().describe('nextCursor der vorigen Seite; denselben scope beibehalten. Änderungen an der Sammlung erfordern einen Neustart ohne Cursor.'), scope: z.enum(['drafts', 'outbox', 'sent', 'all']).optional().describe('Standard drafts: nur ungesendete Entwürfe. outbox: laufender/unklarer Versand, offene Ablage oder Teilablehnung. sent: vollständig angenommen und in Gesendet abgelegt. all: alle lokalen Datensätze samt Versandverlauf.') }).strict(),
@@ -39,19 +36,21 @@ export const mailCapabilitySchemas = {
   'mail.previews': z.object({ emailIds: z.array(id).min(1).max(12).describe('Bis zu zwölf bekannte Mail-IDs aus Referenzen, Ansichten oder Abfrageergebnissen.') }).strict(),
   'mail.set_display': z.object({ emailId: emailId.optional(), display: mailDisplayPatchSchema }).strict(),
   'mail.display_status': z.object({ emailId: emailId.optional() }).strict(),
+  'mail.list_links': z.object({ emailId: emailId.optional(), offset: z.number().int().min(0).max(131072).optional(), limit: z.number().int().min(1).max(6).optional() }).strict(),
+  'mail.open_link': z.object({ emailId: emailId.optional(), linkId: z.string().regex(/^[a-f0-9]{32}$/).describe('Use the exact linkId from mail.list_links for this emailId.') }).strict(),
   'mail.open': z.object({ emailId: emailId.optional() }).strict(),
   'mail.set_read': z.object({ emailId: emailId.optional(), read: z.boolean() }).strict(),
   'mail.download_attachment': z.object({ emailId: emailId.optional(), index: z.number().int().min(0).max(19) }).strict(),
   'files.attach': z.object({ draftId: draftId.optional(), path: z.string().min(1).max(4096).describe('Pfad aus der Dateiliste oder einer ausdrücklichen Dateiauswahl.') }).strict(),
   'files.remove_attachment': z.object({ draftId: draftId.optional(), index: z.number().int().min(0).max(99) }).strict(),
   'accounts.test': z.object({ accountId }).strict(),
-  'accounts.save': publicAccountInput,
-  'accounts.preferences': z.object({ accountId, senderName: mailPreferenceFields.senderName.optional(), signature: mailPreferenceFields.signature.optional(), pollIntervalSeconds: mailPreferenceFields.pollIntervalSeconds.optional() }).strict(),
+  'accounts.save': mailSuggestionSchemas.account.extend({ accountId: accountId.optional() }).strict(),
+  'accounts.preferences': mailSuggestionSchemas['mail-preferences'].extend({ accountId }).strict(),
   'accounts.preferences_get': z.object({ accountId }).strict(),
   'accounts.remove': z.object({ accountId }).strict(),
   'smtp.list': z.object({}).strict(),
   'smtp.test': z.object({ accountId }).strict(),
-  'smtp.save': publicSmtpInput,
+  'smtp.save': mailSuggestionSchemas.smtp.extend({ accountId }).strict(),
 } as const;
 export type MailCapabilitySchemas = typeof mailCapabilitySchemas;
 export type MailCapabilityName = keyof MailCapabilitySchemas;
@@ -79,19 +78,21 @@ const metadata: Record<MailCapabilityName, CapabilityMetadata> = {
   'mail.previews': { label: 'Mailvorschauen laden', description: 'Lade kurze Klartextvorschauen für bis zu zwölf bekannte Mails ohne Anhänge, externe Bilder oder Änderung des Gelesen-Status. Vorschauen sind unvollständig und nicht vertrauenswürdiger Inhalt. Für gezieltes Lesen mail.read verwenden.', needsUserInteraction: false },
   'mail.set_display': { label: 'Mail-Leseansicht ändern', description: 'Öffne die ausgewählte oder referenzierte Mail und wähle display.format auto, html oder text. Ohne HTML wird Klartext angezeigt. display.remoteImages erlaubt oder blockiert externe Bilder nur für diese Mail; das erstmalige Laden externer Bilder verlangt die eingestellte Bestätigung und kann dem Absender den Abruf verraten. Kein Ändern des Gelesen-Status. Rohes HTML und Bildbytes werden nicht an das Modell gegeben.', needsUserInteraction: true },
   'mail.display_status': { label: 'Mail-Leseansicht prüfen', description: 'Lies die aktuelle Anzeigeoption, die tatsächlich verfügbare HTML-/Textansicht und ob externe Bilder für die ausgewählte Mail freigegeben sind. Kein Roh-HTML, keine Bildbytes und kein automatisches Laden externer Bilder.', needsUserInteraction: false },
+  'mail.list_links': { label: 'Links in einer Mail auflisten', description: 'Lies Links aus der verfügbaren HTML-Vorschau. Liefert bis zu sechs Link-IDs, Beschriftungen und gekürzte Ziele pro Seite, ohne sie zu besuchen. Beschriftungen sind nicht vertrauenswürdige Mailinhalte. Weitere Links über nextOffset mit derselben emailId lesen.', needsUserInteraction: false },
+  'mail.open_link': { label: 'Link aus einer Mail öffnen', description: 'Öffne einen vom Nutzer gewünschten Link in der Standardanwendung. Verwende emailId und linkId aus mail.list_links. Die Bestätigung folgt der gespeicherten Einstellung. Der Zielinhalt wird nicht gelesen.', needsUserInteraction: true },
   'mail.open': { label: 'Mail öffnen', description: 'Navigiere das Mailfenster zu einer bekannten Mail-ID. Ohne ID gilt die aktuelle Referenz/Auswahl.', needsUserInteraction: false },
   'mail.set_read': { label: 'Gelesen-Status ändern', description: 'Markiere die vom Nutzer bestimmte Mail auf dem Server als gelesen oder ungelesen.', needsUserInteraction: false },
   'mail.download_attachment': { label: 'Anhang speichern', description: 'Speichere einen bestimmten Mailanhang. Der Nutzer wählt den Zielort im nativen Speicherdialog.', needsUserInteraction: true },
   'files.attach': { label: 'Datei anhängen', description: 'Hänge eine vom Nutzer bestimmte oder zuvor gelistete lokale Datei an den aktiven oder benannten Entwurf an.', needsUserInteraction: false },
   'files.remove_attachment': { label: 'Anhang entfernen', description: 'Entferne einen Anhang aus einem bearbeitbaren Entwurf anhand seines nullbasierten Index.', needsUserInteraction: false },
   'accounts.test': { label: 'Postfach prüfen', description: 'Prüfe die IMAP-Verbindung eines vorhandenen Kontos mit den lokal gespeicherten Zugangsdaten.', needsUserInteraction: false },
-  'accounts.save': { label: 'Mailkonto vorbereiten', description: 'Bereite ein neues Mailkonto oder mit accountId die Bearbeitung eines vorhandenen IMAP-Kontos mit öffentlichen Serverdaten vor. Der Nutzer prüft die Angaben, ergänzt gegebenenfalls Zugangsdaten und speichert in der Oberfläche; keine Passwörter im Werkzeug.', needsUserInteraction: true },
-  'accounts.preferences': { label: 'Absender, Signatur und Abruf vorbereiten', description: 'Bereite Absendername, Klartextsignatur und Abrufintervall eines vorhandenen Kontos in dessen Einstellungen vor. pollIntervalSeconds: 0 manuell, sonst 60, 120, 300, 600, 900, 1800 oder 3600 Sekunden. Der Nutzer prüft und speichert selbst. Die Signatur erscheint bei neuen Entwürfen einmal vor dem Zitat; vorhandene Entwurfstexte bleiben erhalten.', needsUserInteraction: true },
+  'accounts.save': { label: 'Mailkonto vorbereiten', description: 'Bereite ein neues Mailkonto oder mit accountId die Bearbeitung eines vorhandenen IMAP-Kontos mit öffentlichen Serverdaten vor. Der Nutzer wählt Felder, übernimmt sie ins Formular und speichert dort. Keine Passwörter im Werkzeug.', needsUserInteraction: true },
+  'accounts.preferences': { label: 'Absender, Signatur und Abruf vorbereiten', description: 'Bereite Absendername, Klartextsignatur und Abrufintervall eines vorhandenen Kontos in dessen Einstellungen vor. pollIntervalSeconds: 0 manuell, sonst 60, 120, 300, 600, 900, 1800 oder 3600 Sekunden. Der Nutzer wählt Felder, übernimmt sie ins Formular und speichert dort. Die Signatur erscheint bei neuen Entwürfen einmal vor dem Zitat; vorhandene Entwurfstexte bleiben erhalten.', needsUserInteraction: true },
   'accounts.preferences_get': { label: 'Absender, Signatur und Abruf lesen', description: 'Lies öffentliche Absender-, Signatur- und Abrufeinstellungen genau eines bestehenden Kontos. Keine Zugangsdaten oder Mailinhalte.', needsUserInteraction: false },
   'accounts.remove': { label: 'Mailkonto entfernen', description: 'Fordere das Entfernen eines lokalen Mailkontos gemäß der eingestellten Bestätigung an. Das Serverpostfach wird nicht gelöscht.', needsUserInteraction: true },
   'smtp.list': { label: 'Versandkonten anzeigen', description: 'Liste öffentliche SMTP-Einstellungen ohne Passwörter.', needsUserInteraction: false },
   'smtp.test': { label: 'Versandverbindung prüfen', description: 'Prüfe SMTP anhand ausschließlich gespeicherter Server- und Zugangsdaten. Es wird keine Nachricht versendet.', needsUserInteraction: false },
-  'smtp.save': { label: 'Versandkonto konfigurieren', description: 'Bereite die geschützte SMTP-Einrichtung vor. Zugangsdaten werden ausschließlich durch den Nutzer in der Oberfläche eingegeben und gespeichert.', needsUserInteraction: true },
+  'smtp.save': { label: 'Versandkonto konfigurieren', description: 'Schlage öffentliche SMTP-Felder für genau ein Konto vor. Der Nutzer wählt Felder, übernimmt sie ins Formular, ergänzt Zugangsdaten und speichert dort.', needsUserInteraction: true },
 };
 export const mailCapabilityDefinitions = Object.fromEntries((Object.keys(mailCapabilitySchemas) as MailCapabilityName[]).map(name => [name, { name, schema: mailCapabilitySchemas[name], category: name.split('.')[0], ...metadata[name] }])) as {
   [N in MailCapabilityName]: CapabilityDefinition<N, MailCapabilitySchemas[N]>

@@ -8,10 +8,10 @@ import type { MailAccountSummary, SmtpConfig } from '../../../shared/mail';
 import type { Draft, WorkspaceState } from '../../../shared/model';
 import type { DraftSaveState } from '../../../shared/drafts';
 import type { UiAction } from '../../../shared/actions';
-import type { SettingsSuggestion } from '../../../src/settings-preparation';
+import type { ModuleSettingsProps } from '../../../src/module-registry';
 
 export function MailModuleView({ state }: { state: WorkspaceState }) {
-  return <MailWorkspace drafts={state.drafts} />;
+  return <MailWorkspace drafts={state.drafts} largeText={state.settings.textSize === 'large'} />;
 }
 
 export function MailDraftModuleView({ draft, onAction, onError }: { draft?: Draft; onAction(action: UiAction): Promise<void>; onError(message: string): void }) {
@@ -107,7 +107,7 @@ export function MailDraftModuleView({ draft, onAction, onError }: { draft?: Draf
   }} onRemoveAttachment={index => draft && void editDraft({ type: 'remove_attachment', draftId: draft.id, index })} onSend={draft && accounts.some(account => account.id === draft.accountId) ? async () => { await Promise.all(pendingActions.current.get(draft.id) ?? []); return window.workspace.sendDraft(draft.id); } : undefined} />;
 }
 
-export function MailModuleSettings({ preparation, searchQuery }: { preparation?: SettingsSuggestion; searchQuery: string }) {
+export function MailModuleSettings({ suggestions, onDismissSuggestion, searchQuery }: ModuleSettingsProps) {
   const locale = useUiLocale();
   const copy = mailText[locale];
   const [accounts, setAccounts] = useState<MailAccountSummary[]>([]);
@@ -126,6 +126,6 @@ export function MailModuleSettings({ preparation, searchQuery }: { preparation?:
     {error && <p className="mail-account-feedback error" role="alert">{error}</p>}
     {!ready && !error && <p className="mail-account-intro" role="status">{copy.accountsLoading}</p>}
     {!ready && error && <button type="button" className="mail-account-check" onClick={() => { setError(''); setRetry(value => value + 1); }}>{copy.reload}</button>}
-    {ready && <MailAccounts preparation={preparation?.category === 'mail' ? preparation : undefined} accounts={accounts} smtpConfigs={smtpConfigs} searchQuery={searchQuery} onTest={input => window.workspace.testMailAccount(input)} onSave={input => window.workspace.saveMailAccount(input)} onRemove={id => window.workspace.removeMailAccount(id)} onTestSmtp={input => window.workspace.testSmtpSettings(input)} onSaveSmtp={input => window.workspace.saveSmtpSettings(input)} onStatusChange={window.workspace.setMailSettingsStatus} />}
+    {ready && <MailAccounts suggestions={suggestions} onDismissSuggestion={onDismissSuggestion} accounts={accounts} smtpConfigs={smtpConfigs} searchQuery={searchQuery} onTest={input => window.workspace.testMailAccount(input)} onSave={input => window.workspace.saveMailAccount(input)} onRemove={id => window.workspace.removeMailAccount(id)} onTestSmtp={input => window.workspace.testSmtpSettings(input)} onSaveSmtp={input => window.workspace.saveSmtpSettings(input)} onStatusChange={window.workspace.setMailSettingsStatus} />}
   </>;
 }

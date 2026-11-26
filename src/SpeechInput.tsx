@@ -152,7 +152,7 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     let settingsChanged = false;
     const offSettings = window.workspace.onSpeechSettings(value => {
@@ -161,10 +161,12 @@ export function SpeechInput({ scope, disabled, onStart, onTranscript, onBusyChan
       if (mounted.current) { setSettings(value); setLoadingSettings(false); }
     });
     const offEvents = window.workspace.onSpeechEvent(receive);
+    window.addEventListener('pagehide', cancel);
     void window.workspace.getSpeechSettings().then(value => {
       if (mounted.current && !settingsChanged) setSettings(value);
     }, reason => { if (mounted.current) update({ ...idle, status: 'failed', ...speechFailure(reason) }); }).finally(() => { if (mounted.current) setLoadingSettings(false); });
     return () => {
+      window.removeEventListener('pagehide', cancel);
       if (active.current) release(active.current, true);
       callbacks.current.onPreview(idle);
       mounted.current = false; offSettings(); offEvents();

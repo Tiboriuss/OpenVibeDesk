@@ -4,7 +4,7 @@
 
 **Reviewed:** 11 November 2026. **Starting point:** `c3905d7`, the source of `v0.1.8`. This record covers the original review and the subsequent R02, R03, R04 and OVD-Bar implementation checks. Published packages and their platform evidence are documented separately in the [release guide](releases.md).
 
-OVD's existing modular desktop design fits its intended users. The immediate problems were unnecessary chrome, controls becoming unreachable in small windows, and several mismatches between a visible action and its actual state. The review corrected those contained defects; follow-ups bounded provider requests, completed source reads, reduced retained data/window traffic and rebuilt the launcher as the OVD-Bar. These changes add no product modules or new test framework. **R05, visible workspace-wide save recovery, is the next reliability package.**
+The review found repeated UI text, controls that disappeared in small windows and actions whose reported outcome differed from what happened. Follow-ups bounded provider requests, completed source reads, reduced retained data and window traffic, and rebuilt the launcher as the OVD-Bar. The resulting save-recovery work shipped in v0.1.11. The [maturation plan](maturation-plan.md#delivery-order) tracks the work completed since this review and the next Mail paging change.
 
 ## Review method and coverage
 
@@ -98,7 +98,7 @@ The Bar controller responds to display addition/removal and work-area changes; s
 
 Other isolated checks covered settings search, a 350 CSS-pixel viewport, rapid queued edits, retained values/retry after an injected save failure, orientation-aware keys, reduced-motion attention, overflow with 40 additional navigation entries, background-only pixel alpha, and persistence failure handling for an unreadable saved position. Normal Assistant requests updated settings, inspected displays and moved the Bar; a fresh process restored the resulting position. These checks do not complete the broader R16/R18 accessibility assessment.
 
-## Remaining work, in priority order
+## Priorities recorded on 11 November
 
 This list records the 11 November review. R05 has since shipped. For the current order and acceptance records, see the [maturation plan](maturation-plan.md#delivery-order).
 

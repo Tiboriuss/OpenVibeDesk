@@ -10,7 +10,7 @@ import type { SettingsSuggestion } from './settings-preparation';
 import { localizedCoreNavigation, orderNavigationEntries } from '../shared/navigation';
 
 export type ModuleViewProps = { title?: string; state: WorkspaceState; onAction(action: UiAction): Promise<void>; onError(message: string): void };
-export type ModuleSettingsProps = { title?: string; preparation?: SettingsSuggestion; searchQuery: string };
+export type ModuleSettingsProps = { title?: string; suggestions: SettingsSuggestion[]; onDismissSuggestion(token: number): void; searchQuery: string };
 type FrontendAdapter = { views: Record<string, ComponentType<ModuleViewProps>>; settings: Record<string, ComponentType<ModuleSettingsProps>>; navigationActions?: Record<string, UiAction> };
 
 const MailModuleView = lazy(() => import('./modules/mail').then(module => ({ default: module.MailModuleView })));

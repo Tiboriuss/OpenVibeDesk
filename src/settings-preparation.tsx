@@ -2,7 +2,6 @@ import { preparationText } from './preparation-copy';
 import { useUiLocale } from './locale';
 import { useEffect, useRef, useState } from 'react';
 import { agentSettingsPatchSchema, defaultAgentSettings } from '../shared/agent-settings';
-import { MAIL_POLL_INTERVALS } from '../shared/mail-preferences';
 import { speechSettingsPatchSchema } from '../shared/speech';
 import { aiConnectionFields } from '../shared/ai-providers';
 import type { SettingsPreparation } from '../shared/model';
@@ -10,7 +9,7 @@ import './settings-preparation.css';
 
 export type SettingsSuggestion = SettingsPreparation & { token: number };
 type SafeValue = string | number | boolean;
-const stringLimits: Record<string, number> = { name: 120, senderName: 120, email: 320, host: 253, username: 320, baseUrl: 2048, smartModel: 200, simpleModel: 200 };
+const stringLimits: Record<string, number> = { baseUrl: 2048, smartModel: 200, simpleModel: 200 };
 
 /** Only ordinary configuration fields reach the forms; secret fields are never copied. */
 export function preparationValues(suggestion: SettingsSuggestion): Record<string, SafeValue> {
@@ -34,7 +33,8 @@ export function preparationValues(suggestion: SettingsSuggestion): Record<string
     }
     return result;
   }
-  const allowed = suggestion.kind === 'ai' ? ['provider', 'protocol', 'authMode', 'apiVersion', 'baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'confirmationMode'] : suggestion.kind === 'smtp' ? ['host', 'port', 'security', 'username', 'useImapCredentials'] : ['name', 'email', 'host', 'port', 'security', 'username', 'senderName', 'signature', 'pollIntervalSeconds'];
+  if (suggestion.kind !== 'ai') return {};
+  const allowed = ['provider', 'protocol', 'authMode', 'apiVersion', 'baseUrl', 'smartModel', 'simpleModel', 'smartThinking', 'simpleThinking', 'workspaceTools', 'confirmationMode'];
   const result: Record<string, SafeValue> = {};
   for (const key of allowed) {
     const value = suggestion.values[key];
@@ -44,13 +44,9 @@ export function preparationValues(suggestion: SettingsSuggestion): Record<string
       continue;
     }
     if (key in stringLimits && typeof value === 'string' && !/[\u0000-\u001f\u007f]/.test(value)) result[key] = value.slice(0, stringLimits[key]);
-    else if (key === 'signature' && typeof value === 'string' && value.length <= 5_000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)) result[key] = value;
-    else if (key === 'pollIntervalSeconds' && typeof value === 'number' && MAIL_POLL_INTERVALS.some(interval => interval === value)) result[key] = value;
-    else if (key === 'port' && typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535) result[key] = value;
-    else if (key === 'security' && (value === 'tls' || value === 'starttls')) result[key] = value;
     else if ((key === 'smartThinking' || key === 'simpleThinking') && typeof value === 'string' && ['off', 'low', 'medium', 'high'].includes(value)) result[key] = value;
     else if (key === 'confirmationMode' && (value === 'ask' || value === 'never')) result[key] = value;
-    else if (['workspaceTools', 'useImapCredentials'].includes(key) && typeof value === 'boolean') result[key] = value;
+    else if (key === 'workspaceTools' && typeof value === 'boolean') result[key] = value;
   }
   return result;
 }
@@ -71,7 +67,7 @@ export function SettingsPreparationNotice({ suggestion, blocked, onApply, onDism
   const locale = useUiLocale();
   const copy = preparationText[locale];
   if (!suggestion) return null;
-  const labels: Record<string, string> = { ...copy, title: 'Name', host: 'Server', port: 'Port' };
+  const labels: Record<string, string> = { ...copy, title: 'Name' };
   const values = preparationValues(suggestion);
-  return <div className="settings-preparation" role="status"><strong>{copy.waiting}</strong><p>{blocked ? copy.unsaved : copy.ready}</p>{Object.keys(values).length > 0 && <dl>{Object.entries(values).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'confirmationMode' ? value === 'never' ? copy.without : copy.with : typeof value === 'boolean' ? value ? copy.on : copy.off : typeof value === 'number' && key !== 'port' ? value.toLocaleString(locale) : String(value)}</dd></div>)}</dl>}<div><button type="button" disabled={blocked} onClick={onApply}>{copy.apply}</button><button type="button" onClick={onDismiss}>{copy.dismiss}</button></div></div>;
+  return <div className="settings-preparation" role="status"><strong>{copy.waiting}</strong><p>{blocked ? copy.unsaved : copy.ready}</p>{Object.keys(values).length > 0 && <dl>{Object.entries(values).map(([key, value]) => <div key={key}><dt>{labels[key] ?? key}</dt><dd>{key === 'confirmationMode' ? value === 'never' ? copy.without : copy.with : typeof value === 'boolean' ? value ? copy.on : copy.off : typeof value === 'number' ? value.toLocaleString(locale) : String(value)}</dd></div>)}</dl>}<div><button type="button" disabled={blocked} onClick={onApply}>{copy.apply}</button><button type="button" onClick={onDismiss}>{copy.dismiss}</button></div></div>;
 }

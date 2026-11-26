@@ -21,3 +21,28 @@ export const connectFailureText = {
     connection_failed: 'Verbindung fehlgeschlagen. Prüfe bei Stdio Programm, Argumente und Arbeitsordner, bei HTTP den Endpunkt und die Zugangsdaten.'
   }
 } satisfies Record<UiLocale, Record<McpConnectFailure, string>>;
+
+export const permissionFeedback = {
+  en: {
+    catalogChanged: 'The tool catalog changed. Review the current definition and save again.',
+    offerChanged: 'The connection, tool definition or permission changed. Check the tool in MCP settings before using it.',
+    requiresTask: 'This tool requires MCP task support.',
+    incomplete: 'The MCP client cannot read the complete tool definition.',
+    refreshFailed: 'Could not load the current tool catalog. Refresh the tools to try again.',
+    permissionsChanged: 'Permissions have changed since you opened this list. Review your selection again.',
+    limit: 'A server can have up to 500 saved tool permissions.',
+    largeDefinition: 'The tool definition exceeds the 48,000-character review limit.',
+    duplicate: 'The server listed multiple tools with the same name.'
+  },
+  de: {
+    catalogChanged: 'Der Werkzeugkatalog hat sich geändert. Prüfe die aktuelle Definition und speichere erneut.',
+    offerChanged: 'Verbindung, Werkzeugdefinition oder Freigabe wurden geändert. Prüfe das Werkzeug vor dem Aufruf in den MCP-Einstellungen.',
+    requiresTask: 'Dieses Werkzeug benötigt Unterstützung für MCP-Tasks.',
+    incomplete: 'Der MCP-Client kann die Werkzeugdefinition nicht vollständig lesen.',
+    refreshFailed: 'Der aktuelle Werkzeugkatalog konnte nicht geladen werden. Aktualisiere die Werkzeugliste.',
+    permissionsChanged: 'Die Freigaben haben sich seit dem Öffnen der Liste geändert. Prüfe deine Auswahl erneut.',
+    limit: 'Pro Server sind bis zu 500 gespeicherte Werkzeugfreigaben möglich.',
+    largeDefinition: 'Die Werkzeugdefinition überschreitet die Prüfgrenze von 48.000 Zeichen.',
+    duplicate: 'Der Server hat mehrere Werkzeuge mit demselben Namen gemeldet.'
+  }
+};

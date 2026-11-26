@@ -38,10 +38,10 @@ Use a complete `wss://` URL for Live and a complete `https://` URL for After rec
 
 - Click the microphone to start. Recording begins as soon as microphone access is available; it does not wait for a transcription provider. Operating-system microphone permission is required where applicable.
 - Continue editing the existing message while the transcript appears in a separate preview.
-- Click Stop to finish, including while Live is still connecting. The microphone stops and OVD finishes transcribing the captured audio. The final transcript is inserted at the tracked text position and remains editable; it is never sent automatically.
-- Click Cancel to discard the active dictation while preserving the existing draft.
+- Click **Stop** to release the microphone immediately, including while Live is still connecting. OVD finishes transcribing the captured audio and inserts the result at the tracked text position. You can edit it before sending.
+- Click **Cancel** or press Escape to discard the dictation and keep the typed draft. If the operating system denies microphone access, enable it in system settings, then click the microphone again.
 
-Sending is disabled while recording or transcription is active. Switching chat sessions or closing the Chat window cancels its active recording. Changing saved speech settings also cancels a recording made with the previous configuration. Only one recording can run at a time.
+Closing Chat releases the microphone before the window waits for the draft to save. Switching chats or saving new voice settings also cancels the current recording. Only one recording can run at a time. Sending becomes available when dictation finishes or is cancelled.
 
 If transcription fails after audio has been captured, OVD can retain that recording in memory. **Retry transcription** explicitly reconnects and transcribes the retained recording; it does not open the microphone again. OVD never automatically replays audio after a connection failure. Available partial text remains a preview and can be accepted explicitly; an incomplete transcript is not silently treated as a successful final result.
 

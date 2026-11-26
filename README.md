@@ -12,7 +12,7 @@ This is an early, single-user **alpha**. Releases include installers for **macOS
 
 [Project goal](#who-we-are-building-this-for) · [Screenshots](#a-look-inside) · [Add modules](#modules-and-a-small-ai-context) · [Download](#download-and-install) · [Getting started](docs/getting-started.md) · [Documentation](docs/README.md) · [Changelog](CHANGELOG.md) · [Maturation plan](docs/maturation-plan.md)
 
-**v0.1.9:** configurable OVD-Bar, whole-request context budgeting, paged full Mail/draft text and measured improvements to memory use and window traffic. See the [changes and remaining limits](CHANGELOG.md#v019--11-november-2026).
+**Alpha v0.1.14** adds a pin for the Assistant window, field-by-field review of suggested Mail settings and a narrow-window mail reader. If you already use MCP, review your tools once after upgrading from v0.1.13 or earlier. [Release notes](CHANGELOG.md#v0114--26-november-2026) · [Review MCP tools](modules/ovd-mcp/README.md#reviewing-tool-changes)
 
 ## Who we are building this for
 
@@ -28,7 +28,7 @@ This is the direction of the project. The early version already has Mail, Files,
 
 Read a message, bring it into Chat as a reference, and let the Assistant prepare a reply in a separate draft window. Files and approved MCP tools join the same workspace.
 
-Follow a fictional studio’s launch email from the inbox to an Assistant-prepared reply. The gallery shows the English interface running with isolated sample data on 19 November 2026. Select any image to open it at full size.
+Follow a fictional studio’s launch email from the inbox to an Assistant-prepared reply. The gallery shows the English interface with fictional records in an isolated workspace. Select any image to open it at full size.
 
 [![The compact horizontal OVD-Bar with module icons and an overflow menu](assets/screenshots/ovd-bar.png)](assets/screenshots/ovd-bar.png)
 
@@ -41,7 +41,7 @@ Place the OVD-Bar vertically or horizontally, resize it, adjust its background o
 
 | Files | MCP connections |
 | --- | --- |
-| [![Files module browsing fictional Project Atlas documents with a text preview and a reference-in-chat action](assets/screenshots/files.png)](assets/screenshots/files.png) | [![MCP settings with a local example server and individual tool approvals](assets/screenshots/mcp.png)](assets/screenshots/mcp.png) |
+| [![Files module browsing fictional Project Atlas documents with a text preview and a reference-in-chat action](assets/screenshots/files.png)](assets/screenshots/files.png) | [![MCP settings with a local example server and tools awaiting permission review](assets/screenshots/mcp.png)](assets/screenshots/mcp.png) |
 | Navigate local folders, preview supported text and reference files in Chat. | Connect integrations and choose which tools the Assistant may discover and use. [View tool permissions](assets/screenshots/mcp-tools.png). |
 
 | Mail drafts | Settings and modules |
@@ -56,10 +56,10 @@ Place the OVD-Bar vertically or horizontally, resize it, adjust its background o
 | Area | Current scope |
 | --- | --- |
 | **OVD-Bar** | Vertical or horizontal floating launcher; adjustable size, background opacity and placement, optional idle collapse, keyboard navigation and module ordering. |
-| **Assistant** | Streaming, Markdown, separately configurable live/recorded speech input, resumable per-chat drafts, session management, chat branches, tool-free answer reformulation, journal-backed explicit task continuation, mail/chat/file references, time and calculation tools, and configurable execution and whole-request context budgets. OpenAI-compatible Chat Completions and Responses APIs, Azure endpoint/authentication settings, and direct Sign in with ChatGPT. |
-| **Mail** | Per-account sender names, signatures and retrieval intervals; folders, search/filter/count, HTML previews and paged full-text reading, attachments, local drafts with paged Assistant access, SMTP sending and separate Sent-copy filing with retry. |
+| **Assistant** | A pinnable Chat window with streaming Markdown, dictation, references, saved drafts and sessions. Reformulate an answer from saved results or explicitly continue interrupted work. Choose OpenAI, Azure, a compatible API or direct ChatGPT sign-in, and set a context budget for the Assistant. |
+| **Mail** | Search and count mail across accounts, read HTML or paged text, and prepare replies with attachments. The Assistant can suggest changes to account settings, list links in a message, and open the one you choose. Local drafts survive restart, and Sent-copy filing can be retried separately from sending. |
 | **Files** | Folder navigation with a path bar, filtering and sorting, text previews, drag-and-drop references in chat, and attachments for mail drafts. |
-| **MCP** | Local Stdio and remote Streamable HTTP servers, browser OAuth or Bearer authentication, individual tool approvals, and a compact activity log. |
+| **MCP** | Connect local Stdio or remote Streamable HTTP servers, including servers with browser OAuth or Bearer authentication. Choose which tools the Assistant can use and review changes to an approved tool’s definition. |
 | **Module management** | Multiple public/private repositories, searchable catalogs, module installation and updates, local code approval, and shared Assistant access. |
 
 Mail, chat, files, and settings open in separate windows. The [OVD-Bar](docs/ovd-bar.md) keeps modules close at hand with adjustable orientation, size, transparency, placement and optional idle collapse. Settings use compact groups and global search.
@@ -79,13 +79,13 @@ OVD can grow with the tools a person or small business actually uses. A module c
 ### Install your first additional module
 
 1. Open **Settings → Modules → Module sources** (**Einstellungen → Module → Modulquellen**).
-2. Choose **Repository hinzufügen** and save [OpenVibeDesk-Modules](https://github.com/Tiboriuss/OpenVibeDesk-Modules) as the source URL. The public catalog needs no token.
-3. Select **Katalog laden**, choose a module and click **Installieren**.
-4. Review and select **Freigeben & aktivieren**. Its declared views, settings and tools become available in the running app.
+2. Choose **Add repository** and save [OpenVibeDesk-Modules](https://github.com/Tiboriuss/OpenVibeDesk-Modules) as the source URL. The public catalog needs no token.
+3. Select **Load catalog**, choose a module and click **Install**.
+4. Choose **Approve and enable** and review its declared access. The module’s views, settings and Assistant tools become available in the running app.
 
 The separate [module repository](https://github.com/Tiboriuss/OpenVibeDesk-Modules) currently publishes **Notes** (`sample-notes`), **Skill Library** (`skill-library`) and **Memory** (`memory`). Notes demonstrates shared UI/Assistant functions; Skill Library stores explicitly attached working instructions; Memory stores sourced facts with automatic recall and optional observation review. These are optional downloads, not bundled features. Check each module's documentation for host requirements and its own behavior.
 
-Reload the catalog to check for updates, then select **Aktualisieren** for the chosen module. Updates preserve its separate data directory, but changed code needs renewed approval before running. Module updates and application installer upgrades are separate; neither happens automatically. See the [repository guide](docs/module-repositories.md) for the complete workflow and troubleshooting.
+Reload the catalog to check for updates, then select **Update** for the chosen module. Updates preserve its separate data directory, but changed code needs renewed approval before running. Module updates and application installer upgrades are separate; neither happens automatically. See the [repository guide](docs/module-repositories.md) for the complete workflow and troubleshooting.
 
 ### Private modules for your company
 
@@ -157,9 +157,9 @@ The [maturation plan](docs/maturation-plan.md) prioritizes the existing Assistan
 
 | Priority | Focus | Next work |
 | --- | --- | --- |
-| First | Trustworthy existing workflows | Chat drafts survive a restart. The host now detects damaged workspace data before opening a session and offers [startup recovery](docs/getting-started.md#if-the-workspace-cannot-open). Host-boundary checks and the MCP compatibility assessment remain open. |
+| First | Trustworthy existing workflows | Chat drafts survive a restart. The host now detects damaged workspace data before opening a session and offers [startup recovery](docs/getting-started.md#if-the-workspace-cannot-open). The host checks the Mail reader, microphone access and Settings callers. Checks on the remaining desktop APIs and packaged apps are in progress. |
 | Foundation | Display language, storage and module lifecycle | Build on the [shared interface language](docs/getting-started.md#choose-the-interface-language) as more workflows gain English and German labels. Other priorities include storage migrations, backup/restore, and module and MCP compatibility. |
-| Daily use | Existing modules and interface | Complete Mail-list paging, everyday mail actions, synchronization and composition. Extend English and German coverage to the remaining bundled module workflows (R21b). |
+| Daily use | Mail and the other bundled modules | The next user-facing step is paging past the current 500-message Mail list limit. Everyday mail actions, synchronization and composition are also on the roadmap. |
 | Release | Reproducible distribution | macOS/Windows installers and integrity checks are available. Trusted publisher signing, notarization and broader runtime/upgrade validation remain. |
 
 The [mail](docs/mail-design.md) and [settings](docs/settings-design.md) design guides describe both ongoing requirements and future work; they are not feature-completion lists.

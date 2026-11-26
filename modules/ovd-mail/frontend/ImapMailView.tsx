@@ -1,7 +1,7 @@
 import { useUiLocale } from '../../../src/locale';
 import { mailText } from './mail-locale';
 import { mailFormat } from './mail-format';
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, ChevronDown, Download, FileText, Mail, MailCheck, MailOpen, MoreHorizontal, Paperclip, PenLine, RefreshCw, Reply, Search, Settings, X } from 'lucide-react';
 import type { ImapFolder, ImapMessage, MailAccountSummary } from '../../../shared/mail';
 import { HtmlMailBody } from './HtmlMailBody';
@@ -10,6 +10,7 @@ import { writeMailDrag } from '../../../src/mail-reference';
 import './imap-mail.css';
 
 type Props = {
+  largeText: boolean;
   accounts: MailAccountSummary[];
   folders: ImapFolder[];
   messages: ImapMessage[];
@@ -47,7 +48,7 @@ type Props = {
   draftsView?: ReactNode;
 };
 
-export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, textReadRequest, error, hasMore = false, onAccount, onFolder, onSelect, onVisibleMessages, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDisplay, onOpenLink, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
+export function ImapMailView({ largeText, accounts, folders, messages, dateBasis = 'sent', selectedAccountId, selectedFolder, selectedMessageId, focusVersion = 0, loading, loadingMore = false, bodyLoading = false, textReadRequest, error, hasMore = false, onAccount, onFolder, onSelect, onVisibleMessages, onRefresh, onLoadMore, onSettings, onSearch, searchState, queryControls, onClearSearch, onCompose, onReply, onDownloadAttachment, onToggleRead, onDisplay, onOpenLink, onDrafts, draftCount, draftsSelected = false, draftsView }: Props) {
   const locale = useUiLocale();
   const copy = mailText[locale];
   const { formatDate, dateGroup, formatSize, senderName, senderAddress, initials, folderDisplay } = mailFormat[locale];
@@ -62,6 +63,9 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
   const searchAction = useRef(onSearch); searchAction.current = onSearch;
   const clearSearchAction = useRef(onClearSearch); clearSearchAction.current = onClearSearch;
   const messageList = useRef<HTMLDivElement>(null);
+  const listHeading = useRef<HTMLHeadingElement>(null);
+  const backButton = useRef<HTMLButtonElement>(null);
+  const returnFocusToList = useRef(false);
   const moreMenu = useRef<HTMLDetailsElement>(null);
   const [downloading, setDownloading] = useState<{ messageId: string; index: number }>();
   const [marking, setMarking] = useState<string>();
@@ -148,6 +152,20 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
     return value ? dateGroup(value) : dateBasis === 'received' ? copy.missingReceivedDate : copy.missingSentDate;
   }
 
+  useLayoutEffect(() => {
+    if (showDetail && backButton.current?.getClientRects().length) {
+      backButton.current.focus({ preventScroll: true });
+    } else if (!showDetail && returnFocusToList.current) {
+      returnFocusToList.current = false;
+      const row = messageList.current?.querySelector<HTMLButtonElement>('.imap-message-row.selected');
+      (row ?? listHeading.current)?.focus({ preventScroll: true });
+    }
+  }, [showDetail, selected?.id]);
+
+  function returnToList() {
+    returnFocusToList.current = true;
+    setShowDetail(false);
+  }
   function chooseMessage(id: string) { onSelect(id); setShowDetail(true); }
   function updateQuery(value: string) { if (draftsSelected) onFolder(selectedFolder); setQuery(value); }
   function submitSearch() { if (query.trim()) onSearch?.(query.trim()); else onClearSearch?.(); }
@@ -214,7 +232,7 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
       <div className="imap-mobile-controls">{accountChoice}{folderChoice}</div>
       {draftsSelected ? <div className="imap-drafts-panel">{draftsView}</div> : <>
         <section className="imap-list-panel" aria-label={copy.messageList}>
-          <header className="imap-list-header"><div><h2 title={searchState ? searchState.scope : folderName}>{searchState ? searchState.title || copy.searchResults : folderName}</h2>{(searchState || filtering) && <p title={searchState ? `${copy.loadedCount(messages.length)} · ${searchState.scope}${searchState.complete === false || searchState.countExact === false ? " " + copy.partialResult : ''}` : copy.matchesIn(filteredMessages.length, messages.length)}>{searchState ? `${copy.shortLoaded(messages.length)}${searchState.complete === false || searchState.countExact === false ? " " + copy.partialResult : ''}` : copy.matchCount(filteredMessages.length)}</p>}</div><span className="imap-count" title={searchState ? copy.totalMatches(resultCount) : copy.loadedCount(filtering ? filteredMessages.length : messages.length)}>{searchState ? resultCount : filtering ? filteredMessages.length : messages.length}</span></header>
+          <header className="imap-list-header"><div><h2 ref={listHeading} tabIndex={-1} title={searchState ? searchState.scope : folderName}>{searchState ? searchState.title || copy.searchResults : folderName}</h2>{(searchState || filtering) && <p title={searchState ? `${copy.loadedCount(messages.length)} · ${searchState.scope}${searchState.complete === false || searchState.countExact === false ? " " + copy.partialResult : ''}` : copy.matchesIn(filteredMessages.length, messages.length)}>{searchState ? `${copy.shortLoaded(messages.length)}${searchState.complete === false || searchState.countExact === false ? " " + copy.partialResult : ''}` : copy.matchCount(filteredMessages.length)}</p>}</div><span className="imap-count" title={searchState ? copy.totalMatches(resultCount) : copy.loadedCount(filtering ? filteredMessages.length : messages.length)}>{searchState ? resultCount : filtering ? filteredMessages.length : messages.length}</span></header>
           {searchState && <div className="imap-search-result-bar"><button type="button" onClick={clearSearch}><ArrowLeft size={13} /> {copy.backToFolder}</button><span title={searchState.query || searchState.description}>{searchState.query ? `„${searchState.query}“` : searchState.description || copy.serverFilter}</span><details className="imap-result-details"><summary>{copy.scope}</summary><p>{searchState.scope}</p></details></div>}
           <div className="imap-list-filters" aria-label={copy.messageFilters}><div className="imap-list-tabs"><button type="button" aria-pressed={!unreadOnly} onClick={() => setUnreadOnly(false)}>{copy.all}</button><button type="button" aria-pressed={unreadOnly} onClick={() => setUnreadOnly(true)}>{copy.unread}</button></div><button type="button" className="imap-attachment-filter" aria-pressed={attachmentsOnly} onClick={() => setAttachmentsOnly(value => !value)} title={copy.attachmentsOnly} aria-label={copy.hasAttachment}><Paperclip size={15} /></button></div>
           {filtering && !searchState && <p className="imap-search-scope">{filteredMessages.length} {copy.of} {messages.length} {copy.loadedMessages}{query.trim() && onSearch ? " " + copy.enterToSearch : ''}</p>}
@@ -235,8 +253,8 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
           </div>
         </section>
         <section className="imap-detail" aria-label={copy.openMessage}>
-          <div className="imap-detail-header"><button className="imap-back" type="button" onClick={() => setShowDetail(false)}><ArrowLeft size={15} /> {copy.messages}</button><span>{selected ? copy.reader : copy.noSelection}</span>{selected && <button type="button" className="imap-details-toggle" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)}>Details <ChevronDown size={14} className={showDetails ? 'expanded' : ''} /></button>}</div>
-          {selected ? <div className="imap-detail-scroll"><article className="imap-detail-body">
+          <div className="imap-detail-header"><button ref={backButton} className="imap-back" type="button" onClick={returnToList}><ArrowLeft size={15} /> {copy.messages}</button><span>{selected ? copy.reader : copy.noSelection}</span>{selected && <button type="button" className="imap-details-toggle" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)}>Details <ChevronDown size={14} className={showDetails ? 'expanded' : ''} /></button>}</div>
+          {selected ? <div key={selected.id} className="imap-detail-scroll"><article className="imap-detail-body">
             {(actionError || error) && <p className="imap-error imap-action-error" role="alert">{actionError || error}</p>}
             <h2 draggable onDragStart={event => writeMailDrag(event.dataTransfer, selected.id)} title={copy.dragHint}>{selected.subject || copy.noSubject}</h2>
             <div className="imap-sender-line"><div className="imap-avatar" aria-hidden="true">{initials(selected.from)}</div><div className="imap-sender"><strong>{senderName(selected.from)}</strong><small title={selected.from}>{senderAddress(selected.from)}</small></div><time dateTime={selected.date} title={copy.sentDate}>{formatDate(selected.date, true)}</time></div>
@@ -250,7 +268,7 @@ export function ImapMailView({ accounts, folders, messages, dateBasis = 'sent', 
               </div>
               {useHtml && ((remoteCount?.id === selected.id && remoteCount.count > 0) || remoteImages) && <button type="button" className="mail-reader-images" disabled={!onDisplay || !!displayBusy} title={remoteImages ? undefined : copy.externalImageHint} onClick={() => void changeDisplay({ remoteImages: !remoteImages })}>{remoteImages ? copy.hideImages : `${copy.loadImages}${remoteCount?.id === selected.id ? ` (${remoteCount.count})` : ''}`}</button>}
             </div>}
-            {textReaderId === selected.id ? <MailTextReader key={`${selected.id}:${readerTarget?.version ?? 0}`} emailId={selected.id} initialCursor={readerTarget?.cursor} pageSize={readerTarget?.limit} onClose={() => setReaderTarget(undefined)}/> : bodyLoading ? <div className="imap-body-text" role="status">{copy.loadingMessage}</div> : selected.bodyLoaded ? useHtml ? <HtmlMailBody key={selected.id} html={selected.bodyHtml!} remoteImages={remoteImages} inlineImages={selected.inlineImages} onRemoteImagesCount={count => setRemoteCount(current => current?.id === selected.id && current.count === count ? current : { id: selected.id, count })} onOpenLink={onOpenLink ? url => onOpenLink(selected.id, url) : undefined} /> : <div className="imap-body-text">{selected.bodyText || copy.noText}</div> : <div className="imap-body-text">{copy.messageRetry}</div>}
+            {textReaderId === selected.id ? <MailTextReader key={`${selected.id}:${readerTarget?.version ?? 0}`} emailId={selected.id} initialCursor={readerTarget?.cursor} pageSize={readerTarget?.limit} onClose={() => setReaderTarget(undefined)}/> : bodyLoading ? <div className="imap-body-text" role="status">{copy.loadingMessage}</div> : selected.bodyLoaded ? useHtml ? <HtmlMailBody largeText={largeText} html={selected.bodyHtml!} remoteImages={remoteImages} inlineImages={selected.inlineImages} onRemoteImagesCount={count => setRemoteCount(current => current?.id === selected.id && current.count === count ? current : { id: selected.id, count })} onOpenLink={onOpenLink ? url => onOpenLink(selected.id, url) : undefined} /> : <div className="imap-body-text">{selected.bodyText || copy.noText}</div> : <div className="imap-body-text">{copy.messageRetry}</div>}
             {textReaderId !== selected.id && !bodyLoading && (useHtml ? selected.htmlTruncated : selected.truncated) && <div className="mail-text-more"><button type="button" onClick={() => setReaderTarget({ emailId: selected.id })}>{copy.readFull}</button></div>}
             {onReply && selected.bodyLoaded && !bodyLoading && <div className="imap-message-footer"><button type="button" onClick={() => onReply(selected)}><Reply size={16} />{copy.replyAction}</button></div>}
           </article></div> : <div className="imap-detail-empty"><span aria-hidden="true"><Mail size={24} /></span><p>{copy.selectMessage}</p></div>}

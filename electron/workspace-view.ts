@@ -32,6 +32,7 @@ function sessionSummary(session: ChatSession, locale: UiLocale): ChatSessionSumm
 
 /** Renderer projections never replace the authoritative state used by tools/storage. */
 export class WorkspaceViewProjector {
+  constructor(private readonly assistantPinSupported: boolean) {}
   private previous?: { keys: unknown[]; value: RendererWorkspaceState };
   private sessionId?: string;
   private start = 0;
@@ -60,7 +61,7 @@ export class WorkspaceViewProjector {
       view === 'mail' ? state.drafts : draft, view === 'chat' ? this.start : undefined];
     if (this.previous && keys.every((key, index) => key === this.previous!.keys[index])) return this.previous.value;
     const value: RendererWorkspaceState = {
-      version: 1, locale, windows: EMPTY, mails: EMPTY, drafts: EMPTY, chat: EMPTY, sessions: EMPTY,
+      version: 1, locale, assistantPinSupported: this.assistantPinSupported, windows: EMPTY, mails: EMPTY, drafts: EMPTY, chat: EMPTY, sessions: EMPTY,
       folder: 'Inbox', activeSessionId: '', provider: '', settings: state.settings,
     };
     if (view === 'chat' || view === 'sessions') {

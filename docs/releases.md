@@ -2,7 +2,7 @@
 
 [Documentation](README.md) · [Getting started](getting-started.md#install-or-update-the-app) · [Development](../CONTRIBUTING.md#development)
 
-The [changelog](../CHANGELOG.md) records the update checks introduced in v0.1.12, earlier releases and their verification scope. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) holds the actual publication status, downloads and prior notes.
+Use the release page to download an installer and the changelog to see what changed. GitHub marks the current alpha releases as pre-releases. [GitHub Releases](https://github.com/Tiboriuss/OpenVibeDesk/releases) · [Changelog](../CHANGELOG.md)
 
 The [release workflow](../.github/workflows/release.yml) builds macOS and Windows installer downloads when a GitHub release is published. It is an explicitly requested exception to the project's preference for local checks. Routine pushes and pull requests do not start this workflow.
 
@@ -42,6 +42,8 @@ The application identity remains stable:
 App upgrades preserve the profile containing settings, drafts, chats, module configuration, module data and the local credential vault/key. Local credential identities remain stable. Updating from releases through v0.1.7 requires one-time credential reentry/sign-in because legacy OS entries are neither read nor imported automatically; they are left untouched. See [credential storage](getting-started.md#credential-storage). A different OS account has a separate profile. Do not delete profile files when replacing the application. Profile schema rollback/downgrading is not a supported recovery process; keep a backup of important data while the project is an early version.
 
 Module updates are independent of app installer updates. Downloaded module packages remain under the existing profile, and changed third-party module code still needs its normal local approval.
+
+**Upgrading MCP to v0.1.14.** Existing server connections and credentials carry over. Earlier versions saved tool approvals by name. Connect the server in **Settings → MCP**, review the tool definitions you still want to use and save the selection. OVD then remembers those definitions. [Review MCP tool changes](../modules/ovd-mcp/README.md#reviewing-tool-changes)
 
 ## Signing and operating-system approval
 
@@ -105,6 +107,8 @@ node scripts/verify-mac-signature.cjs --app /path/to/OpenVibeDesk.app --arch arm
 For an Intel package, use `--arch x64`. Also download the finished release through a browser and open it through Finder on the intended Mac, ideally in a fresh test environment. Browser downloads carry macOS quarantine information; directly launching a locally built executable does not exercise the same Gatekeeper path. Keep the download's quarantine information intact and record whether the expected app-specific approval works. [Apple's distribution diagnostics](https://developer.apple.com/forums/thread/706442) explain this distinction. A standard Gatekeeper trust rejection is expected without Developer ID signing and notarization; a damaged seal is a packaging failure.
 
 ## Upgrade validation
+
+On 26 November 2026 an Apple Silicon Mac ran the published v0.1.13 app and then a local v0.1.14 development package using the same isolated profile. After replacing the app, it reopened with the saved settings, chat, unsent draft, module data and readable test credentials. The development package passed the resource-seal and architecture checks. This check exercised an app replacement on Apple Silicon. The GitHub workflow records the build and integrity results for the distributed installers.
 
 For the v0.1.9 source on **11 November 2026**, the corrected Mac fixture passed with an isolated Apple Silicon package: launch and save through the real UI, then replacement with a temporary higher-version 0.1.10 package from the same source. Settings, chat identity, draft content, module data and local credentials survived. The ARM resource seal and all 14 nested Mach-O binaries also passed verification. That temporary higher version was not released. This is local replacement evidence, not a browser Gatekeeper test, physical Intel/Windows validation or proof of every historical profile migration.
 

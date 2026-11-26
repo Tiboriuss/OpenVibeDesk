@@ -3,6 +3,9 @@ import { promises as fs } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import addressParser from 'nodemailer/lib/addressparser';
+import type { SettingsPreparation } from '../../../shared/settings';
+import type { UiLocale } from '../../../shared/locale';
+import type { MailSuggestionKind } from '../settings-suggestions';
 import { DraftPersistence } from './draft-persistence';
 import { listDraftContent, readDraftContent } from './draft-content';
 import { defaultMailDisplay, mailDisplayPatchSchema, type MailDisplayPatch, type MailDisplayResult } from '../../../shared/mail-display';
@@ -27,21 +30,47 @@ import { mailSourceLocatorSchema, type MailSourceLocator } from '../../../shared
 import { mailTextPageRequestSchema } from '../../../shared/mail-content';
 import { clearMailContentCache, fetchImapMessageMetadata, fetchImapMessageTextPage } from './mail-service';
 import { MailBodyCache } from './mail-body-cache';
+import { mailReaderLinks } from './mail-reader-links';
 import { mailMessageMetadata } from '../../../shared/mail';
 
 export type MailOperationContext = CapabilityContext & { primaryEmailId?: string };
 type OperationContext = MailOperationContext;
 type LiveMail = { accountId: string; folder: string; message: ImapMessage; epoch: number; htmlAvailable?: boolean; htmlTruncated?: boolean };
 type AccountSnapshot = { account: MailAccountConfig; epoch: number };
+const readerText = {
+  en: {
+    noHtml: 'This message has no HTML view and is shown as text.',
+    loadImages: 'Allow external images for this message?',
+    imagePrivacy: 'Image servers can see your IP address and when you open this message.',
+    declined: 'External images remain blocked.',
+    invalidLink: 'This mail link cannot be opened.',
+    missingLink: 'The link is unavailable in this message. List its links again.',
+    confirmLink: 'Open this mail link in the default application?',
+    linkDeclined: 'The link was not opened.',
+    selectionChanged: 'The selected message has changed. Open the link in the current message.'
+  },
+  de: {
+    noHtml: 'Diese Nachricht hat keine HTML-Ansicht und wird als Text angezeigt.',
+    loadImages: 'Externe Bilder für diese Nachricht erlauben?',
+    imagePrivacy: 'Die Bildserver können deine IP-Adresse und den Abrufzeitpunkt sehen.',
+    declined: 'Externe Bilder bleiben blockiert.',
+    invalidLink: 'Dieser Mail-Link kann nicht geöffnet werden.',
+    missingLink: 'Der Link ist in dieser Nachricht nicht verfügbar. Bitte ihre Links erneut auflisten.',
+    confirmLink: 'Diesen Mail-Link in der Standardanwendung öffnen?',
+    linkDeclined: 'Der Link wurde nicht geöffnet.',
+    selectionChanged: 'Die ausgewählte Nachricht hat sich geändert. Öffne den Link in der aktuellen Nachricht.'
+  }
+};
 export type { MailSendResult } from '../../../shared/mail';
 export interface MailModuleHost {
   getState(): WorkspaceState;
+  getLocale(): UiLocale;
   commit(state: WorkspaceState): void;
   saveState(state: WorkspaceState): Promise<void>;
   panels: ReadonlyMap<WindowKind, BrowserWindow>;
   openPanel(kind: WindowKind): Promise<void>;
   dispatchAction(action: unknown): Promise<void>;
-  prepareSettings(kind: 'account' | 'smtp', values: Record<string, unknown>, accountId?: string): Promise<unknown>;
+  prepareSettings(request: SettingsPreparation & { category: 'mail'; kind: MailSuggestionKind }): Promise<unknown>;
   confirmCapability(context: OperationContext, message: string, detail: string): Promise<boolean>;
   operationOwner(context: OperationContext): BrowserWindow | undefined;
   uiOperationContext(event: Electron.IpcMainInvokeEvent): OperationContext;
@@ -730,30 +759,71 @@ function mailDisplayResult(emailId: string): MailDisplayResult {
   const htmlAvailable = entry.htmlAvailable === true;
   const effectiveFormat = display.format === 'text' || !htmlAvailable ? 'text' : 'html';
   return { emailId, display, effectiveFormat, htmlAvailable, htmlTruncated: entry.htmlTruncated === true,
-    ...(!htmlAvailable && display.format === 'html' ? { message: 'Diese Mail enthält keine verfügbare HTML-Ansicht. Sie wird als Klartext angezeigt.' } : {}) };
+    ...(!htmlAvailable && display.format === 'html' ? { message: readerText[host.getLocale()].noHtml } : {}) };
+}
+async function markReaderAction(entry: LiveMail, context: OperationContext): Promise<void> {
+  await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
+  await context.beforeDispatch?.();
+  await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
 }
 async function setMailDisplay(emailId: string, input: MailDisplayPatch, context: OperationContext): Promise<MailDisplayResult> {
   const patch = mailDisplayPatchSchema.parse(input);
   await loadMailMessage(emailId, context);
   const entry = cachedMail(emailId);
   const previous = entry.message.display ?? { ...defaultMailDisplay };
-  if (patch.remoteImages === true && !previous.remoteImages && context.origin === 'agent') {
-    const allowed = await confirmCapability(context, 'Externe Bilder dieser Mail laden?', 'Bilder werden von externen Servern geladen. Der Absender kann dabei deine IP-Adresse und den Abrufzeitpunkt erfahren. Die Freigabe gilt nur für diese Nachricht.');
-    context.signal.throwIfAborted(); assertCachedCurrent(entry);
-    if (!allowed) return { ...mailDisplayResult(emailId), cancelled: true, message: 'Externe Bilder wurden nicht geladen; die Ansicht wurde nicht geändert.' };
+  const copy = readerText[host.getLocale()];
+  if (patch.remoteImages && !entry.htmlAvailable) {
+    if (!patch.format) {
+      if (context.origin === 'agent') await openRealMail(emailId, context);
+      return { ...mailDisplayResult(emailId), message: copy.noHtml };
+    }
+    delete patch.remoteImages;
   }
-  context.signal.throwIfAborted(); assertCachedCurrent(entry);
-  await context.validateOperation?.(); context.signal.throwIfAborted(); assertCachedCurrent(entry);
-  entry.message = { ...entry.message, display: { ...(entry.message.display ?? defaultMailDisplay), ...patch } };
-  panels.get('mail')?.webContents.send('mail:message-changed', entry.message);
-  if (context.origin === 'agent') await openRealMail(emailId);
-  return mailDisplayResult(emailId);
+  if (patch.remoteImages === true && !previous.remoteImages && context.origin === 'agent') {
+    const subject = entry.message.subject.replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 180);
+    const allowed = await confirmCapability(context, copy.loadImages, [subject, copy.imagePrivacy].filter(Boolean).join('\n\n'));
+    context.signal.throwIfAborted(); assertCachedCurrent(entry);
+    if (!allowed) return { ...mailDisplayResult(emailId), outcome: 'cancelled', cancelled: true, message: copy.declined };
+  }
+  await markReaderAction(entry, context);
+  // A folder refresh can replace the metadata object while the confirmation is open.
+  const current = cachedMail(emailId);
+  current.message = { ...current.message, display: { ...(current.message.display ?? defaultMailDisplay), ...patch } };
+  panels.get('mail')?.webContents.send('mail:message-changed', current.message);
+  if (context.origin === 'agent') await openRealMail(emailId, context);
+  const result = mailDisplayResult(emailId);
+  return input.remoteImages && !result.htmlAvailable ? { ...result, message: copy.noHtml } : result;
 }
 async function openMailLink(emailId: string, rawUrl: unknown): Promise<void> {
+  if (activeMailView?.messageId !== emailId) throw new Error(readerText[host.getLocale()].selectionChanged);
   cachedMail(emailId);
+  await handOffMailLink(rawUrl);
+}
+async function handOffMailLink(rawUrl: unknown): Promise<void> {
   const url = getExternalChatUrl(rawUrl);
-  if (!url) throw new Error('Dieser Mail-Link kann nicht geöffnet werden.');
+  if (!url) throw new Error(readerText[host.getLocale()].invalidLink);
   await shell.openExternal(url);
+}
+async function listMailLinks(emailId: string, offset: number, limit: number, context: OperationContext) {
+  const message = await loadMailMessage(emailId, context);
+  const all = mailReaderLinks(emailId, message.bodyHtml ?? '');
+  const links = all.slice(offset, offset + limit).map(({ linkId, label, destination }) => ({ linkId, label, destination }));
+  const next = offset + links.length;
+  return { emailId, untrusted: true, links, totalInPreview: all.length, htmlTruncated: !!message.htmlTruncated, ...(next < all.length ? { nextOffset: next } : {}) };
+}
+async function openSourceLink(emailId: string, linkId: string, context: OperationContext) {
+  const copy = readerText[host.getLocale()];
+  const message = await loadMailMessage(emailId, context);
+  const link = mailReaderLinks(emailId, message.bodyHtml ?? '').find(item => item.linkId === linkId);
+  if (!link) throw new Error(copy.missingLink);
+  const entry = cachedMail(emailId);
+  const allowed = await confirmCapability(context, copy.confirmLink, link.url);
+  context.signal.throwIfAborted();
+  if (!allowed) return { emailId, linkId, opened: false, cancelled: true, outcome: 'cancelled', message: copy.linkDeclined };
+  // The ID binds this exact URL to the immutable UID/UIDVALIDITY and account identity of the message.
+  await markReaderAction(entry, context);
+  await handOffMailLink(link.url);
+  return { emailId, linkId, opened: true };
 }
 async function saveMailAttachment(messageId: unknown, index: unknown, context: OperationContext) {
 
@@ -923,10 +993,12 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
     return { untrusted: true, ...page, email: { ...metadata, bodyText: text, truncated: !page.complete || page.offset > 0 } };
   });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.previews'], async ({ emailIds }, context) => ({ untrusted: true, complete: false, previews: await loadMailPreviews(emailIds, context), message: 'Kurze Vorschauen, keine vollständigen Mailtexte. Zum gezielten Lesen mail.read verwenden.' }));
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_display'], ({ emailId, display }, context) => setMailDisplay(resolveMailId(emailId, context as OperationContext), display, context));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_display'], ({ emailId, display }, context) => setMailDisplay(resolveMailId(emailId, context as OperationContext), display, context), { deferDispatch: true });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.display_status'], async ({ emailId }, context) => {
     const id = resolveMailId(emailId, context as OperationContext); await loadMailMessage(id, context); return mailDisplayResult(id);
   });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.list_links'], ({ emailId, offset = 0, limit = 6 }, context) => listMailLinks(resolveMailId(emailId, context), offset, limit, context));
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open_link'], ({ emailId, linkId }, context) => openSourceLink(resolveMailId(emailId, context), linkId, context), { deferDispatch: true });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.open'], ({ emailId }, context) => openRealMail(resolveMailId(emailId, context as OperationContext), context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.set_read'], async ({ emailId, read }, context) => { const id = resolveMailId(emailId, context as OperationContext); await changeMailRead(id, read, context); return { emailId: id, read }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['mail.download_attachment'], ({ emailId, index }, context) => saveMailAttachment(resolveMailId(emailId, context as OperationContext), index, context));
@@ -938,13 +1010,13 @@ function registerCapabilities(workspaceCapabilities: WorkspaceCapabilityRegistry
   });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['files.remove_attachment'], async ({ draftId, index }) => { const id = activeDraftId(draftId); await dispatchAction({ type: 'remove_attachment', draftId: id, index }); return { draftId: id, removed: index }; });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.test'], async ({ accountId }) => { const snapshot = accountSnapshot(accountId); await testImapConnection(snapshot.account); assertCurrent(snapshot); return { connected: true }; });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.save'], ({ accountId, ...values }) => { if (accountId) mailAccount(accountId); return prepareSettings('account', values, accountId); });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.preferences'], ({ accountId, ...values }) => { mailAccount(accountId); return prepareSettings('account', values, accountId); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.save'], ({ accountId, ...values }) => { if (accountId) mailAccount(accountId); return prepareSettings({ category: 'mail', kind: 'account', targetId: accountId, values }); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.preferences'], ({ accountId, ...values }) => { mailAccount(accountId); return prepareSettings({ category: 'mail', kind: 'mail-preferences', targetId: accountId, values }); });
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.preferences_get'], ({ accountId }) => ({ accountId, ...mailPreferences(mailAccount(accountId)) }));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['accounts.remove'], ({ accountId }, context) => deleteMailAccount(accountId, context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.list'], (_args, context) => readSmtpSettings(context));
   workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.test'], async ({ accountId }) => { const saved = getSmtpSettings(accountId); if (!saved) throw new Error('SMTP bitte zuerst im Einstellungsformular einrichten.'); await withSmtpOperation(saved, effective => testSmtpConnection(effective)); return { connected: true, sent: false }; });
-  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.save'], ({ accountId, ...values }) => { mailAccount(accountId); return prepareSettings('smtp', values, accountId); });
+  workspaceCapabilities.registerDefinition(mailCapabilityDefinitions['smtp.save'], ({ accountId, ...values }) => { mailAccount(accountId); return prepareSettings({ category: 'mail', kind: 'smtp', targetId: accountId, values }); });
 }
 function registerIpc(): void {
   ipcMain.on('mail:view-context', (event, input: unknown) => {

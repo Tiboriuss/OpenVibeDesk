@@ -2,7 +2,7 @@
 
 [Documentation index](README.md) · [Architecture](architecture.md) · [Settings design](settings-design.md) · [Brand guide](brand.md) · [Building modules](../CONTRIBUTING.md#building-modules)
 
-> This guide preserves the product direction supplied by the user. It describes the target experience and a development sequence, not a list of completed features. Sections marked **Current implementation** describe the code that exists today. Other requirements describe the target design. See the [project README](../README.md) and [architecture](architecture.md) for the current overall scope.
+> The table below records the v0.1.14 feature set. The numbered sections cover implementation details and the target design. For instructions, see the [Mail account and reader guide](getting-started.md#add-a-mail-account).
 
 The Mail module should feel like a complete everyday email application: **connect accounts, read and organize messages, compose email, and reliably recover drafts**. Its interface stays clear and belongs within OpenVibeDesk.
 
@@ -12,13 +12,13 @@ The initial protocol foundation is **IMAP for reading and synchronization** and 
 
 | Area | Present today | Still part of the target design |
 | --- | --- | --- |
-| Accounts | Multiple editable account groups, separate IMAP/SMTP checks, TLS and local encrypted credential storage. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
-| Reading | Account/folder navigation, paged metadata and complete source text within declared limits, HTML/text previews, bounded inline images, per-message remote-image controls, message details, attachment downloads and explicit read/unread changes. | Broader sender-format compatibility and richer previews. |
+| Accounts | Per-account IMAP, SMTP, sender, signature and retrieval settings. Assistant proposals show field-level changes. Each group saves independently. | OAuth, reliable provider discovery and a configurable outgoing reply address. |
+| Reading | Account and folder navigation, paged text, HTML previews with per-message image controls, a narrow-window reader with larger text, attachment downloads and explicit read/unread actions. | Broader sender-format compatibility and richer previews. |
 | Organizing | Server folder browsing and local view filters. | Stars/flags, move/archive/trash/restore/delete actions, folder editing and a unified inbox. |
 | Composing | Separate plain-text draft window, account selection, To/CC/BCC, attachments, per-account signatures and a reply to the sender or `Reply-To`. | Recipient chips, reply-all, forwarding and rich-text composition. |
 | Sending | SMTP, confirmed manual send, separate Sent-copy filing/reconciliation and protection against repeating accepted or uncertain sends. | Complete delivery-state handling and wider provider synchronization. |
-| Search and storage | Bounded server search plus shared `mail.query`/`mail.count` filters; local drafts, source-bound chat snapshots and bounded session caches. | Threaded conversations, persistent offline mail cache, local full-text index and full synchronization. |
-| Assistant | Mail discovery, queries/counts, paged mail/draft reading, opening the same text page in Mail, draft preparation/editing, send requests, account-form preparation and mail references. | Every future Mail feature must expose the same validated assistant access when implemented. |
+| Search and storage | Server search, shared query and count filters, local drafts and source-bound chat snapshots. The query view currently displays up to 500 rows. | [Online paging beyond 500 rows](maturation-plan.md#r13-mail-search-lists-and-conversations), threaded conversations, offline search and synchronization. |
+| Assistant | Find and count mail, read paged text, list and open links from HTML previews, prepare and send drafts, suggest account settings, and attach mail references to Chat. | Every future Mail feature must expose the same validated assistant access when implemented. |
 
 Implementation entry points are the [Mail frontend](../modules/ovd-mail/frontend/), [module backend](../modules/ovd-mail/backend/index.ts), [capability definitions](../modules/ovd-mail/backend/capabilities.ts) and [shared query contract](../shared/mail-query.ts). Source paths below refer to implementation, not a proposal to translate existing UI labels.
 
@@ -62,7 +62,9 @@ Each configured account has one expandable group in Settings. Its summary shows 
 
 An empty password field retains stored credentials when the connection identity is unchanged. Changing the server or login requires the credentials explicitly requested by the form. See the shared [settings principles](settings-design.md).
 
-**Current implementation:** each account also has an independent sender/signature/retrieval group. **Kontoname** is a local label; **Absendername** is the validated display name used in SMTP's From header. An empty sender name sends the address alone. The plain-text signature allows up to 5,000 characters and is inserted once into new messages and replies, before any quoted source. It is visible and editable in the draft, retained after restart, and never appended invisibly at send time. Changing preferences does not rewrite existing drafts. The sender shown in compose uses the account's configured sender name. Preference saving preserves connection settings and pending form edits without testing IMAP or retrieving credentials.
+Each account has an independent **Sender, signature & mail checks** group. **Account name** is the local label. **Sender name** appears in the SMTP From header, or recipients see just the address if the name is empty. The plain-text signature allows up to 5,000 characters. Mail inserts it once when creating a new message or reply, before any quoted text. The user can edit it in the draft and recover it after a restart.
+
+Assistant suggestions use the same account groups. Users compare the proposed and current values, select fields to apply, and save that group explicitly. A pending edit to the sender name, for example, can be kept while accepting a suggested signature. [Reviewing Mail suggestions](getting-started.md#add-a-mail-account)
 
 ### Personal details
 
@@ -165,7 +167,7 @@ HTML email requires suitable isolation and sanitization because it can contain a
 
 **Current implementation:** the [Mail body service](../modules/ovd-mail/backend/mail-service.ts) loads plain-text and HTML alternatives independently without loading unrelated attachments. The HTML preview is bounded to 128 KiB, the initial plain-text view to 20,000 characters, and saved mail-reference excerpts to 12,000 characters. HTML-only mail also gets a converted text fallback. The reader offers **HTML** and **Text**, with automatic HTML selection when a usable alternative exists; absent HTML falls back to text. Partial HTML and partial text have separate indicators. Opening or changing the view does not mark a message read.
 
-For longer content, **Vollständigen Text lesen** opens a separate plain-text reader with bounded previous/next pages. `mail.read` uses the same source service, exposes continuation and completeness, and can display the requested page with `show: true`. HTML-only extraction reads the underlying MIME part, independently of the HTML preview. New reference snapshots retain an exact source locator for later reading and opening after restart. Source changes are rejected; old snapshots remain available. See [complete Mail and draft text](architecture.md#complete-mail-and-draft-text) for resource limits and cursor behavior.
+For longer content, **Read full text** opens a separate plain-text reader with bounded previous/next pages. `mail.read` uses the same source service, exposes continuation and completeness, and can display the requested page with `show: true`. HTML-only extraction reads the underlying MIME part, independently of the HTML preview. New reference snapshots retain an exact source locator for later reading and opening after restart. Source changes are rejected; old snapshots remain available. See [complete Mail and draft text](architecture.md#complete-mail-and-draft-text) for resource limits and cursor behavior.
 
 Complete-text retrieval accepts up to 8 MiB of decoded plain-text source or 4 MiB of decoded HTML source; larger sources produce an explicit limit error and retain existing excerpts. Pages default to 4,000 UTF-16 code units, at most 6,000, without splitting surrogate pairs. `complete` means the end of that source has been reached, not that the current page contains every preceding page. A saved snapshot remains readable as historical evidence when the original account or message is unavailable; it is not silently substituted for a successful current-source read.
 
@@ -175,7 +177,9 @@ Remote HTTP(S) images start as placeholders. The visible **Load external images*
 
 The assistant uses the same [display contract](../shared/mail-display.ts) through `mail.set_display` and `mail.display_status`, discovered through the normal module flow. It can choose `auto`, `html` or `text`, inspect the effective view, or request external images for one selected/referenced message. An assistant request to enable remote images follows the saved `ask`/`never` confirmation mode; the assistant cannot change that mode itself. Refusal leaves the view unchanged. Plain-text snapshots and replies continue through the existing reference path; raw HTML and embedded image bytes are not copied into model context or durable chat history.
 
-Mail links are activated intentionally, validated as HTTP(S) or `mailto` in the main process, and opened through the default external application. Unsafe schemes, embedded web credentials and control characters are rejected. Stylesheets and advanced CSS are intentionally stripped; HTML composition remains future work.
+In a narrow window the reader uses the list and filter area for the open message. Returning to the list restores focus to the selected row and preserves its filter. Within the HTML document, fixed newsletter column widths can reflow, long links wrap and wide data tables scroll locally. The host's **Larger** text setting scales sender-specified fonts too. Switching text size or interface language updates the existing HTML document and preserves its image permission. Decorative images with an explicit empty alternative leave no placeholder while blocked. Other images keep their sender-supplied alternative or a localized fallback.
+
+Clicks and keyboard activation hand external HTTP(S) and `mailto` links to the default application. An internal fragment scrolls to its target within the message. The Assistant uses `mail.list_links` to read up to six distinct external destinations per page of results from the available HTML preview. Results include the link label, a shortened destination and a message-bound ID. Listing links makes no requests to those destinations. `mail.open_link` opens the chosen ID under the saved confirmation mode. In **Ask** mode the dialog shows the complete destination. The main process validates the outgoing URL. [Link capabilities](../modules/ovd-mail/backend/capabilities.ts)
 
 ## 4. Composing and replying
 
@@ -279,7 +283,7 @@ The target sending sequence must be understandable:
 
 SMTP acceptance is not proof of final delivery or that a recipient read the message.
 
-**Current implementation:** SMTP submission and Sent-copy filing are separate operations with separate outcomes. After confirmed SMTP acceptance, the module files the prepared message in the account's Sent folder or reuses an existing copy with its exact `Message-ID`. The editor shows the Sent-copy state separately from delivery. Manual sending keeps its confirmation dialog. For assistant requests, the explicitly saved “Without confirmations” mode (`Ohne Abfragen` in the current UI) can skip individual dialogs for a clear user instruction. It does not authorize independent sending or let the assistant change its own permissions. See [confirmation behavior](architecture.md).
+**Current implementation:** SMTP submission and Sent-copy filing are separate operations with separate outcomes. After confirmed SMTP acceptance, the module files the prepared message in the account's Sent folder or reuses an existing copy with its exact `Message-ID`. The editor shows the Sent-copy state separately from delivery. Manual sending keeps its confirmation dialog. For Assistant requests, the saved **Without confirmations** mode can skip individual dialogs for a clear user instruction. It does not authorize independent sending or let the assistant change its own permissions. See [confirmation behavior](architecture.md).
 
 ### Failure cases
 

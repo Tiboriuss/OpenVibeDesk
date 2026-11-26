@@ -177,7 +177,9 @@ async function main() {
     active = await launch(await appInfo(installed), appData);
     pass('First real packaged app opens from the disposable Applications folder with local credential storage and renderer assets.');
     assert(await active.credentialFixture(true), 'The packaged app could not save and read its synthetic local credential.');
-    const sessionId = await active.ui(`(async()=>{const api=window.workspace;await api.updateSettings({textSize:'large'});const id=await api.createChatSession();await api.renameChatSession(id,'Synthetic installer upgrade QA');await api.dispatchAction({type:'create_draft'});return id})()`);
+    await active.ui("window.workspace.dispatchAction({type:'open_window',kind:'settings'})");
+    await active.ui("window.workspace.updateSettings({textSize:'large'})", 'settings');
+    const sessionId = await active.ui(`(async()=>{const api=window.workspace;const id=await api.createChatSession();await api.renameChatSession(id,'Synthetic installer upgrade QA');await api.dispatchAction({type:'create_draft'});return id})()`);
     // Each renderer receives only its own view. Read and edit draft content in
     // its actual window rather than relying on the OVD-Bar's settings projection.
     const draftId = await active.ui(`(async()=>{const api=window.workspace;const state=await api.loadState();const id=state.activeDraftId;if(!id)throw Error('The fixture draft was not opened');await api.dispatchAction({type:'update_draft',draftId:id,patch:{to:'upgrade@example.org',subject:'Retain this synthetic draft',body:'Synthetic package upgrade fixture. Never send.'}});return id})()`, 'draft');

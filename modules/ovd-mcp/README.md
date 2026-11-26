@@ -11,7 +11,15 @@ Add a server under **Settings → MCP** (German: **Einstellungen → MCP**):
 - **Stdio:** enter an executable, its individual arguments and an optional working directory. OVD launches it without an additional shell. Store credentials as secret environment values rather than putting them in command-line arguments. The process inherits the SDK's limited default environment plus the explicitly configured values, rather than OVD's entire environment.
 - **Streamable HTTP:** use HTTPS, or HTTP on `localhost`, `127.0.0.1` or `[::1]`. Select **No authentication**, **Bearer token**, or **OAuth · sign in in browser** (currently **Keine Anmeldung**, **Bearer-Token**, **OAuth · im Browser anmelden**). Credentials in the MCP URL, query parameters, fragments and redirects are rejected.
 
-Save, connect, select the required tools, then save their permissions separately. New tools are denied by default. Changing the executable, arguments, working directory or HTTP target clears the saved tool allowlist. Automatic connection at app startup is optional and off by default; saved opt-in connections start in the background. The assistant can prepare public configuration and permissions in the form, but only the user can save them. It cannot save a configuration or grant itself tools.
+Save the connection, connect, then select and save the tools you want under **Tool permissions**. Automatic connection at startup is optional. The Assistant can prepare a selection in Settings. You decide which definitions to approve. [Reviewing tool changes](#reviewing-tool-changes)
+
+### Reviewing tool changes
+
+A permission belongs to one saved server and one advertised tool definition. An unchanged tool stays available after reconnecting or restarting OVD. When the server changes a previously approved tool, Settings moves it to the top of the permission list and marks it for review. Expand its definition to inspect the current description, inputs, outputs and behavior hints. Select it again and choose **Save permissions** to enable it. Other approved tools remain available.
+
+When upgrading from v0.1.13 or earlier, connect each server and review the tools you still want. Those releases saved tool names alone. OVD keeps the server configuration, credentials and earlier selections so you can identify them. A name from the old list becomes executable once you explicitly approve its current definition. Saving connection details or approving a different tool leaves pending reviews in place.
+
+Changing the Stdio executable, arguments, working directory or configured environment values, or changing the HTTP target or authentication settings, clears the server's permissions. Changing the display name or description preserves them.
 
 ### Protocol compatibility
 
@@ -86,9 +94,11 @@ A connected server with permitted, supported tools appears as the virtual module
 
 The shared contract is [`ModuleToolProvider`](../../shared/module-tool-provider.ts). The host checks source availability and the actual schema offered to the model. The MCP service also checks the live connection, current permission and arguments before execution. Tool names bind the connection, configuration, permissions and catalog revision; an old offer cannot silently acquire a different meaning after any of them changes.
 
-Saved tool permissions currently follow the server's tool name. A changed input schema invalidates an outstanding offer, but the Assistant can discover the replacement under the existing name grant. Requiring fresh user review of changed definitions is the next permissions change in R07.
+OVD fingerprints the name, title, full description, input and output schemas, annotations and execution requirements that the server declares. JSON object key ordering has no effect. OVD ignores presentation icons and private extension metadata when computing this identity. A definition must fit within 48,000 serialized characters for review. Tool-list change notifications invalidate the current catalog. For servers that do not announce changes, OVD reads the catalog again before saving a grant or dispatching a call. This checks the contract advertised by the server. The server remains responsible for its implementation.
 
-Object input schemas are limited to 12,000 serialized JSON characters. JSON Schema Draft-07, 2019-09 and 2020-12 are supported, with local references only. Asynchronous schemas and unsupported dialects are rejected. Original schemas remain unchanged in the tool offer; unsupported tools show a reason in the UI. Inventory loading is limited to 500 tools or 25 server pages and reports a warning when that limit is reached. UI inventory pages include schemas; the assistant's `mcp.tools` management result contains metadata only. It must use `get_module_tools` to load executable definitions.
+The Assistant can report the number of tools awaiting review with `mcp.servers` and identify them through `mcp.tools`. Changed tools stay out of executable discovery, including under **Without confirmations**. Saving a review updates permissions only. An interrupted or refused call requires a separate decision before any new execution.
+
+Object input schemas are limited to 12,000 serialized JSON characters. OVD supports JSON Schema Draft-07, 2019-09 and 2020-12 with local references. Unsupported tools show a reason in Settings. These include asynchronous schemas, unsupported dialects, tools that require task-mode execution and definitions the client can only partially represent. Other tools on the server can still be approved individually. The inventory is limited to 500 tools or 25 server pages and reports a warning when it reaches the limit. Settings can inspect the schemas. The Assistant gets status and short descriptions from `mcp.tools` and loads executable definitions on demand through `get_module_tools`.
 
 Server descriptions, schemas and results are untrusted data. Server instructions are not imported as a system prompt. Annotations such as `readOnlyHint` are hints, not permission grants. Assistant calls use OVD's confirmation mode, including the user's explicitly saved **Without confirmations** option (**Ohne Abfragen**). That option grants no new server or tool permissions. A direct UI tool call still uses the same permission and argument validation.
 
@@ -103,7 +113,7 @@ Disconnecting, disabling the module or quitting closes client connections and lo
 ## Implementation map
 
 - [`backend/store.ts`](backend/store.ts): public configuration and local encrypted credential-store access.
-- [`backend/service.ts`](backend/service.ts): MCP clients, transport lifecycle, validation, the shared call service and dynamic tool provider.
+- [`backend/service.ts`](backend/service.ts) manages connections, tool approval, execution and discovery. [`backend/catalog-client.ts`](backend/catalog-client.ts) detects tool definitions the installed SDK cannot represent completely during catalog validation.
 - [`backend/oauth.ts`](backend/oauth.ts): OAuth discovery, browser authorization, loopback callbacks and issuer-bound token handling.
 - [`backend/capabilities.ts`](backend/capabilities.ts) and [`backend/index.ts`](backend/index.ts): validated management for the UI and assistant.
 - [`shared/mcp.ts`](../../shared/mcp.ts): settings, inventory, permissions, audit and result contracts.

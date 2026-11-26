@@ -3,6 +3,7 @@ import { getExternalChatUrl } from '../../../shared/chat-links';
 
 export interface SafeMailHtml {
   document: string;
+  language?: string;
   remoteImages: number;
   unavailableImages: number;
 }
@@ -38,6 +39,14 @@ function rasterForCid(source: string, inlineImages: Record<string, string>): str
 /** Parse in inert template content, sanitize, then serialize only the safe result. */
 export function buildMailHtml(html: string, showRemoteImages: boolean, inlineImages: Record<string, string> = {}): SafeMailHtml {
   const template = document.createElement('template');
+  // Fragment parsing drops the html element. Read its language in the same inert template.
+  const rootTag = /^\s*(?:(?:<!doctype\b[^>]*>|<!--[\s\S]*?-->|<\?xml\b[^>]*\?>)\s*)*<html\b((?:[^<>"']|"[^"]*"|'[^']*')*)>/i.exec(html.slice(0, 4096));
+  let language: string | undefined;
+  if (rootTag) {
+    template.innerHTML = `<span${rootTag[1]}></span>`;
+    const lang = template.content.firstElementChild?.getAttribute('lang')?.trim();
+    if (lang && /^[a-z]{2,8}(?:-[a-z\d]{1,8})*$/i.test(lang)) language = lang;
+  }
   template.innerHTML = html.slice(0, 128 * 1024);
   const fragment = template.content;
   const wrapper = fragment.ownerDocument.createElement('div');
@@ -73,17 +82,46 @@ export function buildMailHtml(html: string, showRemoteImages: boolean, inlineIma
         element.setAttribute('loading', 'lazy');
         element.setAttribute('decoding', 'async');
       } else {
+        const alt = element.getAttribute('alt');
+        if (alt !== null && !alt.trim()) {
+          element.remove();
+          continue;
+        }
         if (!remote) unavailableImages++;
         const placeholder = fragment.ownerDocument.createElement('span');
         placeholder.className = 'ovd-image-placeholder';
-        placeholder.textContent = element.getAttribute('alt') || (remote ? 'Externes Bild' : 'Bild nicht verfügbar');
+        if (alt) placeholder.textContent = alt;
+        else placeholder.dataset.ovdPlaceholder = remote ? 'remote' : 'missing';
         placeholder.setAttribute('role', 'img');
-        placeholder.setAttribute('aria-label', placeholder.textContent);
+        if (alt) placeholder.setAttribute('aria-label', alt);
         element.replaceWith(placeholder);
       }
     }
   }
   const csp = `default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:${showRemoteImages ? ' https: http:' : ''}; font-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; media-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'`;
-  const style = `html{color-scheme:light;background:#fff;color:#12182d;overflow-wrap:anywhere;word-break:normal}body{margin:0;padding:3px;font:14px/1.6 Arial,sans-serif;overflow-x:auto}*{box-sizing:border-box}img{max-width:100%!important;height:auto!important}table{max-width:100%!important}td,th{overflow-wrap:anywhere}pre{max-width:100%;overflow:auto;white-space:pre-wrap}a{color:#4533b7;text-decoration:underline;overflow-wrap:anywhere}blockquote{margin:12px 0;padding-left:12px;border-left:3px solid #e8e5fd}.ovd-image-placeholder{display:inline-block;padding:4px 7px;border:1px dashed #c6c9d4;border-radius:4px;color:#606579;font:12px/1.4 Arial,sans-serif}`;
-  return { document: `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${style}</style></head><body>${wrapper.innerHTML}</body></html>`, remoteImages, unavailableImages };
+  // Keep a genuinely wide data table scrollable without widening the surrounding letter.
+  for (const table of wrapper.querySelectorAll('table')) {
+    if (table.parentElement?.closest('table')) continue;
+    const scroller = fragment.ownerDocument.createElement('div');
+    scroller.className = 'ovd-table-scroll';
+    table.replaceWith(scroller);
+    scroller.append(table);
+  }
+  const style = `
+    html{color-scheme:light;background:#fff;color:#12182d;overflow-wrap:anywhere;word-break:normal}
+    body{margin:0;padding:3px;font:14px/1.6 Arial,sans-serif}
+    *{box-sizing:border-box}img{max-width:100%!important;height:auto!important}
+    .ovd-table-scroll{max-width:100%;overflow-x:auto}table{max-width:100%!important}
+    td,th{overflow-wrap:anywhere}pre{max-width:100%;overflow:auto;white-space:pre-wrap}
+    a{color:#4533b7;text-decoration:underline;overflow-wrap:anywhere}
+    blockquote{margin:12px 0;padding-left:12px;border-left:3px solid #e8e5fd}
+    .ovd-image-placeholder{display:inline-block;padding:4px 7px;border:1px dashed #c6c9d4;border-radius:4px;color:#606579;font:12px/1.4 Arial,sans-serif}
+    @media(max-width:680px){
+      body *{max-width:100%!important;min-width:0!important}
+      table,colgroup,col,td,th{width:auto!important}
+      table,td,th{white-space:normal!important}
+      td,th,a{overflow-wrap:anywhere!important}
+      a{white-space:normal!important}
+    }`;
+  return { document: `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${style}</style></head><body>${wrapper.innerHTML}</body></html>`, language, remoteImages, unavailableImages };
 }

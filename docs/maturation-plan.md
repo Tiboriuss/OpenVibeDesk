@@ -2,13 +2,15 @@
 
 [Documentation index](README.md) · [Architecture](architecture.md) · [Mail design](mail-design.md) · [Settings design](settings-design.md) · [Module contract](../CONTRIBUTING.md#building-modules)
 
-**Last reviewed 26 November 2026** for `v0.1.13`. The original baseline is `e52f3a1`, 28 October 2026.
+**Reviewed for the v0.1.14 alpha on 26 November 2026.** The original baseline is `e52f3a1`, 28 October 2026.
 
 Make the existing workspace dependable for daily use: an action has the same meaning in the interface and Assistant, acknowledged data survives restart, large workloads remain bounded, and failures have a visible recovery path. Keep the required Assistant and the existing optional Mail, Files and MCP modules. This plan adds no new product modules.
 
 **Shipped.** R01–R05 cover action recovery, bounded context and content reads, measured memory use, acknowledged saves and startup recovery. [v0.1.11](../CHANGELOG.md#v0111--19-november-2026) includes the English/German host, daily module views and shared Settings controls. [v0.1.12](../CHANGELOG.md#v0112--23-november-2026) adds GitHub release notifications and installer links.
 
 **v0.1.13.** R16 records the provider-stream recovery change. R06a covers embedded documents and access to AI connection settings. R07a adds MCP connection feedback and records the transport assessment. [Changelog](../CHANGELOG.md#v0113--26-november-2026)
+
+**v0.1.14.** R07b binds MCP tool approvals to reviewed definitions. R06b covers Mail image consent, external links, Chat dictation and additional host window boundaries. The Assistant pin and field-by-field Mail settings review are recorded under R16 and R18. The next daily workflow is reaching older messages in a large mailbox from Mail and Chat. [R13 online paging](#r13-mail-search-lists-and-conversations)
 
 [Starting point](#verified-starting-point) · [Delivery order](#delivery-order) · [Work packages](#work-packages) · [Milestones](#milestones-and-release-gates) · [Validation](#practical-validation-and-measurements) · [Decisions](#architecture-decisions-to-make-before-larger-changes)
 
@@ -24,7 +26,7 @@ This plan covers the desktop host, Assistant/chat, Mail, Files, MCP, settings, m
 - Keep checks local and practical. Use synthetic profiles or designated test mailboxes and existing focused tests where relevant; do not add routine push/PR test workflows. The authorized exception is the release installer workflow and its manual packaging validation. Add a regression test only when it protects a meaningful boundary that is difficult to verify reliably by hand.
 - Keep repository documentation in English and update current-scope claims after implementation. Record source verification separately from package publication and platform support.
 
-A later user-requested extension added [module repository sources](module-repositories.md) on 29 October 2026. This is an implemented host distribution feature. The original baseline remains historical; the package status and remaining work below reflect the latest review.
+Since 29 October 2026, the host can install and update modules from [configured repository sources](module-repositories.md).
 
 **Implementation update — 29 October 2026:** R01a's text-only answer reformulation and bounded evidence capture, plus R01b's separate durable action journal, optional module recovery hooks and restricted explicit continuation, are implemented and practically verified in [commit `cae81b5`](https://github.com/Tiboriuss/OpenVibeDesk/commit/cae81b5e8379ee3c39f2d2e5b43dc1c4b61d694f). Evidence is recorded under [R01](#r01-safe-regeneration-and-operation-lifecycle). Current behavior is described under [answer reformulation](architecture.md#answer-reformulation) and [durable operations](architecture.md#durable-operations-and-explicit-continuation). The broader workspace-save work was tracked separately under R05.
 
@@ -84,7 +86,7 @@ Sizes express relative scope, not dates: **S** is a contained change; **M** cros
 | R04 | P0 | M | None | Measured memory and IPC budgets; implemented and practically verified |
 | R05 | P0 | M | None | Host checkpoints, per-session Chat drafts and recovery before workspace startup implemented (R05a–c). |
 | R06 | P0 | M | None | R06a covers embedded documents and provider Settings IPC. R06b covers remaining IPC, reader and packaged-app checks. |
-| R07 | P0 approval fix, P1 migration | M | R01 before retry changes | R07a checked both MCP transports. Bind approvals to reviewed tool definitions (R07b) before migrating the client (R07c). |
+| R07 | P1 migration | M | R01 before retry changes | R07a checked both MCP transports. R07b binds approvals to reviewed definitions. R07c covers the client migration. |
 | R21a | Early P1 | M | R05 for the saved preference | Shared host language preference, initial UI coverage and optional module catalogs implemented |
 | R08 | P1 | L | R04 measurements, R05 | Incremental storage and migrations |
 | R09 | P1 | M | R05; R08 for migrated storage | Backup, restore and retention |
@@ -101,9 +103,9 @@ Sizes express relative scope, not dates: **S** is a contained change; **M** cros
 | R21b | P1 | L | R21a, alongside R10–R19 | German and English coverage of daily workflows across host and bundled modules |
 | R20 | P1 for published macOS and Windows targets, P2 for Linux | L | Relevant gates below | Reproducible development, installer and profile upgrade checks |
 
-**Priority review, 26 November 2026.** R06a and the R07a transport assessment are complete for v0.1.13. **Next is R07b.** The assessment reproduced a changed tool definition inheriting a saved name grant. Close this on the existing client before enabling another protocol generation. R06b can proceed independently.
+**Priority review, 26 November 2026.** R06a and the R07a transport assessment shipped in v0.1.13. R07b is implemented on the existing client. R06b now covers direct host and agent settings calls, title-bar controls, an Apple Silicon upgrade check, Mail reader images and links, and microphone access during Chat dictation. The remaining IPC families and packaged Electron fuse checks still gate M1. R07c remains the next MCP package.
 
-Two early P1 tasks can ship without the larger packages around them. R10 can give a company module the same reference selection through Chat that its own window already offers. R13 can let staff reach an older supplier message across the current 500-row boundary using the existing server cursor. These are independently testable improvements to the workshop and module-author workflows. [Reference preparation](#r10-complete-the-existing-module-contract) · [Mail paging](#r13-mail-search-lists-and-conversations)
+R13 can ship ahead of the offline Mail cache because the server already returns a continuation cursor. The next module-author improvement, R10, gives company modules the same reference selection through Chat that their own windows already offer. [Mail paging](#r13-mail-search-lists-and-conversations) · [Reference preparation](#r10-complete-the-existing-module-contract)
 
 ## Work packages
 
@@ -217,7 +219,15 @@ Only the host may mount an embedded document. A native module window may mount i
 - The approved Notes example saved a note and showed it in its settings. Switching German → English → German preserved unsaved input. The Notes window and Settings each rejected a request to read the other’s document.
 - Mail switched between two HTML messages and back. A newsletter table and quoted Unicode text stayed readable at 450-pixel window width and 150% zoom. A missing inline image had a placeholder, and the remote logo made zero network requests. Valid Mail and Chat links reached the system-browser handoff once per activation and left the source window open.
 
-**R06b · Open.** Record owners and input checks for the remaining IPC families. Exercise external-image consent and link handling against the Mail corpus at narrow width and increased zoom. Verify permission handling and packaged Electron fuses on the release targets. Keep the host protocol decision separate from those checks.
+**R06b · In progress.** The [direct Settings and title-bar calls](architecture.md#processes-and-trust-boundaries) now validate the caller and accepted action. In an isolated macOS profile, Settings could change public preferences and read agent settings, Chat could open Agent settings and pin its own window, and a normal Chat request could discover and prepare a provider change. The OVD-Bar and Chat could not write unrelated preferences through the direct Settings endpoint.
+
+On Apple Silicon, replacing the published v0.1.13 application with a locally packaged development build preserved a saved chat, draft, settings, module data and test credentials. The candidate's resource seal and Mach-O signatures passed verification.
+
+**Mail reader acceptance, 26 November 2026.** At a 450 × 650 window size and 150% zoom, with the list filter expanded, the visible reading area increased from 20 to 318 CSS pixels in the same fixture. A fixed-width newsletter with a nested table fit inside the 276 CSS-pixel reading width. Returning to the filtered list restored keyboard focus to the message. The corpus included quoted Unicode, UTF-8 and ISO-8859-1 parts, long links, embedded and missing images, and a sender-declared language different from the interface.
+
+A local image server received its first request after consent for the selected message. Switching locale or text size reused the document. Another message, a revoked grant and an app restart produced zero image requests before consent. Pointer and keyboard activation handed external links to an intercepted system handler once, while internal anchors stayed in the reader. In Chat, links were listed across two pages. Opening a requested link and allowing external images followed both confirmation modes. A declined request recorded no effect, and refreshing the folder during image confirmation preserved the user's decision. Dragging the message into Chat still produced a removable reference.
+
+**Chat dictation.** One macOS Electron walkthrough with a synthetic microphone covered denial followed by retry, Cancel, Stop, and closing and reopening a chat with a typed draft. Settings could not acquire the device during the recording. Stop released the audio track while the transcript was still pending. Cancel and close kept the draft and discarded the current dictation. Other IPC families and packaged Electron fuses on the release targets remain open.
 
 Map each IPC endpoint to allowed window/frame identity, input validation and domain permission. Check main-frame versus child-frame senders, external URL schemes, navigation, popup and permission handling. Keep HTML sanitization, CSS restrictions, iframe sandbox and network policy together; improving sender-layout fidelity must not weaken external-image consent or expose preload APIs. Verify dependency fixes and selected Electron fuses in packaged builds. Evaluate replacing application `file://` loading with a restricted custom protocol as a contained host change.
 
@@ -233,7 +243,11 @@ Treat these as verification and targeted hardening tasks, not claims that all li
 
 In an isolated macOS Electron profile, Settings connected each transport and saved a single tool grant. Chat found and executed each granted tool via normal lazy discovery. Switching an open failed connection card between English and German showed one localized error and made no connection attempt. In separate service checks for both transports, cancellation before dispatch sent zero calls. Losing the response after a synthetic change left one recorded effect and an uncertain outcome, including after reconnection.
 
-**R07b · Next, bind grants to reviewed definitions.** On refresh, an old tool offer was rejected. A fresh Chat request then discovered and executed the changed input schema under the same saved name. Persist the approved definition identity and compare it at offer and dispatch time. Keep unchanged reviewed definitions available across reconnect and restart. Give existing name-only grants an explicit migration path. In Settings, show exactly which changed tools need review and keep them unavailable until the user saves that review.
+**R07b · Implemented in v0.1.14.** Settings saves the reviewed tool name and definition fingerprint against the current permission revision. Legacy names and changed definitions appear as unchecked rows requiring review. A save changes only the selected rows. The Assistant can identify pending reviews and prepare the form. Executable discovery, continuation and dispatch require a matching approval. [Tool review and upgrade path](../modules/ovd-mcp/README.md#reviewing-tool-changes)
+
+An isolated macOS Electron profile exercised Settings and normal Chat discovery against a synthetic Stdio server with **Without confirmations** enabled. A fresh request could still use an unchanged tool. A stale offer, a direct call to the changed tool and a stale Settings save all stopped with zero additional tool calls. Explicit review restored access, and the approved tools survived editing the server description, reconnecting and restarting the app. Separate loopback HTTP checks covered output schemas, behavior hints, concurrent permission edits and an interrupted reply. The lost reply produced one server call across reconnect and reconciliation.
+
+Two overlapping Stdio tool-list notifications triggered a fresh inventory after an outdated response. A separate server changed its definition silently during an in-flight Chat request. OVD detected the change before sending the tool call in both cases.
 
 **R07c · Client migration.** Keep the v1 pin for the assessed build. Evaluate the official v2 client with explicit version negotiation after R07b. Check both the local-process probe and HTTP routing, OAuth refresh, existing approvals, cancellation and the on-wire count of tool calls on lost replies. Bound negotiation to the connection phase. A server response asking for more input or reporting a version error after dispatch must preserve OVD's operation and confirmation rules. [SDK migration guide](https://ts.sdk.modelcontextprotocol.io/v2/migration/upgrade-to-v2) · [SDK protocol negotiation](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions)
 
@@ -308,7 +322,7 @@ Invalidate the affected folder mapping on UIDVALIDITY change. Distinguish local 
 
 **Outcome:** the same question has the same scope and completeness in Mail and Chat.
 
-**Early P1 for online paging.** The Mail window retains at most 500 messages. Inbox refresh keeps the newest entries, older-page loading keeps the oldest entries, and the query window stops offering more results at the cap even when the backend returns a cursor. Keep a bounded page of rows and preserve the selected message and reading position across navigation and refresh. With more than 500 matching messages in a synthetic account, open the same older message from the list and through the Assistant. Compare its source ID, search scope and total. This slice needs the existing online query service and can ship before R11 mutations or R12 offline storage. [Mail window](../modules/ovd-mail/frontend/MailWorkspace.tsx) · [Query service](../modules/ovd-mail/backend/mail-query-host.ts)
+**Next implementation · Online paging.** The Mail window retains up to 500 rows. Refreshing a folder keeps the newest rows, loading older pages keeps the oldest rows, and the filtered query view hides its load-more control at 500 even when the server returns a continuation cursor. Use that cursor to page past the visible window. Keep the number of rows in memory bounded and preserve the selected message when navigating or refreshing. A practical acceptance check is to find the same supplier message beyond the first 500 matches in Mail and through Chat, then return to the original reading position. Both routes should agree on the message ID, query scope and reported total. [Mail window](../modules/ovd-mail/frontend/MailWorkspace.tsx) · [Query service](../modules/ovd-mail/backend/mail-query-host.ts)
 
 Converge the overlapping legacy search and query paths onto shared filters and cursor semantics while preserving old callers. Expose account/folder/date/read/attachment scope consistently, with selected filter chips and visible result provenance. Add unified Inbox only after per-account identity and merged ordering are reliable. Distinguish folder entries from logical messages; do not silently deduplicate counts.
 
@@ -342,6 +356,8 @@ Use the system browser and authorization-code flow with PKCE, bind callback/stat
 
 ### R16 Chat and desktop interaction
 
+**Assistant window pin, 26 November 2026.** The Assistant title bar, Appearance settings and Chat share a persisted opt-in. In isolated macOS sessions the native stacking state agreed with `windows.list`, the OVD-Bar kept its own setting, and changing the preference preserved focus and the closed or minimized state. The pin survived closing Chat and restarting OVD. [Window behavior](settings-design.md#assistant-window-pin)
+
 **Outcome:** users can understand what the Assistant is doing and navigate its evidence without losing their place.
 
 **Implemented slices:** R04 adds compact session pages and earlier-history loading with scroll-anchor preservation. The OVD-Bar adds keyboard navigation, overflow, native menus, safe hover reveal, display-bound placement and matching Assistant controls. The reference inspection, cross-window focus and wider accessibility acceptance below remain open.
@@ -367,6 +383,8 @@ Add back/forward navigation, useful path completion, hidden-file control, keyboa
 **Implementation seam:** [Files service](../modules/ovd-files/backend/file-service.ts), [Files frontend](../modules/ovd-files/frontend/), [file contracts](../shared/files.ts).
 
 ### R18 Settings and accessibility consistency
+
+**Mail account review, 26 November 2026.** Existing and new accounts now show field-by-field suggestions in the relevant section. Two fictional accounts were used to exercise a manual sender edit, selective application of a signature and polling interval, an unrelated unsaved IMAP password, multiple pending offers and an SMTP proposal. Only the explicit group save changed stored preferences. The review was exercised in English and German, including a 470-pixel window and a cold start of Settings. [Mail account workflow](getting-started.md#add-a-mail-account)
 
 **Outcome:** configuration stays compact while saving, permissions and recovery remain understandable.
 
@@ -394,7 +412,7 @@ Finally integrate resources as backend-resolved, bounded references with continu
 
 **Outcome:** contributors can reproduce the app and users can upgrade without losing their workspace.
 
-**Current delivery.** The release workflow builds macOS Apple Silicon/Intel DMGs and a Windows x64 installer and publishes them with checksums and metadata. Mac bundles use ad-hoc signatures. Windows installers are unsigned. Since v0.1.12, Settings can check GitHub Releases at startup or on demand, include prereleases, and suppress reminders for a single version. The update dialog and OVD-Bar notification lead to the matching installer. Users install it over the existing app and keep their separate profile. Manual builds include isolated upgrade fixtures. The Apple Silicon replacement check has recorded results for the v0.1.9 source. Cross-release profile migrations, interrupted upgrades and Windows UI recovery still need evidence. Linux remains a local packaging target. [Release and update guide](releases.md#upgrade-validation)
+**Current delivery.** The release workflow builds macOS Apple Silicon/Intel DMGs and a Windows x64 installer and publishes them with checksums and metadata. Mac bundles use ad-hoc signatures. Windows installers are unsigned. Since v0.1.12, Settings can check GitHub Releases at startup or on demand, include prereleases, and suppress reminders for a single version. The update dialog and OVD-Bar notification lead to the matching installer. Users install it over the existing app and keep their separate profile. Manual builds include isolated upgrade fixtures. On Apple Silicon, the published v0.1.13 app was replaced with a local v0.1.14 development package in a synthetic profile. The saved chat, unsent draft, settings, module data and test credential survived. Broader migration coverage, interrupted upgrades and Windows UI recovery still need evidence. Linux remains a local packaging target. [Release and update guide](releases.md#upgrade-validation)
 
 Keep `pnpm install --frozen-lockfile` and the existing build workflow documented. Add an isolated development/test profile and optional renderer hot reload only if it preserves single-instance and process-restart semantics; do not change the production profile during checks. Record a small provider/server/platform compatibility matrix, dependency licenses and a local release checklist. Keep diagnostic exports opt-in, bounded and redacted, with model/protocol/version, durations and error categories rather than message content.
 
@@ -408,7 +426,7 @@ Exercise an installed upgrade with a populated local profile on macOS and Window
 
 Modules can supply [translations for contributed labels, search terms and lazily discovered tools](../CONTRIBUTING.md#localized-contributions). Existing manifest text supplies a per-field fallback. Isolated views receive the host language through the module bridge. Switching languages preserves module and tool IDs, approvals and journal history. The Chat microphone opens its settings by stable section ID.
 
-**R21b · Host and daily views implemented, 19 November 2026.** Chat, session management, host settings, the OVD-Bar and native host confirmations follow the selected language. The Files browser, MCP connection settings and the Mail inbox, reader and draft editor also support both languages. Continue with module-owned Mail account setup, remaining service messages and additional workflows as they are revised. Include accessibility names, status announcements, search synonyms, recoverable error messages and plurals. Use `Intl` for displayed numbers, units and dates. Keep diagnostic event codes stable and render localized explanations at the UI boundary.
+**R21b · Host and daily views.** Chat, session management, host settings, the OVD-Bar and native host confirmations follow the selected language. The Files browser, MCP connection settings and the Mail inbox, reader and draft editor support both languages. As of 26 November, Mail account setup and the Assistant suggestion review also use the selected language, including form labels, field choices and save feedback. Continue with remaining service messages and additional workflows as they are revised. Include accessibility names, status announcements, search synonyms, recoverable error messages and plurals. Use `Intl` for displayed numbers, units and dates. Keep diagnostic event codes stable and render localized explanations at the UI boundary.
 
 **Practical acceptance for R21a.** In isolated macOS Electron profiles, Settings switched four open windows to English. The Assistant discovered the existing settings tools and switched them back to German. The selection survived a restart on an English system, together with an unsent Chat draft and its reference. Bilingual settings search, dated messages, native titles, the OVD-Bar menu, keyboard save retry in a narrow window and the Chat microphone’s settings shortcut were exercised. When a preference write failed, both windows kept the saved language. With an unreadable workspace, the dialog used the first supported OS language before opening a workspace window.
 
@@ -428,7 +446,7 @@ The Notes example switched its open view and settings iframe in place with an un
 
 These are outcome gates, not mandatory serial departments. R16/R18 and the read-only portions of R17 can proceed while Mail develops. R07's compatibility assessment starts early; protocol migration must pass before advertising new-version support. No shipping milestone requires every P2 convenience feature.
 
-M1 remains open pending R06b's host-boundary checks and R07b's approval fix. The completed R01–R05 slices and the R07a assessment have their own acceptance records.
+M1 remains open pending R06b's host-boundary and packaged-app checks. R01–R05 and R07a/b have local acceptance records.
 
 ## Practical validation and measurements
 

@@ -27,7 +27,7 @@ export class SpeechController {
   }
   private permitted(contents: WebContents | null, isMainFrame: boolean, url?: string): boolean {
     return !!contents && !contents.isDestroyed() && this.options.panels.get('chat')?.webContents === contents &&
-      this.leases.has(contents.id) && isMainFrame === true && url === contents.mainFrame.url;
+      !!this.leases.get(contents.id)?.id && isMainFrame === true && url === contents.mainFrame.url;
   }
   cancelOwner(id: number): void { this.leases.delete(id); this.service.cancelOwner(id); }
   dispose(): void { this.leases.clear(); this.service.dispose(); }
@@ -43,7 +43,7 @@ export class SpeechController {
     ipcMain.handle('speech:microphones:get', event => { verify(event, ['settings', 'chat']); return this.microphones; });
     ipcMain.handle('speech:microphones:report', (event, input: unknown) => {
       verify(event);
-      if (!this.leases.has(event.sender.id)) return;
+      if (!this.leases.get(event.sender.id)?.id) return;
       this.microphones = z.array(z.object({ id: z.string().min(1).max(512), label: z.string().max(200) }).strict()).max(32).parse(input);
       const settings = this.options.panels.get('settings');
       if (settings && !settings.isDestroyed()) settings.webContents.send('speech:microphones:changed', this.microphones);
@@ -57,25 +57,28 @@ export class SpeechController {
     });
     ipcMain.handle('speech:start', async event => {
       verify(event);
-      const owner = event.sender, lease: { id?: string; ended?: boolean } = {};
-      if (this.leases.has(owner.id)) throw new Error('Eine Aufnahme läuft bereits.');
-      this.leases.set(owner.id, lease);
+      const owner = event.sender, ownerId = owner.id;
+      const lease: { id?: string; ended?: boolean } = {};
+      if (this.leases.has(ownerId)) throw new Error('Eine Aufnahme läuft bereits.');
+      this.leases.set(ownerId, lease);
       if (!this.watching.has(owner)) {
         this.watching.add(owner);
-        owner.on('destroyed', () => this.cancelOwner(owner.id));
-        owner.on('render-process-gone', () => this.cancelOwner(owner.id));
-        owner.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) this.cancelOwner(owner.id); });
+        owner.once('destroyed', () => this.cancelOwner(ownerId));
+        owner.on('render-process-gone', () => this.cancelOwner(ownerId));
+        owner.on('did-start-navigation', details => {
+          if (details.isMainFrame && !details.isSameDocument) this.cancelOwner(ownerId);
+        });
       }
       try {
-        const result = await this.service.start(owner.id, update => {
+        const result = await this.service.start(ownerId, update => {
           lease.id = update.id;
           if (['completed', 'failed', 'cancelled'].includes(update.status)) lease.ended = true;
-          if (['transcribing', 'completed', 'failed', 'cancelled'].includes(update.status) && this.leases.get(owner.id) === lease) this.leases.delete(owner.id);
+          if ((update.status === 'transcribing' || lease.ended) && this.leases.get(ownerId) === lease) this.leases.delete(ownerId);
           if (!owner.isDestroyed()) owner.send('speech:event', update);
         });
-        if (owner.isDestroyed() || !lease.ended && this.leases.get(owner.id) !== lease) { this.service.cancel(owner.id, result.id); throw new Error('Aufnahme abgebrochen.'); }
+        if (owner.isDestroyed() || !lease.ended && this.leases.get(ownerId) !== lease) { this.service.cancel(ownerId, result.id); throw new Error('Aufnahme abgebrochen.'); }
         return result;
-      } catch (error) { if (this.leases.get(owner.id) === lease) this.leases.delete(owner.id); throw error; }
+      } catch (error) { if (this.leases.get(ownerId) === lease) this.leases.delete(ownerId); throw error; }
     });
     ipcMain.handle('speech:append', (event, rawId: unknown, pcm: unknown) => {
       verify(event); const id = z.string().uuid().parse(rawId);

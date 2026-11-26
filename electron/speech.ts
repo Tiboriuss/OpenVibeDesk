@@ -34,7 +34,7 @@ export class SpeechService {
   private sessions = new Map<string, Session>();
   private completedSessions = new Map<string, OwnerId>();
   private retained = new Map<OwnerId, RetainedRecording>();
-  private startGenerations = new Map<OwnerId, number>();
+  private readonly startTokens = new Map<OwnerId, symbol>();
   private disposed = false;
   constructor(private readonly options: { dataDirectory: string; changed(settings: SpeechPublicSettings): void }) {
     this.file = path.join(options.dataDirectory, 'speech-settings.json');
@@ -102,7 +102,7 @@ export class SpeechService {
       this.saved = next;
       if (previous.credentialId && previous.credentialId !== credentialId) await credential(previous.credentialId).deletePassword().catch(() => {});
       // A changed configuration never leaves an old microphone session running.
-      for (const ownerId of this.startGenerations.keys()) this.cancelOwner(ownerId);
+      for (const ownerId of this.startTokens.keys()) this.cancelOwner(ownerId);
       const publicSettings = await this.getSettings();
       try { this.options.changed(publicSettings); } catch { /* Settings remain saved if a window closed during notification. */ }
       return publicSettings;
@@ -112,17 +112,17 @@ export class SpeechService {
   }
   async start(ownerId: OwnerId, emit: (event: SpeechSessionEvent) => void): Promise<SpeechSessionStart> {
     this.retained.delete(ownerId);
-    const { saved, apiKey, generation } = await this.prepare(ownerId);
-    const session = this.createSession(ownerId, saved, apiKey, generation, emit);
+    const { saved, apiKey, token } = await this.prepare(ownerId);
+    const session = this.createSession(ownerId, saved, apiKey, token, emit);
     this.connect(session);
     return this.started(session, 'connecting');
   }
   async retry(ownerId: OwnerId, id: string, emit: (event: SpeechSessionEvent) => void): Promise<SpeechSessionStart> {
     const recording = this.retained.get(ownerId);
     if (!recording || recording.id !== id) throw new SpeechError('Diese Aufnahme steht nicht mehr für einen erneuten Versuch zur Verfügung.');
-    const { saved, apiKey, generation } = await this.prepare(ownerId);
+    const { saved, apiKey, token } = await this.prepare(ownerId);
     if (this.retained.get(ownerId) !== recording || saved !== recording.saved) throw new SpeechError('Die Aufnahme wurde abgebrochen oder die Spracheinstellungen wurden geändert.');
-    const session = this.createSession(ownerId, saved, apiKey, generation, emit, recording);
+    const session = this.createSession(ownerId, saved, apiKey, token, emit, recording);
     this.retained.delete(ownerId);
     this.connect(session);
     void this.finish(session).catch(() => {});
@@ -131,11 +131,11 @@ export class SpeechService {
   private started(session: Session, status: SpeechSessionStart['status']): SpeechSessionStart {
     return { id: session.id, mode: session.mode, status, maxRecordingSeconds: SPEECH_MAX_RECORDING_SECONDS };
   }
-  private async prepare(ownerId: OwnerId): Promise<{ saved: SavedSettings; apiKey: string | null; generation: number }> {
-    const generation = (this.startGenerations.get(ownerId) ?? 0) + 1;
-    this.startGenerations.set(ownerId, generation);
+  private async prepare(ownerId: OwnerId): Promise<{ saved: SavedSettings; apiKey: string | null; token: symbol }> {
+    const token = Symbol();
+    this.startTokens.set(ownerId, token);
     await this.initialize(); await this.queue;
-    if (this.startGenerations.get(ownerId) !== generation) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
+    if (this.startTokens.get(ownerId) !== token) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
     if (this.disposed) throw new SpeechError('Die Spracheingabe ist nicht mehr verfügbar.');
     if (this.sessions.size) throw new SpeechError('In einem Chat läuft bereits eine Sprachaufnahme.');
     const publicSettings = await this.getSettings();
@@ -146,13 +146,13 @@ export class SpeechService {
     catch { throw new SpeechError('Der API-Schlüssel für die Spracheingabe konnte nicht gelesen werden.'); }
     if (saved.settings.authMode !== 'none' && !apiKey) throw new SpeechError('Für die Spracheingabe fehlt ein API-Schlüssel.');
     // Configuration and vault reads are asynchronous; re-check before acquiring the slot.
-    if (this.startGenerations.get(ownerId) !== generation || this.saved !== saved) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
+    if (this.startTokens.get(ownerId) !== token || this.saved !== saved) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
     if (this.disposed || this.sessions.size) throw new SpeechError('Die Spracheingabe ist momentan belegt.');
-    return { saved, apiKey, generation };
+    return { saved, apiKey, token };
   }
-  private createSession(ownerId: OwnerId, saved: SavedSettings, apiKey: string | null, generation: number,
+  private createSession(ownerId: OwnerId, saved: SavedSettings, apiKey: string | null, token: symbol,
     emit: (event: SpeechSessionEvent) => void, recording?: RetainedRecording): Session {
-    if (this.disposed || this.saved !== saved || this.startGenerations.get(ownerId) !== generation) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
+    if (this.disposed || this.saved !== saved || this.startTokens.get(ownerId) !== token) throw new SpeechError('Die Aufnahme wurde abgebrochen.');
     if (this.sessions.size) throw new SpeechError('Die Spracheingabe ist momentan belegt.');
     const id = randomUUID();
     const session: Session = {
@@ -261,7 +261,7 @@ export class SpeechService {
     session.status = 'cancelled'; this.publish(session); this.cleanup(session);
   }
   cancelOwner(ownerId: OwnerId): void {
-    this.startGenerations.set(ownerId, (this.startGenerations.get(ownerId) ?? 0) + 1);
+    this.startTokens.delete(ownerId);
     this.retained.delete(ownerId);
     for (const session of [...this.sessions.values()]) if (session.ownerId === ownerId) this.cancel(ownerId, session.id);
   }

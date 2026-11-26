@@ -19,7 +19,7 @@ import { chatComposerWriteSchema, composerSessionId, type ChatComposerContent, t
 import { storedChatComposer, withComposer, sameComposerContent } from './chat-composer';
 import { chatSessionListRequestSchema } from '../shared/sessions';
 import { listChatSessions, WorkspaceViewProjector, type WorkspaceView } from './workspace-view';
-import { settingsPatchSchema, normalizeSettings, coreSettingsCategoryIds } from '../shared/settings';
+import { settingsPatchSchema, normalizeSettings, coreSettingsCategoryIds, type SettingsPreparation } from '../shared/settings';
 import { AppUpdates } from './app-updates';
 import { defaultUpdateChannel, maxIgnoredUpdateVersions, updateVersionSchema } from '../shared/app-updates';
 import { appUpdateText } from '../shared/app-update-copy';
@@ -54,7 +54,7 @@ import type { MailModule } from '../modules/ovd-mail/backend';
 import type { FilesModule } from '../modules/ovd-files/backend';
 import type { McpModule } from '../modules/ovd-mcp/backend';
 import { ModuleReferenceRegistry, sameModuleReference } from './module-references';
-import { WorkspaceCapabilityRegistry, type CapabilityContext } from './workspace-capabilities';
+import { capabilitySchemas, WorkspaceCapabilityRegistry, type CapabilityContext } from './workspace-capabilities';
 import { fitWindowBounds } from './window-layout';
 import { OvdBarController } from './ovd-bar';
 import { AgentContext } from './agent-context';
@@ -85,6 +85,7 @@ function presentSaveStatus(status: WorkspaceSaveStatus): WorkspaceSaveStatus {
 let dock: BrowserWindow | null = null;
 let ovdBar: OvdBarController | undefined;
 const panels = new Map<WindowKind, BrowserWindow>();
+const loadingPanels = new WeakMap<BrowserWindow, Promise<void>>();
 const confirmedDraftCloses = new WeakSet<BrowserWindow>();
 const confirmedChatCloses = new WeakSet<BrowserWindow>();
 const panelModules: Partial<Record<WindowKind, string>> = { mail: 'ovd-mail', draft: 'ovd-mail', files: 'ovd-files' };
@@ -146,6 +147,8 @@ let chatComposerBlocked = false;
 async function prepareChatClose(win = panels.get('chat')): Promise<boolean> {
   if (!win || win.isDestroyed() || win.webContents.isCrashed() || !win.webContents.getURL()) return true;
   const owner = win.webContents;
+  // Release the microphone even when saving the draft delays closing the window.
+  speech?.cancelOwner(owner.id);
   const token = crypto.randomUUID();
   const ready = await new Promise<boolean>((resolve, reject) => {
     const finish = (result: boolean, error?: Error) => {
@@ -336,9 +339,16 @@ function windowView(win: BrowserWindow): WorkspaceView {
   for (const [kind, panel] of panels) if (panel === win) return kind;
   return 'module';
 }
+function supportsAssistantPin(): boolean {
+  if (process.platform !== 'linux') return true;
+  // Electron defaults to native Wayland in a Wayland session. Xwayland is an explicit X11 override.
+  const ozone = app.commandLine.getSwitchValue('ozone-platform');
+  if (ozone && ozone !== 'auto') return ozone === 'x11';
+  return process.env.XDG_SESSION_TYPE !== 'wayland';
+}
 function windowProjector(win: BrowserWindow): WorkspaceViewProjector {
   let projector = viewProjectors.get(win);
-  if (!projector) { projector = new WorkspaceViewProjector(); viewProjectors.set(win, projector); }
+  if (!projector) { projector = new WorkspaceViewProjector(supportsAssistantPin()); viewProjectors.set(win, projector); }
   return projector;
 }
 function windowState(win: BrowserWindow) { return windowProjector(win).project(currentState, windowView(win), uiLocale()); }
@@ -416,7 +426,12 @@ async function openPanel(kind: WindowKind): Promise<void> {
   // state record. Track that path too so window tools and restart agree with UI.
   if (!currentState.windows.some(window => window.kind === kind && !window.minimized)) commit(applyUiAction(currentState, { type: 'open_window', kind }).state);
   const existing = panels.get(kind);
-  if (existing && !existing.isDestroyed()) { if (existing.isMinimized()) existing.restore(); existing.show(); existing.focus(); return; }
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show(); existing.focus();
+    await loadingPanels.get(existing);
+    return;
+  }
   const saved = currentState.windows.find(w => w.kind === kind);
   const sizes: Record<WindowKind, [number, number]> = { mail: [1070, 720], chat: [570, 610], draft: [640, 530], files: [740, 580], settings: [650, 540], sessions: [560, 520] };
   const [width, height] = sizes[kind];
@@ -424,6 +439,7 @@ async function openPanel(kind: WindowKind): Promise<void> {
   const area = savedBounds ? screen.getDisplayMatching(savedBounds).workArea : screen.getPrimaryDisplay().workArea;
   const bounds = fitWindowBounds(savedBounds ?? { x: area.x + 100 + panels.size * 70, y: area.y + 80 + panels.size * 60, width, height }, area);
   const win = new BrowserWindow({ ...bounds, icon: appIconPath,
+    alwaysOnTop: kind === 'chat' && supportsAssistantPin() && currentState.settings.assistantAlwaysOnTop,
     minWidth: Math.min(450, area.width), minHeight: Math.min(360, area.height), title: `OpenVibeDesk · ${panelTitle(kind)}`, frame: false, backgroundColor: '#ffffff', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true } });
   panels.set(kind, win);
@@ -471,7 +487,12 @@ async function openPanel(kind: WindowKind): Promise<void> {
   win.on('move', rememberBounds);
   win.on('resize', rememberBounds);
   win.on('closed', () => { panels.delete(kind); if (kind === 'chat') chatComposerBlocked = false; mailModule?.onPanelClosed(kind); if (kind === 'settings') { speechSettingsStatus = 'clean'; aiSettingsStatus = 'clean'; agentSettingsStatus = 'clean'; mcpSettingsStatus = 'clean'; repositorySettingsStatus = 'clean'; allowSettingsUnload = false; } if (!quitting) commit({ ...currentState, windows: currentState.windows.map(w => w.kind === kind ? { ...w, minimized: true } : w) }); });
-  await win.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: kind } });
+  // Parallel requests can target this panel before its preload can receive their form data.
+  const loading = win.loadFile(path.join(__dirname, '../../dist/index.html'), { query: { view: kind } });
+  loadingPanels.set(win, loading);
+  try { await loading; }
+  catch (error) { if (!win.isDestroyed()) win.destroy(); throw error; }
+  finally { loadingPanels.delete(win); }
 }
 
 async function openDock(): Promise<void> {
@@ -558,6 +579,7 @@ function queueSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
 }
 async function persistSettingsPatch(input: unknown): Promise<void> {
   const patch = settingsPatchSchema.parse(input);
+  if (patch.assistantAlwaysOnTop === true && !supportsAssistantPin()) throw new Error(native().assistantPinUnsupported);
   if (patch.navigationOrder) patch.navigationOrder = migrateNavigationOrder(patch.navigationOrder);
   if (patch.navigationOrder?.length) {
     const modules = moduleHost?.list() ?? [];
@@ -573,6 +595,10 @@ async function persistSettingsPatch(input: unknown): Promise<void> {
   await persistWorkspace(() => ({ ...currentState, settings }));
   if (patch.diagnosticsEnabled !== undefined) await setDiagnosticsEnabled(patch.diagnosticsEnabled);
   commit({ ...currentState, settings });
+  const chatWindow = panels.get('chat');
+  if (patch.assistantAlwaysOnTop !== undefined && supportsAssistantPin() && chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.setAlwaysOnTop(settings.assistantAlwaysOnTop);
+  }
   appUpdates?.setChannel(settings.updateChannel ?? defaultUpdateChannel);
   if (previousLocale !== uiLocale()) refreshNativeLocale();
   else ovdBar?.layout();
@@ -729,10 +755,12 @@ async function referenceWorkspaceChat(id: string) {
   changeSelectedContext(target, content => ({ ...content, sessionRefId: id }));
   return { sessionId: id, selectedAsContext: true };
 }
-async function prepareSettings(kind: 'account' | 'smtp' | 'ai' | 'agent' | 'speech' | 'module-repository', values: Record<string, unknown>, accountId?: string) {
+async function prepareSettings(request: SettingsPreparation) {
   await dispatchAction({ type: 'open_window', kind: 'settings' });
-  panels.get('settings')?.webContents.send('settings:prepare', { category: kind === 'module-repository' ? 'modules' : (kind === 'ai' || kind === 'speech') ? 'ai' : kind === 'agent' ? 'agent' : 'mail', kind, values, ...(accountId ? { accountId } : {}) });
-  return { status: 'requires_user_input', opened: 'settings', note: 'Die Angaben sind im Formular vorbereitet. Der Nutzer prüft sie, ergänzt gegebenenfalls Zugangsdaten und speichert.' };
+  const settingsWindow = panels.get('settings');
+  if (!settingsWindow || settingsWindow.isDestroyed()) throw new Error(uiLocale() === 'de' ? 'Die Einstellungen wurden vor der Übergabe geschlossen.' : 'Settings closed before the suggestion could be delivered.');
+  settingsWindow.webContents.send('settings:prepare', request);
+  return { status: 'requires_user_input', opened: 'settings', prepared: true, saved: false };
 }
 async function confirmCapability(context: OperationContext, message: string, detail: string, options: { alwaysAsk?: boolean } = {}): Promise<boolean> {
   context.signal.throwIfAborted();
@@ -779,7 +807,16 @@ function registerWorkspaceCapabilities(): void {
   workspaceCapabilities.register('time.resolve_range', args => resolveTimeRange(args));
   workspaceCapabilities.register('time.difference', args => resolveTimeDifference(args));
   workspaceCapabilities.register('math.calculate', args => evaluateCalculation(args));
-  workspaceCapabilities.register('windows.list', () => [...currentState.windows.filter(item => !panelModules[item.kind] || moduleHost?.isReady(panelModules[item.kind]!)).map(item => ({ ...item, open: panels.has(item.kind), minimized: panels.get(item.kind)?.isMinimized() ?? true })), ...[...moduleWindows.values()].map(({ moduleId, viewId, window }) => ({ moduleId, viewId, open: true, minimized: window.isMinimized() }))]);
+  workspaceCapabilities.register('windows.list', () => {
+    const workspaceWindows = currentState.windows
+      .filter(item => !panelModules[item.kind] || moduleHost?.isReady(panelModules[item.kind]!))
+      .map(item => {
+        const win = panels.get(item.kind);
+        return { ...item, open: !!win, minimized: win?.isMinimized() ?? true,
+          ...(item.kind === 'chat' && win && supportsAssistantPin() ? { alwaysOnTop: win.isAlwaysOnTop() } : {}) };
+      });
+    return [...workspaceWindows, ...[...moduleWindows.values()].map(({ moduleId, viewId, window }) => ({ moduleId, viewId, open: true, minimized: window.isMinimized() }))];
+  });
   workspaceCapabilities.register('windows.open', async ({ kind }) => { await dispatchAction({ type: 'open_window', kind }); return { kind, opened: true }; });
   workspaceCapabilities.register('windows.control', ({ kind, action }) => controlPanel(kind, action));
   workspaceCapabilities.register('bar.get', () => { if (!ovdBar) throw new Error('Die OVD-Bar ist noch nicht bereit.'); return ovdBar.status(); });
@@ -859,9 +896,10 @@ function registerWorkspaceCapabilities(): void {
     return activeOperationRunner.retryRecorded(actionId, context.signal);
   });
   workspaceCapabilities.register('settings.agent_get', () => normalizeAgentSettings(currentState.agentSettings));
-  workspaceCapabilities.register('settings.agent_save', args => prepareSettings('agent', args));
-  workspaceCapabilities.register('settings.get', () => ({ ...currentState.settings, locale: uiLocale() }));
-  workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return { ...currentState.settings, locale: uiLocale() }; });
+  workspaceCapabilities.register('settings.agent_save', args => prepareSettings({ category: 'agent', kind: 'agent', values: args }));
+  const publicSettings = () => ({ ...currentState.settings, locale: uiLocale(), assistantPinSupported: supportsAssistantPin() });
+  workspaceCapabilities.register('settings.get', publicSettings);
+  workspaceCapabilities.register('settings.update', async (args, context) => { await changeSettings(args, context); return publicSettings(); });
   workspaceCapabilities.register('updates.status', () => appUpdates.status());
   workspaceCapabilities.register('updates.check', () => appUpdates.check());
   workspaceCapabilities.register('updates.ignore', async ({ version }, context) => {
@@ -921,7 +959,7 @@ function registerWorkspaceCapabilities(): void {
     if (sourceId && !source) throw new Error('Diese Modulquelle ist nicht mehr vorhanden.');
     if (!source && !url) throw new Error('Für eine neue Modulquelle ist eine Repository- oder Katalog-URL erforderlich.');
     const values = { ...(source ? { sourceId: source.id, title: source.title, url: source.url } : {}), ...(title !== undefined ? { title } : {}), ...(url ? { url: normalizeRepositoryUrl(url).url } : {}) };
-    return prepareSettings('module-repository', values);
+    return prepareSettings({ category: 'modules', kind: 'module-repository', values });
   });
   workspaceCapabilities.register('modules.repository_remove', async ({ sourceId }, context) => {
     const source = moduleRepositories!.list().sources.find(item => item.id === sourceId);
@@ -961,9 +999,9 @@ function registerWorkspaceCapabilities(): void {
   });
   workspaceCapabilities.register('modules.acknowledge_attention', ({ moduleId, ids }) => moduleHost!.acknowledgeAttention(moduleId, ids));
   workspaceCapabilities.register('settings.speech_get', () => speech!.service.getSettings());
-  workspaceCapabilities.register('settings.speech_save', args => prepareSettings('speech', args));
+  workspaceCapabilities.register('settings.speech_save', args => prepareSettings({ category: 'ai', kind: 'speech', values: args }));
   workspaceCapabilities.register('settings.ai_get', (_args, context) => readAiSettings(context));
-  workspaceCapabilities.register('settings.ai_save', args => prepareSettings('ai', args));
+  workspaceCapabilities.register('settings.ai_save', args => prepareSettings({ category: 'ai', kind: 'ai', values: args }));
   workspaceCapabilities.register('settings.ai_models', () => { const config = currentState.ai ?? defaultAiConfig; return getKey(config).then(key => listModels(config, key)).catch(localizeModelListError); });
   workspaceCapabilities.register('settings.ai_clear_key', async (_args, context) => { if (!await confirmCapability(context, native().clearKey, native().clearKeyDetail)) return { cancelled: true }; await deleteKey(currentState.ai ?? defaultAiConfig); return { removed: true }; });
   workspaceCapabilities.register('app.quit', (_args, context) => confirmQuit(context));
@@ -1285,7 +1323,7 @@ function requireMailModule(): MailModule {
 async function initializeMailModule(): Promise<void> {
   if (mailModule) { mailModule.startPolling(); return; }
   const { createMailModule } = await import('../modules/ovd-mail/backend');
-  const module = createMailModule({ getState: () => currentState, commit, saveState: snapshot => persistWorkspace(() => ({ ...currentState, drafts: snapshot.drafts })), panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles, isKnownLocalFile: selected => filesModule?.knowsPath(selected) ?? false,
+  const module = createMailModule({ getState: () => currentState, getLocale: uiLocale, commit, saveState: snapshot => persistWorkspace(() => ({ ...currentState, drafts: snapshot.drafts })), panels, openPanel, dispatchAction, prepareSettings, confirmCapability, operationOwner, uiOperationContext, verifyPanel: (event, kinds) => { requireMailModule(); verifyPanel(event, kinds); }, verifySender: event => { requireMailModule(); verifySender(event); }, boundedEmailReference, savedEmailReference, snapshotEmailReference, emailReferenceSummary, selectedLocalFiles, isKnownLocalFile: selected => filesModule?.knowsPath(selected) ?? false,
     publishAttention: notice => moduleHost?.publishAttention('ovd-mail', notice), clearAttention: key => moduleHost?.clearAttention('ovd-mail', key) });
   await module.initialize();
   module.registerCapabilities(workspaceCapabilities);
@@ -1529,16 +1567,21 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     if (parsed.success) ovdBar?.interaction(parsed.data);
   });
   ipcMain.handle('workspace:action', (event, action: unknown) => { verifySender(event); return dispatchAction(action); });
-  ipcMain.handle('window:control', (event, action: unknown) => {
+  ipcMain.handle('window:set-assistant-pinned', (event, pinned: unknown) => {
+    verifyPanel(event, ['chat']);
+    return changeSettings({ assistantAlwaysOnTop: z.boolean().parse(pinned) }, uiOperationContext(event));
+  });
+  ipcMain.handle('window:control', (event, input: unknown) => {
     verifySender(event);
+    const action = capabilitySchemas['windows.control'].shape.action.parse(input);
     const kind = [...panels].find(([, win]) => win.webContents === event.sender)?.[0];
     const external = [...moduleWindows.values()].find(item => item.window.webContents === event.sender);
-    if (external && ['minimize', 'toggleMaximize', 'close'].includes(String(action))) return controlNativeWindow(external.window, action as 'minimize' | 'toggleMaximize' | 'close');
-    if (!kind || !['minimize', 'toggleMaximize', 'close'].includes(String(action))) throw new Error('Ungültige Fensteraktion.');
-    return controlPanel(kind, action as 'minimize' | 'toggleMaximize' | 'close');
+    if (external) return controlNativeWindow(external.window, action);
+    if (!kind) throw new Error('Ungültige Fensteraktion.');
+    return controlPanel(kind, action);
   });
   ipcMain.handle('workspace:quit', (event) => { verifySender(event); return confirmQuit(uiOperationContext(event)); });
-  ipcMain.handle('settings:update', (event, input: unknown) => { verifySender(event); return changeSettings(input, uiOperationContext(event)); });
+  ipcMain.handle('settings:update', (event, input: unknown) => { verifyPanel(event, ['settings']); return changeSettings(input, uiOperationContext(event)); });
   ipcMain.handle('updates:status', event => {
     if (dock && event.sender === dock.webContents) verifyBar(event);
     else verifyPanel(event, ['settings']);
@@ -1559,8 +1602,8 @@ if (hasInstanceLock) app.whenReady().then(async () => {
     if (!settings || settings.isDestroyed() || event.sender !== settings.webContents || event.senderFrame !== event.sender.mainFrame) return;
     if (status === 'clean' || status === 'dirty' || status === 'busy') aiSettingsStatus = status;
   });
-  ipcMain.handle('agent:settings:open', event => { verifySender(event); return openSettingsCategory('agent'); });
-  ipcMain.handle('agent:settings:get', event => { verifySender(event); return normalizeAgentSettings(currentState.agentSettings); });
+  ipcMain.handle('agent:settings:open', event => { verifyPanel(event, ['chat']); return openSettingsCategory('agent'); });
+  ipcMain.handle('agent:settings:get', event => { verifyPanel(event, ['settings']); return normalizeAgentSettings(currentState.agentSettings); });
   ipcMain.handle('agent:settings:save', async (event, input: unknown) => { verifyPanel(event, ['settings']); const agentSettings = agentSettingsSchema.parse(input); await persistWorkspace(() => ({ ...currentState, agentSettings })); commit({ ...currentState, agentSettings }); });
   ipcMain.on('agent:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) agentSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
   ipcMain.on('mcp:settings:status', (event, status: unknown) => { const settings = panels.get('settings'); if (settings && !settings.isDestroyed() && event.sender === settings.webContents && event.senderFrame === event.sender.mainFrame && ['clean', 'dirty', 'busy'].includes(String(status))) mcpSettingsStatus = status as 'clean' | 'dirty' | 'busy'; });
@@ -1668,7 +1711,6 @@ app.on('before-quit', event => {
     try {
       if (!await prepareChatClose()) { quitting = false; allowSettingsUnload = false; return; }
       mailModule?.stopPolling();
-      const chatOwner = panels.get('chat'); if (chatOwner) speech?.cancelOwner(chatOwner.webContents.id);
       if (activeStream) { activeStream.controller.abort(); activeStream.flush(); const { sessionId, assistantId } = activeStream; commit(updateSessionMessages(currentState, sessionId, messages => messages.map(m => m.id === assistantId && m.status === 'streaming' ? { ...m, status: 'cancelled' } : m))); }
       await ovdBar?.flush();
       await mailModule?.flushDrafts();

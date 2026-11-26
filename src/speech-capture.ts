@@ -31,11 +31,15 @@ export async function startSpeechCapture(options: {
   let flushAck: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
 
+  function stopTracks() {
+    stream?.getTracks().forEach(track => track.stop());
+    stream = undefined;
+  }
   function cleanup() {
     if (closed) return;
     closed = true;
     options.signal.removeEventListener('abort', cleanup);
-    stream?.getTracks().forEach(track => track.stop());
+    stopTracks();
     source?.disconnect(); processor?.disconnect(); silent?.disconnect();
     processor?.port.close();
     flushAck?.();
@@ -50,8 +54,7 @@ export async function startSpeechCapture(options: {
   function checkActive() {
     if (closed || options.signal.aborted) {
       // getUserMedia cannot be cancelled: dispose tracks that arrive afterwards.
-      stream?.getTracks().forEach(track => track.stop());
-      if (context && context.state !== 'closed') void context.close().catch(() => {});
+      stopTracks();
       throw new DOMException(labels.cancelled, 'AbortError');
     }
   }
@@ -96,6 +99,9 @@ export async function startSpeechCapture(options: {
         return stopPromise ??= (async () => {
           if (closed) { if (failure) throw failure; return; }
           flushing = true;
+          // Release the device now. The worklet can flush the PCM it already holds
+          // and finish pending writes even if the main process is still busy.
+          stopTracks();
           try {
             await new Promise<void>((resolve, reject) => {
               const timeout = setTimeout(() => reject(new Error(labels.finishFailed)), 2000);

@@ -2,6 +2,7 @@ import type { UiLocale } from '../shared/locale';
 
 const de = {
   moduleViewUnavailable: 'Diese Modulansicht ist nicht verfügbar. Bitte den Modulstatus prüfen.',
+  assistantPinUnsupported: 'Das Anheften des Assistentenfensters wird auf diesem Desktop nicht unterstützt.',
   draft: 'Entwurf', files: 'Dateien', settings: 'Einstellungen',
   workspaceOpenFailed: 'Arbeitsbereich konnte nicht geöffnet werden',
   missing: 'Im Datenordner fehlt workspace.sqlite. Prüfe, ob der ursprüngliche Datenordner verfügbar ist.',
@@ -45,6 +46,7 @@ const de = {
 
 const en: typeof de = {
   moduleViewUnavailable: 'The module view is unavailable. Check the module status in Settings.',
+  assistantPinUnsupported: 'Keeping the Assistant on top is unavailable on this desktop.',
   draft: 'Draft', files: 'Files', settings: 'Settings',
   workspaceOpenFailed: 'Could not open the workspace',
   missing: 'workspace.sqlite is missing. Check that the original data folder is available.',

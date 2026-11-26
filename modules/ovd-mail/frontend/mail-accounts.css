@@ -64,3 +64,9 @@
 .mail-account-remove:disabled{opacity:.55}
 .mail-account-group-content>.mail-account-feedback{margin-top:10px}
 @media(max-width:600px){.mail-general-fields{grid-template-columns:minmax(0,1fr)}.mail-account-summary{flex-wrap:wrap;column-gap:8px}.mail-account-summary-title{flex-basis:calc(100% - 52px)}.mail-account-summary-state{margin-left:26px;max-width:none;flex-basis:calc(100% - 52px)}.mail-account-summary-state+.mail-account-chevron{margin-top:-19px;margin-left:auto}.mail-account-actions{justify-content:flex-start}.mail-account-actions button{max-width:100%}.mail-account-group-content{padding-left:10px;padding-right:10px}}
+.mail-suggestion{margin:0 0 10px;padding:10px;border:1px solid var(--line);border-inline-start:3px solid var(--accent);border-radius:6px;min-width:0;background:white}
+.mail-suggestion>strong{font-size:12px}.mail-suggestion small{font-size:11px;font-weight:normal;color:var(--muted)}
+.mail-suggestion-fields{display:grid;gap:6px;margin-top:8px}.mail-suggestion-fields label{display:flex;align-items:flex-start;gap:7px;font-size:12px;min-width:0}
+.mail-suggestion-fields input{margin:2px 0 0;flex:none;accent-color:var(--accent)}.mail-suggestion-fields label>span{min-width:0}
+.mail-suggestion-change{display:block;white-space:pre-wrap;overflow-wrap:anywhere;max-height:7em;overflow:auto}.mail-suggestion-change>span:first-child{color:var(--muted)}
+.mail-suggestion .mail-account-actions{margin-top:8px}.mail-suggestion>p{font-size:12px;margin:6px 0}

@@ -17,7 +17,7 @@ function readerBody(message: ImapMessage) {
   return { id, bodyText, bodyHtml, htmlTruncated, inlineImages, bodyLoaded, truncated };
 }
 
-export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
+export function MailWorkspace({ drafts, largeText }: { drafts: Draft[]; largeText: boolean }) {
   const locale = useUiLocale();
   const copy = mailText[locale];
   const [mode, setMode] = useState<'loading' | 'real' | 'drafts'>('loading');
@@ -332,7 +332,7 @@ export function MailWorkspace({ drafts }: { drafts: Draft[] }) {
   return <div className="mail-workspace">
     <div className="mail-workspace-content">
       {mode === 'loading' ? <div className="mail-workspace-loading">{copy.accountsLoading}</div> :
-        <ImapMailView accounts={accounts} folders={folders} messages={readerMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
+        <ImapMailView largeText={largeText} accounts={accounts} folders={folders} messages={readerMessages} selectedAccountId={accountId} selectedFolder={folder} selectedMessageId={messageId} onVisibleMessages={onVisibleMessages}
           dateBasis={queryResults && (queryRequest?.sort ?? queryResults.request?.sort ?? 'received_desc').startsWith('received') ? 'received' : 'sent'}
           queryControls={<MailQueryControls accounts={accounts} folders={folders} accountId={accountId} folder={folder} hidden={mode === 'drafts'} busy={queryBusy || queryLoadingMore} summary={countResult ?? queryResults} onQuery={queryMail} onCount={countMail} onReset={clearSearch}/>}
           searchState={queryResults ? { title: copy.mailQuery, query: '', description: copy.combinedFilters, total: queryResults.count, countExact: queryResults.countExact, complete: queryResults.complete, hasMore: queryResults.hasMore, scope: queryResults.scope, loading: queryBusy } : searchResults ? { query: searchResults.query, total: searchResults.total, hasMore: searchResults.hasMore, scope: searchResults.scope + (searchResults.foldersRemaining ? ` · ${copy.remainingFolders(searchResults.foldersRemaining)}` : '') + (searchResults.warnings?.length ? " " + copy.someUnreachable : ''), loading: searchLoading } : searchLoading ? { query: pendingSearchQuery, total: 0, hasMore: false, scope: copy.searchRunning, loading: true } : undefined}

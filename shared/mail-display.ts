@@ -14,5 +14,6 @@ export interface MailDisplayResult {
   htmlTruncated: boolean;
   message?: string;
   cancelled?: boolean;
+  outcome?: 'cancelled';
 }
 export const defaultMailDisplay: MailDisplayState = { format: 'auto', remoteImages: false };

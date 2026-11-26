@@ -45,7 +45,7 @@ export function createMcpModule(host: McpModuleHost) {
   function registerCapabilities(registry: WorkspaceCapabilityRegistry) {
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.servers'], ({ offset = 0, limit = 20 }) => {
       const all = service.listServers();
-      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, protocolVersion, connectFailure, toolCount, allowedToolCount, error, warning, authMode, oauthStatus, oauthError, oauthClientAuthMethod }) => ({ id, name, description: description.slice(0, 240), transport, status, ...(protocolVersion ? { protocolVersion } : {}), ...(connectFailure ? { connectFailure } : {}), toolCount, allowedToolCount, authMode, ...(authMode === 'oauth' ? { oauthClientAuthMethod: oauthClientAuthMethod ?? 'auto' } : {}), ...(oauthStatus ? { oauthStatus } : {}), ...(oauthError ? { oauthError } : {}), ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
+      const servers = boundedRows(all.slice(offset, offset + limit).map(({ id, name, description, transport, status, protocolVersion, connectFailure, toolCount, allowedToolCount, reviewRequiredCount, error, warning, authMode, oauthStatus, oauthError, oauthClientAuthMethod }) => ({ id, name, description: description.slice(0, 240), transport, status, ...(protocolVersion ? { protocolVersion } : {}), ...(connectFailure ? { connectFailure } : {}), toolCount, allowedToolCount, reviewRequiredCount, authMode, ...(authMode === 'oauth' ? { oauthClientAuthMethod: oauthClientAuthMethod ?? 'auto' } : {}), ...(oauthStatus ? { oauthStatus } : {}), ...(oauthError ? { oauthError } : {}), ...(error ? { error } : {}), ...(warning ? { warning } : {}) })));
       const hasMore = offset + servers.length < all.length;
       return { servers, total: all.length, hasMore, ...(hasMore ? { nextOffset: offset + servers.length } : {}) };
     });
@@ -70,7 +70,8 @@ export function createMcpModule(host: McpModuleHost) {
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.settings'], prepare);
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.tools'], async (query, context) => {
       const page = await service.listTools(query, context);
-      return { ...page, tools: page.tools.map(({ name, title, description, allowed, supported, reason, readOnly }) => ({ name, ...(title ? { title } : {}), description: description.slice(0, 500), allowed, supported, ...(reason ? { reason } : {}), readOnlyHint: readOnly })) };
+      const { serverId, total, hasMore, nextOffset, observedAt } = page;
+      return { serverId, total, hasMore, nextOffset, observedAt, tools: page.tools.map(({ name, title, description, allowed, supported, reviewStatus, reason, readOnly }) => ({ name, ...(title ? { title } : {}), description: description.slice(0, 500), allowed, supported, ...(reviewStatus ? { reviewStatus } : {}), ...(reason ? { reason } : {}), readOnlyHint: readOnly })) };
     });
     registry.registerDefinition(mcpCapabilityDefinitions['mcp.audit'], query => {
       const page = service.auditPage(query), entries = boundedRows(page.entries), hasMore = page.hasMore || entries.length < page.entries.length;

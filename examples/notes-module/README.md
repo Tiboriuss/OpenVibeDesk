@@ -6,14 +6,14 @@ This small, self-contained example needs no additional packages. It is not one o
 
 ## Try it
 
-For installation through the app, add the [OpenVibeDesk Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) and select **Notes** (German: **Notizen**). Follow the [repository setup guide](../../docs/module-repositories.md#configure-a-source). The catalog contains a separately published copy; this directory is the local authoring example.
+For installation through the app, add the [OpenVibeDesk Modules catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) and select the entry with module ID `sample-notes`. Follow the [repository setup guide](../../docs/module-repositories.md#configure-a-source). The catalog contains a separately published copy; this directory is the local authoring example.
 
 For local development:
 
 1. Copy the entire `notes-module` directory into `<userData>/modules/`; the containing directory name is your choice. See the [module setup instructions](../../CONTRIBUTING.md#building-modules) for the user-data location.
 2. Restart OVD.
 3. Review and enable the **Notes** module (**Notizen** in German) under **Settings → Modules** (**Einstellungen → Module**). OVD requests approval for the local module code's fingerprint before its first execution.
-4. Open **Notes** in the dock to add or search notes. The assistant can use the same functions, for example: “Save a note: Prepare the presentation for Friday.”
+4. Open **Notes** from the OVD-Bar to add or search notes. The assistant can use the same functions, for example: “Save a note: Prepare the presentation for Friday.”
 
 Both copies use the ID `sample-notes`. Use one installation method per profile: a repository package cannot overwrite a manually installed module with the same ID.
 

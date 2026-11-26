@@ -7,7 +7,7 @@ import type { WorkspaceSaveStatus } from './workspace-save';
 export type { AiProvider, AiProtocol, AiAuthMode } from './ai-providers';
 export type { ModuleReference, ModuleReferenceInput, ModuleReferenceSummary } from './references';
 export type WindowKind = 'mail' | 'chat' | 'draft' | 'files' | 'settings' | 'sessions';
-export interface Settings { language?: import('./locale').LanguagePreference; textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; navigationOrder?: string[]; diagnosticsEnabled?: boolean; updateChannel?: UpdateChannel; checkUpdatesOnStartup?: boolean; ignoredUpdateVersions?: string[]; barOrientation?: 'vertical' | 'horizontal'; barSize?: number; barOpacity?: number; barPosition?: 'free' | 'left' | 'right' | 'top' | 'bottom'; barAutoHide?: boolean; }
+export interface Settings { language?: import('./locale').LanguagePreference; textSize: 'standard' | 'large'; dockAlwaysOnTop: boolean; assistantAlwaysOnTop: boolean; navigationOrder?: string[]; diagnosticsEnabled?: boolean; updateChannel?: UpdateChannel; checkUpdatesOnStartup?: boolean; ignoredUpdateVersions?: string[]; barOrientation?: 'vertical' | 'horizontal'; barSize?: number; barOpacity?: number; barPosition?: 'free' | 'left' | 'right' | 'top' | 'bottom'; barAutoHide?: boolean; }
 export type Thinking = 'off' | 'low' | 'medium' | 'high';
 export type ModelTier = 'smart' | 'simple';
 export type ConfirmationMode = 'ask' | 'never';
@@ -33,18 +33,19 @@ export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: str
 export interface ChatSession { id: string; title: string; placeholderTitle?: boolean; createdAt: string; updatedAt: string; historyStart: number; messages: ChatMessage[]; }
 export interface ChatSessionSummary { id: string; title: string; updatedAt: string; messageCount: number; preview: string; }
 export interface ChatSessionPage { sessions: ChatSessionSummary[]; total: number; offset: number; nextOffset?: number; revision: string; hasMore: boolean; complete: boolean; }
-export interface RendererWorkspaceState extends Omit<WorkspaceState, 'chatComposers'> { locale: import('./locale').UiLocale; presentation?: { sessionRevision?: number; chatStart?: number; chatTotal?: number; chatHasEarlierUser?: boolean; streamingSessionId?: string }; }
+export interface RendererWorkspaceState extends Omit<WorkspaceState, 'chatComposers'> { assistantPinSupported: boolean; locale: import('./locale').UiLocale; presentation?: { sessionRevision?: number; chatStart?: number; chatTotal?: number; chatHasEarlierUser?: boolean; streamingSessionId?: string }; }
 export interface WorkspaceState { version: 1; chatComposers?: Record<string, import('./chat-composer').StoredChatComposer>; mailLayoutRevision?: number; windows: WorkspaceWindow[]; selectedMailId?: string; folder: Folder; mails: Mail[]; drafts: Draft[]; activeDraftId?: string; chat: ChatMessage[]; sessions: ChatSession[]; activeSessionId: string; provider: string; settings: Settings; ai?: AiConfig; agentSettings?: AgentSettings; }
 export interface FileEntry { name: string; path: string; isDirectory: boolean; size: number; }
 export interface FileListing { path: string; entries: FileEntry[]; }
 export interface SelectedFile { path: string; name: string; size: number; }
 export type WindowControl = 'minimize' | 'toggleMaximize' | 'close';
 export interface SettingsNavigation { category?: string; search?: string; sectionId?: string; }
-export interface SettingsPreparation { category: 'mail' | 'ai' | 'agent' | 'modules'; values: Record<string, unknown>; accountId?: string; kind: 'account' | 'smtp' | 'ai' | 'agent' | 'speech' | 'module-repository'; }
+export type SettingsPreparation = import('./settings').SettingsPreparation;
 export interface MailViewFilter { query?: string; unreadOnly?: boolean; attachmentsOnly?: boolean; }
 export interface MailNavigationTarget { accountId: string; folder: string; messageId?: string; refresh?: boolean; }
 export interface MailViewContext { accountId: string; folder: string; messageId?: string; }
 export interface WorkspaceApi {
+  setAssistantPinned(pinned: boolean): Promise<void>;
   getAppUpdateStatus(): Promise<AppUpdateStatus>;
   checkAppUpdates(): Promise<AppUpdateStatus>;
   openAppUpdate(version: string, destination: 'release' | 'installer'): Promise<void>;

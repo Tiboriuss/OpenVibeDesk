@@ -15,7 +15,7 @@ import { uiText, useUiLocale } from './locale';
 import { settingsText } from './settings-copy';
 import { formDetail, useFormFeedback } from './form-feedback';
 import type { LanguagePreference } from '../shared/locale';
-import { defaultSettings } from '../shared/settings';
+import { defaultSettings, settingsPreparationSchema } from '../shared/settings';
 import type { Settings as WorkspaceSettings } from '../shared/model';
 import type { SettingsSuggestion } from './settings-preparation';
 import { moduleIcon, moduleSettings, useWorkspaceModules } from './module-registry';
@@ -38,15 +38,15 @@ function initialInstalledOpen(): boolean {
   return true;
 }
 
-export function SettingsView({ settings, updateStatus, onUpdate }: { settings: WorkspaceSettings; updateStatus?: AppUpdateStatus; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
+export function SettingsView({ settings, assistantPinSupported, updateStatus, onUpdate }: { settings: WorkspaceSettings; assistantPinSupported: boolean; updateStatus?: AppUpdateStatus; onUpdate(patch: Partial<WorkspaceSettings>): Promise<void> }) {
   const locale = useUiLocale();
   const copy = settingsText[locale];
   const hostText = uiText[locale];
   const coreCategories = coreSettingsCategories(locale);
   const categoryTitle = (id: string) => coreCategories.find(item => item.id === id)!.title;
   const appearanceChange = useRef(0);
-  const [appearanceError, setAppearanceError] = useState<'language' | 'textSize'>();
-  async function updateAppearance<K extends 'language' | 'textSize'>(key: K, value: WorkspaceSettings[K]) {
+  const [appearanceError, setAppearanceError] = useState<'language' | 'textSize' | 'assistantAlwaysOnTop'>();
+  async function updateAppearance<K extends 'language' | 'textSize' | 'assistantAlwaysOnTop'>(key: K, value: WorkspaceSettings[K]) {
     const revision = ++appearanceChange.current;
     setAppearanceError(undefined);
     try { await onUpdate({ [key]: value }); }
@@ -57,7 +57,9 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
   const textSizeSelect = useRef<HTMLSelectElement>(null);
   const [languageNavigation, setLanguageNavigation] = useState(0);
   const [preparation, setPreparation] = useState<SettingsSuggestion>();
+  const [moduleSuggestions, setModuleSuggestions] = useState<SettingsSuggestion[]>([]);
   const preparationToken = useRef(0);
+  const dismissModuleSuggestion = (token: number) => setModuleSuggestions(items => items.filter(item => item.token !== token));
   const [search, setSearch] = useState('');
   const [active, setActive] = useState<SettingsCategoryId>('ai');
   const [installedOpen, setInstalledOpen] = useState(initialInstalledOpen);
@@ -79,8 +81,12 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
   useEffect(() => {
     const unsubscribeOpen = window.workspace.onShowMailSettings(() => { setActive('mail'); setSearch(''); });
     const unsubscribePrepare = window.workspace.onPrepareSettings(request => {
-      if (!request || !['mail', 'ai', 'agent', 'modules'].includes(request.category) || !['account', 'smtp', 'ai', 'agent', 'speech', 'module-repository'].includes(request.kind) || !request.values || typeof request.values !== 'object' || Array.isArray(request.values)) return;
-      setActive(request.category); setSearch(''); setPreparation({ ...request, token: ++preparationToken.current });
+      const envelope = settingsPreparationSchema.safeParse(request);
+      if (!envelope.success) return;
+      const suggestion = { ...envelope.data, token: ++preparationToken.current };
+      setActive(suggestion.category); setSearch('');
+      if (coreCategories.some(category => category.id === suggestion.category)) setPreparation(suggestion);
+      else setModuleSuggestions(items => [...items, suggestion]);
     });
     const unsubscribeNavigate = window.workspace.onNavigateSettings(request => {
       if (!request || typeof request !== 'object') return;
@@ -163,6 +169,7 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
     try { localStorage.setItem(groupStorageKey, JSON.stringify({ installed: next })); } catch { /* The current session remains usable. */ }
   }
 
+  const preparedFor = (category: string, kind: string) => preparation?.category === category && preparation.kind === kind ? preparation : undefined;
   const matches = (id: string) => !searching || matchesSettingsEntry(settingsEntries.find(item => item.id === id)!, search, categories);
   return <div className="settings-view">
     <aside className="settings-sidebar">
@@ -182,12 +189,12 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
       {searching && !anyResults && <div className="settings-empty" role="status"><Search size={20} /><strong>{copy.noResults}</strong><span>{copy.searchAgain}</span></div>}
       <section hidden={!visible('ai')} aria-label={categoryTitle('ai')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('ai')}</h3>}
-        <div hidden={searching && !settingsEntries.some(entry => entry.category === 'ai' && entry.id !== 'ai.speech' && matchesSettingsEntry(entry, search))}><AiSettings preparation={preparation?.kind === 'ai' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('ai'); setSearch(''); }} /></div>
-        <SpeechSettings navigationRequest={speechNavigation} preparation={preparation?.kind === 'speech' ? preparation : undefined} searchQuery={search} />
+        <div hidden={searching && !settingsEntries.some(entry => entry.category === 'ai' && entry.id !== 'ai.speech' && matchesSettingsEntry(entry, search))}><AiSettings preparation={preparedFor('ai', 'ai')} searchQuery={search} onClearSearch={() => { setActive('ai'); setSearch(''); }} /></div>
+        <SpeechSettings navigationRequest={speechNavigation} preparation={preparedFor('ai', 'speech')} searchQuery={search} />
       </section>
       <section hidden={!visible('agent')} aria-label={categoryTitle('agent')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('agent')}</h3>}
-        <AgentSettings preparation={preparation?.kind === 'agent' ? preparation : undefined} searchQuery={search} onClearSearch={() => { setActive('agent'); setSearch(''); }} />
+        <AgentSettings preparation={preparedFor('agent', 'agent')} searchQuery={search} onClearSearch={() => { setActive('agent'); setSearch(''); }} />
       </section>
       <section hidden={!visible('display')} aria-label={categoryTitle('display')}>
         {searching && <h3 className="settings-result-category">{categoryTitle('display')}</h3>}
@@ -205,6 +212,14 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
                 onClick={() => { textSizeSelect.current?.focus(); void updateAppearance('textSize', defaultSettings.textSize); }}><RotateCcw size={14} aria-hidden="true" /></button>}>
             <option value="standard">{copy.standard}</option><option value="large">{copy.large}</option>
           </SettingsChoiceRow>
+          <div className="settings-choice-row settings-toggle-row" hidden={!matches('display.assistantAlwaysOnTop')}>
+            <div className="settings-choice-label"><label htmlFor="assistant-always-on-top">{copy.assistantPin}</label></div>
+            <input type="checkbox" className="setting-toggle" id="assistant-always-on-top" checked={assistantPinSupported && settings.assistantAlwaysOnTop}
+              disabled={!assistantPinSupported} aria-describedby={!assistantPinSupported || appearanceError === 'assistantAlwaysOnTop' ? 'assistant-pin-detail' : undefined}
+              onChange={event => void updateAppearance('assistantAlwaysOnTop', event.target.checked)} />
+            {!assistantPinSupported && <small id="assistant-pin-detail">{copy.pinUnavailable}</small>}
+            {assistantPinSupported && appearanceError === 'assistantAlwaysOnTop' && <p id="assistant-pin-detail" className="settings-feedback error" role="alert">{copy.pinSaveFailed}</p>}
+          </div>
         </div>
       </section>
       <section hidden={!visible('dock')} aria-label={categoryTitle('dock')}>
@@ -236,11 +251,11 @@ export function SettingsView({ settings, updateStatus, onUpdate }: { settings: W
         })}
         </div>
         </details>
-        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.repositories')!, search, categories)}><ModuleRepositories preparation={preparation?.kind === 'module-repository' ? preparation : undefined} searchQuery={search} installedModules={moduleState.modules} moduleBusy={!!moduleBusy} onActivate={id => toggleModule(id, true)} /></div>
+        <div hidden={searching && !matchesSettingsEntry(settingsEntries.find(entry => entry.id === 'modules.repositories')!, search, categories)}><ModuleRepositories preparation={preparedFor('modules', 'module-repository')} searchQuery={search} installedModules={moduleState.modules} moduleBusy={!!moduleBusy} onActivate={id => toggleModule(id, true)} /></div>
       </section>
       {contributedSettings.filter(item => visitedModuleSettings.has(item.categoryId)).map(item => <section key={`${item.moduleId}:${item.id}`} hidden={!visible(item.categoryId)} aria-label={item.title}>
         {searching && <h3 className="settings-result-category">{item.title}</h3>}
-        <item.Component title={item.title} preparation={preparation} searchQuery={search} />
+        <item.Component title={item.title} suggestions={moduleSuggestions.filter(itemSuggestion => itemSuggestion.category === item.categoryId)} onDismissSuggestion={dismissModuleSuggestion} searchQuery={search} />
       </section>)}
     </main>
   </div>;

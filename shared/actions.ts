@@ -16,7 +16,7 @@ export type UiAction = z.infer<typeof uiActionSchema>;
 export type ActionResult = { state: WorkspaceState; message: string; requestedInput?: string };
 
 export function initialState(): WorkspaceState {
-  return { version: 1, sessions: [], activeSessionId: '', settings: { textSize: 'standard', dockAlwaysOnTop: true }, folder: 'Inbox', selectedMailId: 'm1', provider: 'Mock provider', windows: [
+  return { version: 1, sessions: [], activeSessionId: '', settings: { textSize: 'standard', dockAlwaysOnTop: true, assistantAlwaysOnTop: false }, folder: 'Inbox', selectedMailId: 'm1', provider: 'Mock provider', windows: [
     { id: 'mail', kind: 'mail', title: 'Mail', x: 72, y: 82, width: 650, height: 520, z: 1, minimized: false },
     { id: 'chat', kind: 'chat', title: 'Assistant', x: 620, y: 120, width: 530, height: 560, z: 2, minimized: false }
   ], mails: [

@@ -198,7 +198,7 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
   if (!state) return <div className="native-loading" role={error ? "alert" : "status"}>{error || copy.loading}</div>;
   const title = contributedView?.title ?? ({ mail: 'Mail', chat: 'Assistant', draft: copy.draft, files: copy.files, settings: copy.settings, sessions: 'Chats', dock: '', module: copy.module }[view] ?? 'OpenVibeDesk');
   return <div className={`native-panel native-${view} ${state.settings.textSize === 'large' ? 'large-text' : ''}`}>
-    <WindowChrome title={title} />
+    <WindowChrome title={title} assistantPinned={view === 'chat' && state.assistantPinSupported ? state.settings.assistantAlwaysOnTop : undefined} onError={setError} />
     <WorkspaceSaveNotice {...saveFeedback} />
     <div className="native-view-body">
     {ModuleComponent && <ModuleComponent title={contributedView.title} state={state} onAction={action} onError={setError} />}
@@ -209,7 +209,7 @@ function NativePanel({ state, error, setError }: { state: RendererWorkspaceState
     </div>}
     {view === 'chat' && <ChatView state={state} prompt={prompt} setPrompt={setPrompt} references={pendingReferences} referencesLoading={referencesLoading} referenceError={referenceError} onModuleReferenceDrop={reference => void referenceModuleResource(reference)} onRemoveModuleReference={removeModuleReference} onCancelModuleReferences={cancelReferenceRequests} emailReference={pendingEmail} emailLoading={emailLoading} emailError={emailError} onEmailDrop={id => void referenceEmail(id)} onRemoveEmail={removeEmail} sessionRef={sessionRef} setSessionRef={setSessionRef} composerLocked={locked} composerIssue={composer.issue} savedComposer={composer.host?.content} onResolveComposer={keep => { if (sessionId) void composer.resolve(sessionId, keep); }} onSend={() => void sendChat()} onStop={() => void window.workspace.cancelChat()} onAgentSettings={() => void window.workspace.openAgentSettings().catch(reason => setError(String(reason)))} onNew={() => void createChat()} onSessions={() => void action({ type: 'open_window', kind: 'sessions' })} onForkEdit={id => void forkMessage(id)} onReformulate={id => void reformulateMessage(id)} onContinue={id => void continueMessage(id)} sending={sending || !!state.presentation?.streamingSessionId} error={chatError} tier={tier} setTier={setTier} thinking={(tier === 'smart' ? state.ai?.smartThinking : state.ai?.simpleThinking) ?? 'off'} />}
     {view === 'sessions' && <SessionsView state={state} onCreate={() => void createChat()} onOpen={id => void openChat(id)} onRename={(id, title) => window.workspace.renameChatSession(id, title)} onReference={id => void window.workspace.referenceChatSession(id).catch(err => setError(String(err)))} />}
-    {view === 'settings' && <SettingsView settings={state.settings} updateStatus={updateStatus} onUpdate={patch => window.workspace.updateSettings(patch)} />}
+    {view === 'settings' && <SettingsView settings={state.settings} assistantPinSupported={state.assistantPinSupported} updateStatus={updateStatus} onUpdate={patch => window.workspace.updateSettings(patch)} />}
     </div>
     {error && <div className="native-error" role="alert"><span>{error}</span><button type="button" aria-label={copy.dismissError} title={copy.close} onClick={() => setError('')}><X size={15}/></button></div>}
   </div>;

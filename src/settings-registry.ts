@@ -15,7 +15,7 @@ export const barBehaviorEntry: SettingsEntry = { id: 'dock.behavior', category: 
 export const settingsCategories = [
   { id: 'ai', title: 'KI & Verbindung', description: 'Anbieter, Modelle und Workspace-Zugriff', order: 10 },
   { id: 'agent', title: 'Agent', description: 'Ausführung, Werkzeuglimits und Gesprächskontext', order: 20 },
-  { id: 'display', title: 'Darstellung', description: 'Sprache und Textgröße', order: 50 },
+  { id: 'display', title: 'Darstellung', description: 'Sprache, Textgröße und Fensterverhalten', order: 50 },
   { id: 'dock', title: 'OVD-Bar', description: 'Anordnung, Aussehen und Verhalten', order: 60 },
   { id: 'diagnostics', title: 'Diagnose', description: 'Fehler nachvollziehen und Protokolle exportieren', order: 90 },
   { id: 'updates', title: 'Updates', description: '', order: 95 },
@@ -25,7 +25,7 @@ export const settingsCategories = [
 const englishCategories: Record<CoreSettingsCategoryId, { title: string; description: string }> = {
   ai: { title: 'AI & connection', description: 'Providers, models and workspace access' },
   agent: { title: 'Agent', description: 'Execution, tool limits and conversation context' },
-  display: { title: 'Appearance', description: 'Language and text size' },
+  display: { title: 'Appearance', description: 'Language, text size and window behavior' },
   dock: { title: 'OVD-Bar', description: 'Layout, appearance and behavior' },
   diagnostics: { title: 'Diagnostics', description: 'Investigate errors and export logs' },
   updates: { title: 'Updates', description: '' },
@@ -47,6 +47,7 @@ export const settingsEntries = [
   { id: 'agent.transport', category: 'agent', title: 'Verbindung & Fehlerbehandlung', description: 'Anbieterwartezeit und Wiederholungen bei Übertragungsfehlern', keywords: 'agent verbindung anbieter provider wartezeit timeout request fehler übertragung wiederholung wiederholungen retry retries versuche streaming stream werkzeugantwort transport', defaultValue: { requestTimeoutSeconds: defaultAgentSettings.requestTimeoutSeconds, transportRetries: defaultAgentSettings.transportRetries }, apply: 'save' },
   { id: 'display.language', category: 'display', title: 'Oberflächensprache', description: 'Sprache der Bedienoberfläche', keywords: 'display language locale interface anzeigesprache systemsprache menüsprache übersetzung sprache deutsch german englisch english system auto automatic', defaultValue: defaultSettings.language, apply: 'immediate' },
   { id: 'display.textSize', category: 'display', title: 'Textgröße', description: 'Größerer Text für Mail, Chat und Entwürfe.', keywords: 'darstellung anzeige ansicht aussehen bildschirm schrift schriftgröße text textgröße groß größer klein lesbarkeit text size larger font readability', defaultValue: defaultSettings.textSize, apply: 'immediate' },
+  { id: 'display.assistantAlwaysOnTop', category: 'display', title: 'Assistent im Vordergrund halten', description: 'Assistentenfenster anheften', keywords: 'assistant agent chat fenster pin pinnen anpinnen fixieren lösen schwebend immer oben vordergrund keep assistant on top always above window unpin floating', defaultValue: defaultSettings.assistantAlwaysOnTop, apply: 'immediate' },
   barAppearanceEntry,
   barBehaviorEntry,
   { id: 'diagnostics.logging', category: 'diagnostics', title: 'Diagnoseprotokoll', description: 'Technische Abläufe aufzeichnen, Protokolle exportieren und leeren.', keywords: 'diagnose debugging debug log logs logging protokoll fehler fehlerbericht support azure foundry responses streaming schnittstelle verbindung anbieter export exportieren herunterladen leeren löschen aktivieren deaktivieren', defaultValue: false, apply: 'immediate' },

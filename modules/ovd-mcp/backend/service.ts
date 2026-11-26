@@ -3,7 +3,7 @@ import Ajv2020 from 'ajv/dist/2020';
 import Ajv2019 from 'ajv/dist/2019';
 import Ajv from 'ajv';
 import type { ValidateFunction } from 'ajv';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { CatalogClient } from './catalog-client';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -15,7 +15,7 @@ import { mcpAuditQuerySchema, mcpPermissionsSchema, mcpServerIdSchema, mcpServer
 import { McpConfigStore, mcpOAuthBinding, validateMcpUrl } from './store';
 import { McpOAuthSession } from './oauth';
 import { defaultUiLocale, type UiLocale } from '../../../shared/locale';
-import { connectFailureText } from '../connection-feedback';
+import { connectFailureText, permissionFeedback } from '../connection-feedback';
 
 // SDK v1 publishes the negotiated revision through this hook on both transports.
 // Its HTTP transport already stores it for subsequent request headers.
@@ -51,11 +51,32 @@ function classifyConnectFailure(error: unknown, initializing: boolean, cancelled
   return 'connection_failed';
 }
 
-type CachedTool = { name: string; info: McpToolInfo; validate?: ValidateFunction; fingerprint: string };
-type Connection = { id: string; generation: string; client: Client; transport: McpTransport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; secrets: string[]; oauth?: McpOAuthSession; abort: AbortController; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
+type CachedTool = { name: string; info: McpToolInfo; validate?: ValidateFunction };
+type Connection = { id: string; generation: string; client: CatalogClient; transport: McpTransport; status: McpServerSummary['status']; tools: Map<string, CachedTool>; catalogRevision?: string; catalogEpoch: number; secrets: string[]; oauth?: McpOAuthSession; abort: AbortController; error?: string; warning?: string; connectedAt?: string; refresh?: Promise<void> };
 type Host = { confirm(context: CapabilityContext, message: string, detail: string): Promise<boolean>; changed(): void; requestTimeoutMs?(): number; operationFingerprint?: string; openExternal?(url: string): Promise<void>; getLocale?(): UiLocale };
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const fold = (value: string) => value.normalize('NFKC').toLocaleLowerCase('de-DE');
+
+function definitionFingerprint(definition: Record<string, unknown>): string {
+  // JSON object members are unordered. Arrays retain their advertised order.
+  const canonical = JSON.stringify(definition, (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+  return hash('ovd-mcp-definition-v1\0' + canonical);
+}
+
+function savedApprovals(server: McpServerConfig) {
+  const approvals = new Map<string, string | null>(server.allowedTools.map(name => [name, null]));
+  for (const grant of server.reviewedTools) approvals.set(grant.name, grant.fingerprint);
+  return approvals;
+}
+
+function permissionState(tool: CachedTool, approvals: ReadonlyMap<string, string | null>): Pick<McpToolInfo, 'allowed' | 'reviewStatus'> {
+  const saved = approvals.get(tool.name);
+  if (saved === null) return { allowed: false, reviewStatus: 'legacy' };
+  if (saved === undefined) return { allowed: false };
+  if (!tool.validate || saved !== tool.info.fingerprint) return { allowed: false, reviewStatus: 'changed' };
+  return { allowed: true };
+}
 
 function hasRemoteReference(value: unknown, depth = 0): boolean {
   if (depth > 30) return true;
@@ -143,15 +164,14 @@ export class McpService {
         const offset = query.offset ?? 0, limit = query.limit ?? 6, hasMore = offset + limit < ranked.length;
         return { moduleId: query.moduleId, tools: ranked.slice(offset, offset + limit).map(item => item.tool), hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
       },
-      getTool: (moduleId, name) => this.toolsForModule(moduleId).find(tool => tool.name === name),
+      getTool: (moduleId, name) => this.toolsForModule(moduleId, name)[0],
       getOperationTool: binding => {
         const id = this.serverIdForModule(binding.moduleId), tool = this.requireConnection(id).tools.get(binding.action);
         return tool && this.allowed(id, tool) && this.operationBinding(id, tool).fingerprint === binding.fingerprint ? this.descriptor(id, tool) : undefined;
       },
       prepareOperation: async (moduleId, name, args, context) => {
         this.assertActive(context);
-        const id = this.serverIdForModule(moduleId), connection = this.requireConnection(id);
-        const tool = [...connection.tools.values()].find(item => this.allowed(id, item) && this.descriptor(id, item).name === name);
+        const id = this.serverIdForModule(moduleId), tool = this.findOfferedTool(id, name);
         if (!tool || !tool.validate!(args)) throw new Error('Die MCP-Funktion oder ihre Argumente sind nicht mehr in der freigegebenen Version verfügbar.');
         return { binding: this.operationBinding(id, tool), args: structuredClone(args), label: (tool.info.title ?? tool.name).slice(0, 120) };
       },
@@ -162,8 +182,7 @@ export class McpService {
         return { state: 'unknown', detail: 'Dieser MCP-Server bietet keinen verlässlichen Abgleich über die OVD-Aktions-ID. Bitte den tatsächlichen Status im verbundenen System prüfen; der Aufruf wird nicht wiederholt.' };
       },
       invoke: async (moduleId, name, args, context) => {
-        const id = this.serverIdForModule(moduleId), connection = this.requireConnection(id);
-        const tool = [...connection.tools.values()].find(tool => this.allowed(id, tool) && this.descriptor(id, tool).name === name);
+        const id = this.serverIdForModule(moduleId), tool = this.findOfferedTool(id, name);
         if (!tool) throw new Error('Dieses MCP-Werkzeug ist nicht mehr verbunden oder freigegeben. Bitte den Katalog neu laden.');
         return this.callTool(id, tool.name, args, context, name);
       }
@@ -171,6 +190,7 @@ export class McpService {
   }
   private assertActive(context?: CapabilityContext) { if (!this.active) throw new Error('Das MCP-Modul ist nicht verfügbar.'); context?.signal.throwIfAborted(); }
   private timeout() { return Math.max(1000, this.host.requestTimeoutMs?.() ?? 60000); }
+  private permissionText() { return permissionFeedback[this.host.getLocale?.() ?? defaultUiLocale]; }
   private audit(server: McpServerConfig, action: McpAuditEntry['action'], outcome: McpAuditEntry['outcome'], start: number, tool?: string) {
     this.audits.unshift({ id: randomUUID(), timestamp: new Date().toISOString(), serverId: server.id, serverName: server.name, action, outcome, durationMs: Date.now() - start, ...(tool ? { tool } : {}) }); this.audits.splice(100); this.host.changed();
   }
@@ -189,9 +209,13 @@ export class McpService {
       const error = connection?.error ?? (connectFailure && connectFailureText[this.host.getLocale?.() ?? defaultUiLocale][connectFailure]);
       const oauth = this.oauthStates.get(server.id);
       const status = connection?.status ?? (this.connecting.has(server.id) ? 'connecting' : error ? 'error' : 'disconnected');
+      const approvals = savedApprovals(server);
+      const tools = status === 'connected' && connection?.catalogRevision ? [...connection.tools.values()] : [];
+      const permissions = tools.map(tool => permissionState(tool, approvals));
       return {
-        ...server, status, toolCount: connection?.tools.size ?? 0,
-        allowedToolCount: [...(connection?.tools.values() ?? [])].filter(tool => this.allowed(server.id, tool)).length,
+        ...server, status, toolCount: tools.length, allowedToolCount: permissions.filter(row => row.allowed).length,
+        reviewRequiredCount: permissions.filter(row => row.reviewStatus).length,
+        ...(status === 'connected' && connection?.catalogRevision ? { catalogRevision: connection.catalogRevision } : {}),
         ...(status === 'connected' && connection?.transport.protocolVersion ? { protocolVersion: connection.transport.protocolVersion } : {}),
         ...(server.authMode === 'oauth' ? { oauthStatus: this.signingIn.has(server.id) ? 'signing_in' as const : oauth?.status ?? (server.hasOAuthTokens ? 'signed_in' as const : 'signed_out' as const), ...(oauth?.error ? { oauthError: oauth.error } : {}) } : {}),
         ...(connectFailure ? { connectFailure } : {}), ...(error ? { error } : {}),
@@ -299,7 +323,7 @@ export class McpService {
       this.assertActive(context);
       if (this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
       await this.close(id);
-      const client = new Client({ name: 'OpenVibeDesk', version: '0.1.0' }, { capabilities: {} });
+      const client = new CatalogClient({ name: 'OpenVibeDesk', version: '0.1.0' }, { capabilities: {} });
       let transport: McpTransport;
       if (server.transport === 'stdio') {
         const env = getDefaultEnvironment();
@@ -331,12 +355,16 @@ export class McpService {
       }
       this.assertActive(context);
       if (this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
-      connection = { id, generation: randomUUID(), client, transport, status: 'connecting', tools: new Map(), secrets: secretValues, abort, ...(oauth ? { oauth } : {}) };
+      connection = { id, generation: randomUUID(), client, transport, status: 'connecting', tools: new Map(), catalogEpoch: 0, secrets: secretValues, abort, ...(oauth ? { oauth } : {}) };
       this.connections.set(id, connection); this.host.changed();
       const current = connection;
       client.onclose = () => { if (this.connections.get(id) === current) { current.status = current.status === 'error' ? 'error' : 'disconnected'; current.tools.clear(); this.host.changed(); } };
       client.onerror = () => { if (this.connections.get(id) === current && current.status === 'connected') { current.status = 'error'; current.error = 'Die MCP-Verbindung wurde unterbrochen. Laufende Aufrufe werden nicht automatisch wiederholt.'; current.tools.clear(); this.host.changed(); void current.client.close().catch(() => {}); } };
-      client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { if (this.connections.get(id) === current && current.status === 'connected') try { await this.refresh(id, new AbortController().signal); } catch { current.warning = 'Der Werkzeugkatalog konnte nicht aktualisiert werden. Bitte erneut laden.'; this.host.changed(); } });
+      client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+        if (this.connections.get(id) !== current || current.status !== 'connected') return;
+        current.catalogEpoch++;
+        await this.refresh(id, current.abort.signal).catch(() => { /* Refresh publishes the unavailable catalog. */ });
+      });
       await client.connect(transport, { signal: abort.signal, timeout: this.timeout() });
       this.assertActive(context);
       if (this.connections.get(id) !== connection || this.lifecycle !== lifecycle || this.connecting.get(id) !== attempt) throw new Error('MCP_CONNECTION_CHANGED');
@@ -355,64 +383,112 @@ export class McpService {
       throw new Error(connectFailureText[this.host.getLocale?.() ?? defaultUiLocale][issue]);
     } finally { context.signal.removeEventListener('abort', cancel); if (!connection || this.connections.get(id) !== connection) { abort.abort(); oauth?.dispose(); } if (this.connectControllers.get(id) === abort) this.connectControllers.delete(id); if (this.connecting.get(id) === attempt) this.connecting.delete(id); this.host.changed(); }
   }
-  async refresh(id: string, signal: AbortSignal) {
+  private async readCatalog(connection: Connection, signal: AbortSignal) {
+    const tools = new Map<string, CachedTool>(), seen = new Set<string>(); let cursor: string | undefined, limited = false;
+    for (let page = 0; page < 25; page++) {
+      signal.throwIfAborted();
+      const result = await connection.client.listTools(cursor ? { cursor } : {}, { signal, timeout: this.timeout() });
+      for (const raw of result.tools) {
+        if (tools.size >= 500) { limited = true; break; }
+        if (!raw.name || raw.name.length > 200) continue;
+        if (tools.has(raw.name)) throw new Error(this.permissionText().duplicate);
+        const encoded = JSON.stringify(raw.inputSchema);
+        if (containsSecret(raw.name, connection.secrets)) { limited = true; continue; }
+        let reason: string | undefined, validate: ValidateFunction | undefined;
+        const { name, title, description, inputSchema, outputSchema, annotations, execution } = raw;
+        const definition = { name, title, description, inputSchema, outputSchema, annotations, execution };
+        const privateMetadata = containsSecret(definition, connection.secrets);
+        const incomplete = connection.client.incompleteDefinitions.has(raw);
+        const reviewable = !incomplete && !privateMetadata && JSON.stringify(definition).length <= 48000;
+        const fingerprint = reviewable ? definitionFingerprint(definition) : '';
+        const previous = connection.tools.get(name);
+        if (previous?.validate && fingerprint === previous.info.fingerprint) {
+          tools.set(name, previous);
+          continue;
+        }
+        if (privateMetadata) reason = 'Die Werkzeugmetadaten enthalten geschützte Werte und werden nicht angeboten.';
+        else if (incomplete) reason = this.permissionText().incomplete;
+        else if (!reviewable) reason = this.permissionText().largeDefinition;
+        else if (execution?.taskSupport === 'required') reason = this.permissionText().requiresTask;
+        else if (encoded.length > 12000) reason = 'Das Eingabeschema überschreitet 12.000 Zeichen.';
+        else if (hasRemoteReference(raw.inputSchema)) reason = 'Nur lokale Schema-Referenzen werden unterstützt.';
+        else try {
+          const dialect = raw.inputSchema.$schema;
+          let validator: Ajv | Ajv2019 | Ajv2020 = this.ajv2020, canonical: string | undefined;
+          if (dialect !== undefined) {
+            if (typeof dialect !== 'string') throw new Error('MCP_SCHEMA_DIALECT');
+            if (/^https?:\/\/json-schema\.org\/draft-07\/schema#?$/.test(dialect)) { validator = this.ajv07; canonical = 'http://json-schema.org/draft-07/schema#'; }
+            else if (/^https?:\/\/json-schema\.org\/draft\/2019-09\/schema#?$/.test(dialect)) { validator = this.ajv2019; canonical = 'https://json-schema.org/draft/2019-09/schema'; }
+            else if (/^https?:\/\/json-schema\.org\/draft\/2020-12\/schema#?$/.test(dialect)) canonical = 'https://json-schema.org/draft/2020-12/schema';
+            else throw new Error('MCP_SCHEMA_DIALECT');
+          }
+          // Normalize the equivalent dialect URI for compilation only. The
+          // offered schema and its fingerprint remain exactly as advertised.
+          const schema = canonical ? { ...inputSchema, $schema: canonical } : inputSchema;
+          try { validate = validator.compile(schema); } finally { validator.removeSchema(schema); }
+          if ((validate as ValidateFunction & { $async?: boolean }).$async) { validate = undefined; reason = 'Asynchrone Eingabeschemas werden nicht unterstützt.'; }
+        } catch (error) { reason = error instanceof Error && error.message === 'MCP_SCHEMA_DIALECT' ? 'Unterstützt werden JSON-Schema Draft-07, 2019-09 und 2020-12.' : 'Dieses Eingabeschema wird noch nicht unterstützt.'; }
+        const info: McpToolInfo = {
+          name, ...(!privateMetadata && title ? { title: title.slice(0, 200) } : {}),
+          description: privateMetadata ? 'Werkzeugmetadaten wurden zum Schutz gespeicherter Zugangsdaten ausgeblendet.' : (description ?? '').slice(0, 1600),
+          inputSchema: reason ? { type: 'object', properties: {} } : inputSchema, readOnly: annotations?.readOnlyHint === true,
+          allowed: false, supported: !!validate, ...(reason ? { reason } : {}), ...(reviewable ? { definition } : {}),
+          fingerprint
+        };
+        tools.set(name, { name, info, validate });
+      }
+      if (!result.nextCursor || limited) { cursor = undefined; break; }
+      if (seen.has(result.nextCursor)) throw new Error('MCP_LIST_CURSOR_LOOP');
+      seen.add(result.nextCursor); cursor = result.nextCursor;
+      if (page === 24) limited = true;
+    }
+    return { tools, limited };
+  }
+  async refresh(id: string, signal: AbortSignal, invalidate = true) {
     const connection = this.requireConnection(id);
+    if (invalidate) connection.catalogRevision = undefined;
     if (connection.refresh) return connection.refresh;
     const operation = (async () => {
-      const tools = new Map<string, CachedTool>(), seen = new Set<string>(); let cursor: string | undefined, limited = false;
-      for (let page = 0; page < 25; page++) {
-        signal.throwIfAborted();
-        const result = await connection.client.listTools(cursor ? { cursor } : {}, { signal, timeout: this.timeout() });
-        for (const raw of result.tools) {
-          if (tools.size >= 500) { limited = true; break; }
-          if (raw.name.length > 200 || tools.has(raw.name)) continue;
-          const encoded = JSON.stringify(raw.inputSchema);
-          if (containsSecret(raw.name, connection.secrets)) { limited = true; continue; }
-          let reason: string | undefined, validate: ValidateFunction | undefined;
-          const privateMetadata = containsSecret(raw.inputSchema, connection.secrets) || containsSecret(raw.description ?? '', connection.secrets) || containsSecret(raw.title ?? '', connection.secrets);
-          if (privateMetadata) reason = 'Die Werkzeugmetadaten enthalten geschützte Werte und werden nicht angeboten.';
-          else if (encoded.length > 12000) reason = 'Das Eingabeschema überschreitet 12.000 Zeichen.';
-          else if (hasRemoteReference(raw.inputSchema)) reason = 'Nur lokale Schema-Referenzen werden unterstützt.';
-          else try {
-            const dialect = raw.inputSchema.$schema;
-            let validator: Ajv | Ajv2019 | Ajv2020 = this.ajv2020, canonical: string | undefined;
-            if (dialect !== undefined) {
-              if (typeof dialect !== 'string') throw new Error('MCP_SCHEMA_DIALECT');
-              if (/^https?:\/\/json-schema\.org\/draft-07\/schema#?$/.test(dialect)) { validator = this.ajv07; canonical = 'http://json-schema.org/draft-07/schema#'; }
-              else if (/^https?:\/\/json-schema\.org\/draft\/2019-09\/schema#?$/.test(dialect)) { validator = this.ajv2019; canonical = 'https://json-schema.org/draft/2019-09/schema'; }
-              else if (/^https?:\/\/json-schema\.org\/draft\/2020-12\/schema#?$/.test(dialect)) canonical = 'https://json-schema.org/draft/2020-12/schema';
-              else throw new Error('MCP_SCHEMA_DIALECT');
-            }
-            // Normalize the equivalent dialect URI for compilation only. The
-            // offered schema and its fingerprint remain exactly as advertised.
-            validate = validator.compile(canonical ? { ...JSON.parse(encoded), $schema: canonical } : JSON.parse(encoded));
-            if ((validate as ValidateFunction & { $async?: boolean }).$async) { validate = undefined; reason = 'Asynchrone Eingabeschemas werden nicht unterstützt.'; }
-          } catch (error) { reason = error instanceof Error && error.message === 'MCP_SCHEMA_DIALECT' ? 'Unterstützt werden JSON-Schema Draft-07, 2019-09 und 2020-12.' : 'Dieses Eingabeschema wird noch nicht unterstützt.'; }
-          const info: McpToolInfo = { name: raw.name, ...(!privateMetadata && raw.title ? { title: raw.title.slice(0, 200) } : {}), description: privateMetadata ? 'Werkzeugmetadaten wurden zum Schutz gespeicherter Zugangsdaten ausgeblendet.' : (raw.description ?? '').slice(0, 1600), inputSchema: reason ? { type: 'object', properties: {} } : JSON.parse(encoded), allowed: this.store.get(id).allowedTools.includes(raw.name), supported: !!validate, ...(reason ? { reason } : {}), readOnly: raw.annotations?.readOnlyHint === true };
-          tools.set(raw.name, { name: raw.name, info, validate, fingerprint: hash(JSON.stringify(info)) });
-        }
-        if (!result.nextCursor || limited) { cursor = undefined; break; }
-        if (seen.has(result.nextCursor)) throw new Error('MCP_LIST_CURSOR_LOOP');
-        seen.add(result.nextCursor); cursor = result.nextCursor;
-        if (page === 24) limited = true;
+      // A list-changed notification can arrive between inventory pages.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const epoch = connection.catalogEpoch;
+        const { tools, limited } = await this.readCatalog(connection, signal);
+        this.assertActive();
+        if (this.requireConnection(id) !== connection) throw new Error('MCP_CONNECTION_CHANGED');
+        if (epoch !== connection.catalogEpoch) continue;
+        connection.tools = tools;
+        connection.catalogRevision = hash(JSON.stringify([connection.generation, [...tools.values()].map(tool => [tool.name, tool.info.fingerprint, tool.info.reason])]));
+        connection.warning = limited ? 'Der Werkzeugkatalog wurde auf 500 Werkzeuge beziehungsweise 25 Seiten begrenzt oder enthält nicht übertragbare Metadaten.' : undefined;
+        return;
       }
-      this.assertActive();
-      if (this.connections.get(id) !== connection || connection.status !== 'connected') throw new Error('Die MCP-Verbindung wurde beim Laden geändert.');
-      connection.tools = tools; connection.warning = limited ? 'Der Werkzeugkatalog wurde auf 500 Werkzeuge beziehungsweise 25 Seiten begrenzt oder enthält nicht übertragbare Metadaten.' : undefined;
-      this.host.changed();
+      throw new Error(this.permissionText().catalogChanged);
     })();
     connection.refresh = operation;
-    try { await operation; } finally { if (connection.refresh === operation) connection.refresh = undefined; }
+    try { await operation; }
+    catch (error) { connection.catalogRevision = undefined; connection.tools.clear(); connection.warning = this.permissionText().refreshFailed; throw error; }
+    finally { connection.refresh = undefined; this.host.changed(); }
+  }
+  private async checkCurrentCatalog(id: string, signal: AbortSignal) {
+    const connection = this.requireConnection(id);
+    if (!connection.client.getServerCapabilities()?.tools?.listChanged) await this.refresh(id, signal, false);
+    else if (connection.refresh) await connection.refresh;
   }
   async listTools(raw: McpToolQuery, context: CapabilityContext) {
     this.assertActive(context); const query = mcpToolQuerySchema.parse(raw);
+    const connection = this.requireConnection(query.serverId);
     if (query.refresh) await this.refresh(query.serverId, context.signal);
-    const connection = this.requireConnection(query.serverId), terms = fold(query.query ?? '').split(/\s+/).filter(Boolean);
-    const all = [...connection.tools.values()].map(tool => ({ ...tool.info, allowed: this.store.get(query.serverId).allowedTools.includes(tool.name) })).filter(tool => !terms.length || terms.some(term => fold(`${tool.name} ${tool.description}`).includes(term)));
+    else if (connection.refresh) await connection.refresh;
+    this.assertActive(context);
+    if (!connection.catalogRevision || this.requireConnection(query.serverId) !== connection) throw new Error(this.permissionText().refreshFailed);
+    const terms = fold(query.query ?? '').split(/\s+/).filter(Boolean);
+    const server = this.store.get(query.serverId), approvals = savedApprovals(server);
+    const all = [...connection.tools.values()].map(tool => ({ ...tool.info, ...permissionState(tool, approvals) }))
+      .filter(tool => !terms.length || terms.some(term => fold(`${tool.name} ${tool.description}`).includes(term)))
+      .sort((a, b) => Number(!!b.reviewStatus) - Number(!!a.reviewStatus));
     const offset = query.offset ?? 0, limit = query.limit ?? 25, tools: McpToolInfo[] = []; let next = offset;
-    while (next < all.length && tools.length < limit && JSON.stringify([...tools, all[next]]).length < 25000) tools.push(all[next++]);
+    while (next < all.length && tools.length < limit && (!tools.length || JSON.stringify([...tools, all[next]]).length < 25000)) tools.push(all[next++]);
     const hasMore = next < all.length;
-    return { serverId: query.serverId, tools, total: all.length, hasMore, ...(hasMore ? { nextOffset: next } : {}), observedAt: new Date().toISOString() };
+    return { serverId: query.serverId, tools, total: all.length, hasMore, ...(hasMore ? { nextOffset: next } : {}), observedAt: new Date().toISOString(), catalogRevision: connection.catalogRevision, permissionRevision: server.permissionRevision };
   }
   async saveServer(raw: McpServerInput, context: CapabilityContext) {
     this.assertActive(context);
@@ -420,11 +496,8 @@ export class McpService {
     const input = mcpServerInputSchema.parse(raw);
     if (input.transport === 'http') input.url = validateMcpUrl(input.url!);
     const old = input.id ? this.store.get(input.id) : undefined;
-    const selected = input.allowedTools ?? [], known = new Set([...(this.connections.get(input.id ?? '')?.tools.values() ?? [])].filter(tool => tool.validate).map(tool => tool.name));
-    if (selected.some(name => !old?.allowedTools.includes(name) && !known.has(name))) throw new Error('Neue Werkzeugfreigaben erst nach dem Verbinden aus dem tatsächlichen Katalog auswählen.');
     if (old) { if (this.changing.has(old.id) || this.connecting.has(old.id) || this.signingIn.has(old.id)) throw new Error('Für diesen MCP-Server läuft bereits ein Vorgang.'); this.changing.add(old.id); }
-    const targetChanged = old && JSON.stringify([old.transport, old.command, old.args, old.cwd, old.url]) !== JSON.stringify([input.transport, input.command, input.args ?? [], input.cwd, input.url]);
-    try { if (old) await this.close(old.id); const result = await this.store.save(targetChanged ? { ...input, allowedTools: [] } : input); this.errors.delete(result.id); this.oauthStates.delete(result.id); this.host.changed(); return this.listServers().find(server => server.id === result.id)!; }
+    try { if (old) await this.close(old.id); const result = await this.store.save(input); this.errors.delete(result.id); this.oauthStates.delete(result.id); this.host.changed(); return this.listServers().find(server => server.id === result.id)!; }
     finally { if (old) this.changing.delete(old.id); }
   }
   async removeServer(id: string, context: CapabilityContext) {
@@ -436,22 +509,55 @@ export class McpService {
   async permissions(raw: McpToolPermissions, context: CapabilityContext) {
     this.assertActive(context);
     if (context.origin !== 'ui') throw new Error('MCP-Werkzeugrechte können nur in den Einstellungen gespeichert werden.');
-    const input = mcpPermissionsSchema.parse(raw), old = this.store.get(input.serverId), connection = this.connections.get(input.serverId);
-    for (const name of input.allowedTools) if (!old.allowedTools.includes(name) && (!connection || connection.status !== 'connected' || !connection.tools.get(name)?.validate)) throw new Error('Nur unterstützte Werkzeuge aus dem verbundenen Serverkatalog können freigegeben werden.');
-    await this.store.permissions(input.serverId, input.allowedTools); this.host.changed(); return this.listServers().find(server => server.id === input.serverId)!;
+    const input = mcpPermissionsSchema.parse(raw), id = input.serverId;
+    try {
+      if (input.changes.some(change => change.fingerprint !== null)) await this.checkCurrentCatalog(id, context.signal);
+      await this.store.permissions(input, () => {
+        this.assertActive(context);
+        const connection = this.connections.get(id);
+        for (const { name, fingerprint } of input.changes) {
+          if (fingerprint === null) continue;
+          const tool = connection?.tools.get(name);
+          if (this.changing.has(id) || connection?.status !== 'connected' || !connection.catalogRevision || !tool?.validate || tool.info.fingerprint !== fingerprint) throw new Error(this.permissionText().catalogChanged);
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'MCP_PERMISSION_REVISION_CHANGED') throw new Error(this.permissionText().permissionsChanged);
+      if (error instanceof Error && error.message === 'MCP_PERMISSION_LIMIT') throw new Error(this.permissionText().limit);
+      throw error;
+    }
+    this.host.changed(); return this.listServers().find(server => server.id === id)!;
   }
   auditPage(raw: McpAuditQuery = {}): McpAuditPage { const query = mcpAuditQuerySchema.parse(raw), entries = this.audits.filter(entry => !query.serverId || entry.serverId === query.serverId), offset = query.offset ?? 0, limit = query.limit ?? 30, hasMore = offset + limit < entries.length; return { entries: entries.slice(offset, offset + limit), total: entries.length, hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) }; }
-  private allowed(id: string, tool: CachedTool) { return !!tool.validate && this.store.get(id).allowedTools.includes(tool.name); }
-  private descriptor(id: string, tool: CachedTool): ModuleToolDescriptor {
-    const connection = this.requireConnection(id), config = this.store.get(id), revision = hash(`${connection.generation}\0${JSON.stringify(config)}\0${tool.fingerprint}`);
-    return { name: `mcp_${hash(id).slice(0, 10)}_${revision.slice(0, 32)}`, description: tool.info.description || `MCP-Werkzeug ${tool.name}.`, parameters: JSON.parse(JSON.stringify(tool.info.inputSchema)), label: (tool.info.title ?? tool.name).slice(0, 120) };
+  private allowed(id: string, tool: CachedTool) { return !!this.connections.get(id)?.catalogRevision && !!tool.validate && this.store.get(id).reviewedTools.some(row => row.name === tool.name && row.fingerprint === tool.info.fingerprint); }
+  private offerName(connection: Connection, config: McpServerConfig, tool: CachedTool) {
+    const revision = hash([connection.generation, config.permissionRevision, tool.info.fingerprint].join('\0'));
+    return `mcp_${hash(config.id).slice(0, 10)}_${revision.slice(0, 32)}`;
+  }
+  private descriptor(id: string, tool: CachedTool, offered = this.offerName(this.requireConnection(id), this.store.get(id), tool)): ModuleToolDescriptor {
+    return { name: offered, description: tool.info.description || `MCP-Werkzeug ${tool.name}.`, parameters: structuredClone(tool.info.inputSchema), label: (tool.info.title ?? tool.name).slice(0, 120) };
   }
   private operationBinding(id: string, tool: CachedTool): OperationBinding {
     // Reconnecting changes the offered name, not the durable logical action.
-    return { moduleId: `ovd-mcp.${id}`, action: tool.name, fingerprint: hash(`ovd-mcp-operation-v1\0${this.host.operationFingerprint ?? 'unversioned'}\0${JSON.stringify(this.store.get(id))}\0${tool.fingerprint}`), effect: 'unknown' };
+    return { moduleId: `ovd-mcp.${id}`, action: tool.name, fingerprint: hash(`ovd-mcp-operation-v2\0${this.host.operationFingerprint ?? 'unversioned'}\0${JSON.stringify(this.store.get(id))}\0${tool.info.fingerprint}`), effect: 'unknown' };
   }
   private serverIdForModule(moduleId: string) { if (!moduleId.startsWith('ovd-mcp.')) throw new Error('Unbekannte MCP-Quelle.'); return mcpServerIdSchema.parse(moduleId.slice('ovd-mcp.'.length)); }
-  private toolsForModule(moduleId: string): ModuleToolDescriptor[] { const id = this.serverIdForModule(moduleId), connection = this.connections.get(id); if (!this.active || !connection || connection.status !== 'connected' || this.changing.has(id)) return []; return [...connection.tools.values()].filter(tool => this.allowed(id, tool)).map(tool => this.descriptor(id, tool)); }
+  private findOfferedTool(id: string, name: string) {
+    const connection = this.requireConnection(id), config = this.store.get(id), approvals = savedApprovals(config);
+    if (!connection.catalogRevision) return;
+    return [...connection.tools.values()].find(tool => permissionState(tool, approvals).allowed && this.offerName(connection, config, tool) === name);
+  }
+  private toolsForModule(moduleId: string, name?: string): ModuleToolDescriptor[] {
+    const id = this.serverIdForModule(moduleId), connection = this.connections.get(id);
+    if (!this.active || connection?.status !== 'connected' || !connection.catalogRevision || this.changing.has(id)) return [];
+    const server = this.store.get(id), approvals = savedApprovals(server), result: ModuleToolDescriptor[] = [];
+    for (const tool of connection.tools.values()) {
+      if (!permissionState(tool, approvals).allowed) continue;
+      const offered = this.offerName(connection, server, tool);
+      if (!name || name === offered) result.push(this.descriptor(id, tool, offered));
+    }
+    return result;
+  }
   private sourceModules(): ModuleSummary[] { if (!this.active) return []; return this.listServers().filter(server => server.status === 'connected' && server.allowedToolCount > 0).map(server => ({ id: `ovd-mcp.${server.id}`, title: server.name, description: server.description || 'Verbundener MCP-Server mit ausdrücklich freigegebenen Werkzeugen.' })); }
   async callTool(id: string, name: string, args: unknown, context: CapabilityContext, expectedName?: string): Promise<McpCallResult> {
     this.assertActive(context); const server = this.store.get(id), connection = this.requireConnection(id), tool = connection.tools.get(name), start = Date.now();
@@ -464,7 +570,7 @@ export class McpService {
     }
     this.assertActive(context);
     const current = this.requireConnection(id), currentTool = current.tools.get(name);
-    if (current !== connection || !currentTool || !this.allowed(id, currentTool) || this.descriptor(id, currentTool).name !== offered) throw new Error('MCP-Verbindung, Schema oder Freigabe wurden geändert. Bitte das Werkzeug neu laden.');
+    if (current !== connection || !currentTool || !this.allowed(id, currentTool) || this.descriptor(id, currentTool).name !== offered) throw new Error(this.permissionText().offerChanged);
     let sent = false;
     try {
       // Refresh before dispatch, without ever replaying a failed MCP request.
@@ -475,9 +581,13 @@ export class McpService {
       await context.validateOperation?.();
       await context.beforeDispatch?.();
       await context.validateOperation?.();
+      await this.checkCurrentCatalog(id, context.signal);
       this.assertActive(context);
       const latest = this.requireConnection(id), latestTool = latest.tools.get(name);
-      if (latest !== connection || !latestTool || !this.allowed(id, latestTool) || this.descriptor(id, latestTool).name !== offered) throw new Error('MCP-Verbindung, Schema oder Freigabe wurden während der Speicherung geändert. Es wurde kein MCP-Aufruf gestartet.');
+      if (latest !== connection || !latestTool || !this.allowed(id, latestTool) || this.descriptor(id, latestTool).name !== offered) {
+        this.audit(server, 'call', 'failed', start, name);
+        return callResult(id, name, 'failed', [], undefined, this.permissionText().offerChanged);
+      }
       context.signal.throwIfAborted(); sent = true;
       const result = await connection.client.callTool({ name, arguments: args as Record<string, unknown> }, undefined, { signal: context.signal, timeout: this.timeout(), resetTimeoutOnProgress: false });
       const outcome = result.isError === true ? 'failed' : 'completed'; this.audit(server, 'call', outcome, start, name); return callResult(id, name, outcome, connection.secrets, result);

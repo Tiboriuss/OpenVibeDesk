@@ -11,7 +11,7 @@ A **source** is a configured GitHub repository or HTTPS catalog endpoint. Its **
 | Bundled Assistant, Mail, Files and MCP | Included with the app; the Assistant is required and the other three are optional. | Install a newer OVD release. Repositories cannot replace these modules. |
 | Downloaded module | Select a package from a configured source, install it, then approve and activate its code. | Refresh the catalog, select the advertised newer version, then approve the changed code. |
 | Module under local development | Copy a complete module folder into the profile's `modules/` directory and restart OVD. | Update the local files and restart; changed code needs new approval. |
-| MCP server | Configure a server and approve its tools in the bundled MCP module. | Managed separately from module packages; see the [MCP guide](../modules/ovd-mcp/README.md). |
+| MCP server | Configure a connection in **Settings → MCP** and approve the tool definitions you want to use. | The server supplies its tool catalog. Changed definitions appear for review. [MCP tool permissions](../modules/ovd-mcp/README.md#reviewing-tool-changes) |
 
 Repository catalogs and unused tool schemas stay out of normal chat requests. The Assistant first finds a matching installed module, then loads only the tools it needs. Repository discovery is a separate, explicit operation.
 
@@ -57,7 +57,7 @@ The source editor preserves unsaved inputs across category changes and settings 
 
 ## Private company repositories
 
-For GitHub, the user must have access to the repository. Create a fine-grained personal access token restricted to the intended repository, with **Contents: Read-only**, and enter it in the source's **Zugriffstoken** field. Organization approval or SSO requirements may also apply. Public repositories need no token; GitHub API rate limits still apply. OVD reads the default branch through GitHub's [commits](https://docs.github.com/en/rest/commits/commits#list-commits), [Git trees](https://docs.github.com/en/rest/git/trees#get-a-tree) and [Git blobs](https://docs.github.com/en/rest/git/blobs#get-a-blob) APIs, which support this read permission.
+For GitHub, the user must have access to the repository. Create a fine-grained personal access token restricted to the intended repository, with **Contents: Read-only**, and enter it in the source's **Access token** field. Organization approval or SSO requirements may also apply. Public repositories need no token; GitHub API rate limits still apply. OVD reads the default branch through GitHub's [commits](https://docs.github.com/en/rest/commits/commits#list-commits), [Git trees](https://docs.github.com/en/rest/git/trees#get-a-tree) and [Git blobs](https://docs.github.com/en/rest/git/blobs#get-a-blob) APIs, which support this read permission.
 
 Tokens are stored in the local encrypted credential store, separately from `module-repositories.json`. The renderer receives only a token-present flag after saving. Tokens are not returned through assistant tools or included in workspace/chat state. HTTPS catalogs use the optional token as a Bearer token. Requests and package files must remain on the configured origin; redirects are rejected. Do not put credentials in URLs. Normal system TLS validation applies.
 
@@ -148,12 +148,12 @@ Current bounds are 50 sources, 200 module listings per source, a 2 MiB catalog r
 
 | What you see | Meaning and next step |
 | --- | --- |
-| **Noch nicht geladen** | The source is saved but has no loaded catalog in this session. Select **Load catalog**. |
+| **Not loaded yet** | The source is saved but has no loaded catalog in this session. Select **Load catalog**. |
 | A source error with older entries still visible | A refresh failed. Older entries are retained for context, but installation from that source is blocked until it loads successfully. |
-| **Verfügbar** | The module is not installed. Choose **Install**, then approve and activate it. |
-| **Installiert** / approval required | Files are present but code is awaiting approval. Use **Approve and enable**. |
-| **Nicht kompatibel** | The catalog advertises an unsupported module API. Check the module's host requirements. Newer manifest fields can also be rejected during package validation. |
-| **Konflikt mit installiertem Modul** | That ID is already local, owned by another source, installed in another folder or modified locally. OVD preserves it instead of overwriting it. Use a distinct ID for a development fork. |
+| **Available** | The module is not installed. Choose **Install**, then approve and activate it. |
+| **Installed** / approval required | Files are present but code is awaiting approval. Use **Approve and enable**. |
+| **Incompatible** | The catalog advertises an unsupported module API. Check the module's host requirements. Newer manifest fields can also be rejected during package validation. |
+| **Conflicts with an installed module** | That ID is already local, owned by another source, installed in another folder or modified locally. OVD preserves it instead of overwriting it. Use a distinct ID for a development fork. |
 | Access denied or HTTP 404 | Check the URL, default-branch catalog, token access/expiry and any organization approval. GitHub may also return an access error for a rate limit. |
 | Checksum mismatch or missing package file | The published files do not match the catalog. Ask the publisher to publish a consistent new version; the existing installation remains intact. |
 | Module is busy | Let its active operation finish and save open edits, then retry the update deliberately. |

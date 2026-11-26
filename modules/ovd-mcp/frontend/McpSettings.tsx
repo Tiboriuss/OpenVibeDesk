@@ -1,7 +1,7 @@
 import { connectFailureText } from '../connection-feedback';
 import { useUiLocale } from '../../../src/locale';
 import { mcpText } from './mcp-locale';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, CircleAlert, CircleCheck, Cable, ExternalLink, LoaderCircle, LogOut, Plus, RefreshCw, Server, Trash2, Unplug, X } from 'lucide-react';
 import { mcpServerInputSchema, type McpAuditEntry, type McpPrepareRequest, type McpServerInput, type McpServerSummary, type McpToolInfo, type McpToolPage } from '../../../shared/mcp';
 import './mcp-settings.css';
@@ -9,6 +9,11 @@ import './mcp-settings.css';
 type FormValues = { name: string; description: string; transport: 'stdio' | 'http'; command: string; args: string; cwd: string; url: string; autoConnect: boolean; token: string; clearToken: boolean; env: string; removeEnvKeys: string[]; authMode: 'none' | 'bearer' | 'oauth'; oauthClientId: string; oauthClientAuthMethod: 'auto' | 'client_secret_basic' | 'client_secret_post'; oauthIssuer: string; oauthAuthorizationUrl: string; oauthTokenUrl: string; oauthScopes: string; oauthRedirectPort: string; oauthClientSecret: string; clearOAuthClientSecret: boolean };
 type FormStatus = 'clean' | 'dirty' | 'busy';
 type ServerNotice = 'review' | 'serverSaved' | 'permissionsSaved' | 'discarded' | 'signInCancelled' | 'didDisconnect' | 'didConnect' | 'signedInConnected' | 'didSignIn' | 'didSignOut' | 'didReset';
+type PermissionDraft = { revision: string; changes: Map<string, string | null> };
+function stageTool(changes: Map<string, string | null>, tool: McpToolInfo, checked: boolean) {
+  if (checked === tool.allowed) changes.delete(tool.name);
+  else changes.set(tool.name, checked ? tool.fingerprint : null);
+}
 type Prepared = { token: number; values: McpPrepareRequest['values'] };
 const newKey = 'new-server';
 const openStorageKey = 'openvibedesk.settings.mcpGroups';
@@ -17,7 +22,6 @@ const message = (reason: unknown) => {
   const text = reason instanceof Error ? reason.message : String(reason);
   return text.replace(/^Error invoking remote method (['"])mcp:[^'"]+\1:\s*(?:Error:\s*)?/, '');
 };
-const sameNames = (a: readonly string[], b: readonly string[]) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
 const toForm = (server?: McpServerSummary): FormValues => ({ name: server?.name ?? '', description: server?.description ?? '', transport: server?.transport ?? 'stdio', command: server?.command ?? '', args: server?.args.join('\n') ?? '', cwd: server?.cwd ?? '', url: server?.url ?? '', autoConnect: server?.autoConnect ?? false, token: '', clearToken: false, env: '', removeEnvKeys: [], authMode: server?.authMode ?? (server?.hasToken ? 'bearer' : 'none'), oauthClientId: server?.oauthClientId ?? '', oauthClientAuthMethod: server?.oauthClientAuthMethod ?? 'auto', oauthIssuer: server?.oauthIssuer ?? '', oauthAuthorizationUrl: server?.oauthAuthorizationUrl ?? '', oauthTokenUrl: server?.oauthTokenUrl ?? '', oauthScopes: server?.oauthScopes ?? '', oauthRedirectPort: String(server?.oauthRedirectPort ?? 43189), oauthClientSecret: '', clearOAuthClientSecret: false });
 function loadOpen(): Record<string, boolean> {
   try { const stored: unknown = JSON.parse(localStorage.getItem(openStorageKey) ?? '{}'); if (stored && typeof stored === 'object' && !Array.isArray(stored)) return Object.fromEntries(Object.entries(stored).filter(([, value]) => typeof value === 'boolean')); } catch { /* Keep current groups in memory. */ }
@@ -90,41 +94,79 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
   const locale = useUiLocale();
   const copy = mcpText[locale];
   const [values, setValues] = useState(() => toForm(server)), [baseline, setBaseline] = useState(() => toForm(server));
-  const [allowed, setAllowed] = useState<string[]>(server?.allowedTools ?? []), [allowedBaseline, setAllowedBaseline] = useState<string[]>(server?.allowedTools ?? []);
+  const [draft, setDraft] = useState<PermissionDraft>();
+  const [suggestion, setSuggestion] = useState<{ names: Set<string>; revision: string }>();
+  const unseenSuggestions = useRef(new Set<string>());
+  const [permissionError, setPermissionError] = useState('');
   const [toolsPage, setToolsPage] = useState<McpToolPage>(), [toolsLoading, setToolsLoading] = useState(false), [toolsError, setToolsError] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState<ServerNotice | ''>('');
   const [cancellingSignIn, setCancellingSignIn] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsVersion = useRef(0), preparationToken = useRef<number | undefined>(undefined);
-  const configDirty = JSON.stringify(values) !== JSON.stringify(baseline), permissionsDirty = !sameNames(allowed, allowedBaseline), dirty = configDirty || permissionsDirty;
-  const serverKey = JSON.stringify(toForm(server)), allowedKey = JSON.stringify(server?.allowedTools ?? []);
+  const configDirty = JSON.stringify(values) !== JSON.stringify(baseline), permissionsDirty = !!draft?.changes.size, dirty = configDirty || permissionsDirty;
+  const serverKey = JSON.stringify(toForm(server));
+  const stalePermissions = permissionsDirty && draft.revision !== server?.permissionRevision;
+  const outdatedSelection = (tool: McpToolInfo) => {
+    const pending = draft?.changes.get(tool.name);
+    return typeof pending === 'string' && pending !== tool.fingerprint;
+  };
+  const staleSelection = toolsPage?.tools.some(outdatedSelection);
   const connected = server?.status === 'connected', connecting = server?.status === 'connecting';
   const signingIn = server?.oauthStatus === 'signing_in';
   const status = busy || signingIn ? 'busy' : dirty ? 'dirty' : 'clean';
   useLayoutEffect(() => { onStatusChange(editorKey, status); }, [editorKey, status, onStatusChange]);
   useEffect(() => () => { onStatusChange(editorKey, undefined); toolsVersion.current++; }, [editorKey, onStatusChange]);
   useEffect(() => { if (!configDirty && !busy) { const next = toForm(server); setValues(next); setBaseline(next); } }, [serverKey]);
-  useEffect(() => { if (!permissionsDirty && !busy) { setAllowed(server?.allowedTools ?? []); setAllowedBaseline(server?.allowedTools ?? []); } }, [allowedKey]);
   useEffect(() => {
     if (!prepared || prepared.token === preparationToken.current) return;
     preparationToken.current = prepared.token;
     if (dirty || busy || signingIn) return;
     const incoming = prepared.values;
     setValues(previous => ({ ...previous, ...(typeof incoming.name === 'string' ? { name: incoming.name.slice(0, 100) } : {}), ...(typeof incoming.description === 'string' ? { description: incoming.description.slice(0, 500) } : {}), ...(incoming.transport === 'stdio' || incoming.transport === 'http' ? { transport: incoming.transport } : {}), ...(typeof incoming.command === 'string' ? { command: incoming.command.slice(0, 4096) } : {}), ...(Array.isArray(incoming.args) && incoming.args.every(value => typeof value === 'string') ? { args: incoming.args.slice(0, 100).map(value => value.slice(0, 4096)).join('\n') } : {}), ...(typeof incoming.cwd === 'string' ? { cwd: incoming.cwd.slice(0, 4096) } : {}), ...(typeof incoming.url === 'string' ? { url: incoming.url.slice(0, 2048) } : {}), ...(['none', 'bearer', 'oauth'].includes(incoming.authMode ?? '') ? { authMode: incoming.authMode! } : {}), ...(typeof incoming.oauthClientId === 'string' ? { oauthClientId: incoming.oauthClientId.slice(0, 2048) } : {}), ...(['auto', 'client_secret_basic', 'client_secret_post'].includes(incoming.oauthClientAuthMethod ?? '') ? { oauthClientAuthMethod: incoming.oauthClientAuthMethod! } : {}), ...(typeof incoming.oauthIssuer === 'string' ? { oauthIssuer: incoming.oauthIssuer.slice(0, 2048) } : {}), ...(typeof incoming.oauthAuthorizationUrl === 'string' ? { oauthAuthorizationUrl: incoming.oauthAuthorizationUrl.slice(0, 2048) } : {}), ...(typeof incoming.oauthTokenUrl === 'string' ? { oauthTokenUrl: incoming.oauthTokenUrl.slice(0, 2048) } : {}), ...(typeof incoming.oauthScopes === 'string' ? { oauthScopes: incoming.oauthScopes.slice(0, 2000) } : {}), ...(typeof incoming.oauthRedirectPort === 'number' ? { oauthRedirectPort: String(incoming.oauthRedirectPort) } : {}) }));
-    if (server && Array.isArray(incoming.allowedTools) && incoming.allowedTools.every(value => typeof value === 'string')) { setAllowed([...new Set(incoming.allowedTools.filter(value => value.length > 0 && value.length <= 200))].slice(0, 500)); setToolsOpen(true); }
+    setSuggestion(undefined);
+    if (server && Array.isArray(incoming.allowedTools)) {
+      const suggested = new Set(incoming.allowedTools);
+      const changes = new Map<string, string | null>();
+      for (const name of server.allowedTools) if (!suggested.has(name)) changes.set(name, null);
+      setDraft(changes.size ? { revision: server.permissionRevision, changes } : undefined);
+      unseenSuggestions.current = new Set(suggested);
+      setSuggestion({ names: suggested, revision: server.permissionRevision });
+      setToolsOpen(true);
+    }
     setError(''); setNotice('review');
   }, [prepared]);
+  useEffect(() => {
+    if (!suggestion || !server || !toolsPage || suggestion.revision !== server.permissionRevision ||
+        toolsPage.permissionRevision !== server.permissionRevision || toolsPage.catalogRevision !== server.catalogRevision) return;
+    // Bind a suggestion once, when its row first becomes available to review. A refresh must never retarget it.
+    const additions = toolsPage.tools.filter(tool => unseenSuggestions.current.delete(tool.name) && tool.supported && !tool.allowed && !tool.reviewStatus);
+    if (!additions.length) return;
+    setDraft(previous => {
+      const changes = new Map(previous?.changes);
+      for (const tool of additions) if (!changes.has(tool.name)) changes.set(tool.name, tool.fingerprint);
+      return { revision: suggestion.revision, changes };
+    });
+  }, [suggestion, toolsPage, server?.permissionRevision, server?.catalogRevision]);
   async function loadTools(more = false, refresh = false) {
-    if (!server || !connected || toolsLoading) return;
+    if (!server || !connected) return;
     const version = ++toolsVersion.current;
     setToolsLoading(true); setToolsError('');
     try {
       const page = await window.workspace.mcpListTools({ serverId: server.id, limit: 50, ...(refresh ? { refresh: true } : {}), ...(more && toolsPage?.nextOffset !== undefined ? { offset: toolsPage.nextOffset } : {}) });
-      if (version === toolsVersion.current) setToolsPage(previous => more && previous ? { ...page, tools: [...new Map([...previous.tools, ...page.tools].map(tool => [tool.name, tool])).values()] } : page);
+      if (version !== toolsVersion.current) return;
+      if (more && (toolsPage?.permissionRevision !== page.permissionRevision || toolsPage.catalogRevision !== page.catalogRevision)) {
+        await loadTools();
+        return;
+      }
+      setToolsPage(previous => more && previous ? { ...page, tools: [...previous.tools, ...page.tools] } : page);
     } catch (reason) { if (version === toolsVersion.current) setToolsError(message(reason)); }
     finally { if (version === toolsVersion.current) setToolsLoading(false); }
   }
-  useEffect(() => { if (connected) { setToolsOpen(true); void loadTools(); } else { toolsVersion.current++; setToolsLoading(false); } }, [server?.status, server?.connectedAt]);
+  useEffect(() => { if (connected) setToolsOpen(true); }, [connected]);
+  useEffect(() => {
+    if (connected && server?.catalogRevision) void loadTools();
+    else { toolsVersion.current++; setToolsPage(undefined); setToolsLoading(false); }
+  }, [connected, server?.catalogRevision, server?.permissionRevision]);
   function update<K extends keyof FormValues>(key: K, value: FormValues[K]) { setValues(previous => ({ ...previous, [key]: value })); setError(''); setNotice(''); }
   async function action(work: () => Promise<void>, success?: ServerNotice) {
     if (busy || signingIn) return;
@@ -145,7 +187,7 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
       env = parsed as Record<string, string>;
     }
     const args = values.args.split(/\r?\n/); while (args.at(-1) === '') args.pop();
-    const value = { ...(server ? { id: server.id } : {}), name: values.name, description: values.description, transport: values.transport, autoConnect: values.autoConnect, allowedTools: server?.allowedTools ?? [], ...(values.transport === 'stdio' ? { command: values.command, args, ...(values.cwd.trim() ? { cwd: values.cwd.trim() } : {}), ...(env ? { env } : {}), ...(values.removeEnvKeys.length ? { removeEnvKeys: values.removeEnvKeys } : {}) } : { url: values.url, authMode: values.authMode, ...(values.authMode === 'bearer' ? { ...(values.token ? { token: values.token } : {}), ...(values.clearToken ? { clearToken: true } : {}) } : {}), ...(values.authMode === 'oauth' ? { oauthRedirectPort: Number(values.oauthRedirectPort), oauthClientId: values.oauthClientId.trim(), oauthClientAuthMethod: values.oauthClientAuthMethod, oauthIssuer: values.oauthIssuer.trim(), oauthAuthorizationUrl: values.oauthAuthorizationUrl.trim(), oauthTokenUrl: values.oauthTokenUrl.trim(), oauthScopes: values.oauthScopes.trim(), ...(values.oauthClientSecret ? { oauthClientSecret: values.oauthClientSecret } : {}), ...(values.clearOAuthClientSecret ? { clearOAuthClientSecret: true } : {}) } : {}) }) };
+    const value = { ...(server ? { id: server.id } : {}), name: values.name, description: values.description, transport: values.transport, autoConnect: values.autoConnect, ...(values.transport === 'stdio' ? { command: values.command, args, ...(values.cwd.trim() ? { cwd: values.cwd.trim() } : {}), ...(env ? { env } : {}), ...(values.removeEnvKeys.length ? { removeEnvKeys: values.removeEnvKeys } : {}) } : { url: values.url, authMode: values.authMode, ...(values.authMode === 'bearer' ? { ...(values.token ? { token: values.token } : {}), ...(values.clearToken ? { clearToken: true } : {}) } : {}), ...(values.authMode === 'oauth' ? { oauthRedirectPort: Number(values.oauthRedirectPort), oauthClientId: values.oauthClientId.trim(), oauthClientAuthMethod: values.oauthClientAuthMethod, oauthIssuer: values.oauthIssuer.trim(), oauthAuthorizationUrl: values.oauthAuthorizationUrl.trim(), oauthTokenUrl: values.oauthTokenUrl.trim(), oauthScopes: values.oauthScopes.trim(), ...(values.oauthClientSecret ? { oauthClientSecret: values.oauthClientSecret } : {}), ...(values.clearOAuthClientSecret ? { clearOAuthClientSecret: true } : {}) } : {}) }) };
     const parsed = mcpServerInputSchema.safeParse(value);
     if (!parsed.success) throw new Error(parsed.error.issues[0]?.message || copy.invalidSettings);
     return parsed.data;
@@ -153,13 +195,23 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
   async function save() {
     let request: McpServerInput;
     try { request = input(); } catch (reason) { setError(message(reason)); return; }
-    await action(async () => { const saved = await window.workspace.mcpSaveServer(request); const next = toForm(saved); setValues(next); setBaseline(next); if (!permissionsDirty) setAllowed(saved.allowedTools); setAllowedBaseline(saved.allowedTools); onSaved(saved); }, 'serverSaved');
+    await action(async () => { const saved = await window.workspace.mcpSaveServer(request); const next = toForm(saved); setValues(next); setBaseline(next); onSaved(saved); }, 'serverSaved');
   }
   async function savePermissions() {
-    if (!server) return;
-    await action(async () => { const saved = await window.workspace.mcpSetToolPermissions({ serverId: server.id, allowedTools: allowed }); setAllowed(saved.allowedTools); setAllowedBaseline(saved.allowedTools); onSaved(saved); }, 'permissionsSaved');
+    if (!server || !draft || !permissionsDirty || stalePermissions || staleSelection) return;
+    setBusy(true); setPermissionError(''); setNotice('');
+    try {
+      const changes = Array.from(draft.changes, ([name, fingerprint]) => ({ name, fingerprint }));
+      const saved = await window.workspace.mcpSetToolPermissions({ serverId: server.id, permissionRevision: draft.revision, changes });
+      setDraft(undefined); setSuggestion(undefined); onSaved(saved); setNotice('permissionsSaved');
+    } catch (reason) {
+      setPermissionError(message(reason));
+      await onRefresh();
+      await loadTools();
+    } finally { setBusy(false); }
   }
-  function discard() { setValues({ ...baseline, token: '', env: '', clearToken: false, removeEnvKeys: [], oauthClientSecret: '', clearOAuthClientSecret: false }); setAllowed(allowedBaseline); setError(''); setNotice('discarded'); }
+  function discardPermissions() { setDraft(undefined); setSuggestion(undefined); setPermissionError(''); }
+  function discard() { setValues({ ...baseline, token: '', env: '', clearToken: false, removeEnvKeys: [], oauthClientSecret: '', clearOAuthClientSecret: false }); discardPermissions(); setError(''); setNotice('discarded'); }
   async function cancelSignIn() {
     if (!server || cancellingSignIn) return;
     setCancellingSignIn(true);
@@ -167,7 +219,15 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
     catch (reason) { setError(message(reason)); }
     finally { setCancellingSignIn(false); }
   }
-  function changeAllowed(update: (previous: string[]) => string[]) { setAllowed(update); setError(''); setNotice(''); }
+  function editPermissions(edit: (changes: Map<string, string | null>) => void) {
+    if (!toolsPage || !currentPage || stalePermissions) return;
+    setDraft(previous => {
+      const changes = new Map(previous?.changes);
+      edit(changes);
+      return changes.size ? { revision: previous?.revision ?? toolsPage.permissionRevision, changes } : undefined;
+    });
+    setPermissionError(''); setNotice('');
+  }
   const failure = server?.connectFailure;
   const serverError = failure ? connectFailureText[locale][failure] : server?.error;
   // A failed Connect is retained on the server card, including across language changes.
@@ -175,7 +235,14 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
   const statusLabels = { disconnected: copy.disconnected, connecting: copy.connecting, connected: copy.connected, error: copy.connectionError };
   const oauthLabels = { signed_out: copy.signedOut, signing_in: copy.signingIn, signed_in: copy.signedIn, required: copy.signInRequired, error: copy.authError };
   const name = values.name || server?.name || copy.newServer;
-  const statusCount = permissionsDirty ? copy.pendingCount(allowed.length) : copy.toolCount(server?.allowedToolCount ?? 0, server?.toolCount ?? 0);
+  const statusCount = [permissionsDirty ? copy.pendingCount(draft.changes.size) : copy.toolCount(server?.allowedToolCount ?? 0, server?.toolCount ?? 0), server?.reviewRequiredCount ? copy.reviewCount(server.reviewRequiredCount) : ''].filter(Boolean).join(' · ');
+  const currentPage = !!server && !!toolsPage && toolsPage.permissionRevision === server.permissionRevision && toolsPage.catalogRevision === server.catalogRevision;
+  const disablePermissions = !currentPage || busy || signingIn || configDirty || stalePermissions || toolsLoading;
+  const reviewVisible = toolsPage?.tools.some(tool => !!tool.reviewStatus || outdatedSelection(tool));
+  const bulkTools = toolsPage?.tools.filter(tool => tool.supported && !tool.reviewStatus && !outdatedSelection(tool)) ?? [];
+  const listedNames = new Set(toolsPage?.tools.map(tool => tool.name));
+  const unlistedSuggestions = suggestion && toolsPage ? [...suggestion.names].filter(name => !listedNames.has(name) && !server?.allowedTools.includes(name) && !draft?.changes.has(name)) : [];
+  const catalogError = (!server?.catalogRevision && server?.warning) || toolsError;
   return <details className="mcp-server" hidden={hidden} open={open} onToggle={event => onToggle(event.currentTarget.open)}>
     <summary><Server size={17} aria-hidden="true"/><span><strong>{name}</strong><small>{server ? statusLabels[server.status] : copy.unsaved} · {values.transport === 'stdio' ? copy.localProcess : 'HTTP'}{dirty ? copy.dirty : server ? ` · ${statusCount}` : ''}</small></span><ChevronDown size={16} aria-hidden="true"/></summary>
     <div className="mcp-server-content">
@@ -227,23 +294,55 @@ function ServerEditor({ server, editorKey, open, hidden, onToggle, onStatusChang
       </div>}
       {server && <details className="mcp-tools" open={toolsOpen} onToggle={event => setToolsOpen(event.currentTarget.open)}><summary><span><strong>{copy.permissions}</strong><small>{statusCount}</small></span><ChevronDown size={15} aria-hidden="true"/></summary><div className="mcp-tools-content">
         {!connected && <p className="mcp-note">{copy.connectToInspect}</p>}
-        {connected && <><div className="mcp-tool-actions"><button type="button" disabled={busy || signingIn || toolsLoading || configDirty} onClick={() => changeAllowed(previous => [...new Set([...previous, ...(toolsPage?.tools.filter(tool => tool.supported).map(tool => tool.name) ?? [])])])}>{toolsPage?.hasMore ? copy.allowLoaded : copy.allowAll}</button><button type="button" disabled={busy || signingIn || !allowed.length || configDirty} onClick={() => changeAllowed(() => [])}>{copy.blockAll}</button><button type="button" className="mcp-icon" aria-label={`${name}: ${copy.refreshTools}`} title={copy.refreshTools} disabled={busy || signingIn || toolsLoading} onClick={() => void loadTools(false, true)}><RefreshCw size={13}/></button></div>
-          {toolsError && <p className="mcp-feedback error" role="alert">{toolsError}</p>}
-          <div className="mcp-tool-list" aria-label={`${name}: ${copy.tools}`} aria-busy={toolsLoading}>{toolsPage?.tools.map(tool => <ToolRow key={tool.name} tool={tool} checked={allowed.includes(tool.name)} disabled={busy || signingIn || configDirty || !tool.supported} onChange={checked => changeAllowed(previous => checked ? [...new Set([...previous, tool.name])] : previous.filter(value => value !== tool.name))}/>)}</div>
+        {connected && <><div className="mcp-tool-actions">
+          {!!bulkTools.length && <button type="button" disabled={disablePermissions} onClick={() => editPermissions(changes => { for (const tool of bulkTools) stageTool(changes, tool, true); })}>{reviewVisible ? copy.allowOther : toolsPage?.hasMore ? copy.allowLoaded : copy.allowAll}</button>}
+          <button type="button" disabled={disablePermissions || (!server.allowedTools.length && !permissionsDirty)} onClick={() => { setSuggestion(undefined); editPermissions(changes => { changes.clear(); for (const name of server.allowedTools) changes.set(name, null); }); }}>{copy.blockAll}</button>
+          <button type="button" className="mcp-icon" aria-label={`${name}: ${copy.refreshTools}`} title={copy.refreshTools} disabled={busy || signingIn || toolsLoading} onClick={() => void loadTools(false, true)}><RefreshCw size={13}/></button>
+          </div>
+          {catalogError && <p className="mcp-feedback error" role="alert">{catalogError}</p>}
+          <div className="mcp-tool-list" aria-label={`${name}: ${copy.tools}`} aria-busy={toolsLoading}>{toolsPage?.tools.map(tool => {
+            const pending = draft?.changes.get(tool.name);
+            return <ToolRow key={tool.name} tool={tool} checked={pending === undefined ? tool.allowed : pending === tool.fingerprint}
+              suggested={!!suggestion?.names.has(tool.name) && !tool.allowed} outdated={outdatedSelection(tool)} removed={pending === null}
+              disabled={disablePermissions} onChange={checked => editPermissions(changes => stageTool(changes, tool, checked))}
+              onRemove={() => editPermissions(changes => { if (pending === null || outdatedSelection(tool)) changes.delete(tool.name); else changes.set(tool.name, null); })}/>;
+          })}</div>
+          {!!unlistedSuggestions.length && <details className="mcp-tool-suggestions"><summary>{toolsPage?.hasMore ? copy.moreSuggested(unlistedSuggestions.length) : copy.unavailableSuggested(unlistedSuggestions.length)}</summary><p>{unlistedSuggestions.join(', ')}</p></details>}
           {toolsLoading && <p className="mcp-note" role="status">{copy.loadingTools}</p>}{toolsPage && !toolsPage.tools.length && !toolsLoading && <p className="mcp-note">{copy.noTools}</p>}
           {toolsPage?.hasMore && <button type="button" disabled={toolsLoading || busy} onClick={() => void loadTools(true)}>{copy.moreTools}{toolsPage.tools.length}/{toolsPage.total})</button>}
-          <div className="mcp-save-row"><small>{copy.permissionHint}</small><button type="button" className="mcp-primary" disabled={busy || signingIn || !permissionsDirty || configDirty} onClick={() => void savePermissions()}>{copy.savePermissions}</button></div>
+          <div className="mcp-save-row"><small>{permissionsDirty ? copy.pendingCount(draft.changes.size) : copy.permissionHint}</small><button type="button" className="mcp-primary" disabled={disablePermissions || !permissionsDirty || staleSelection} onClick={() => void savePermissions()}>{copy.savePermissions}</button></div>
+          {(stalePermissions || staleSelection) && <p role="alert" className="mcp-feedback error">{stalePermissions ? copy.stalePermissions : copy.staleSelection} <button type="button" onClick={discardPermissions}>{copy.discardPermissions}</button></p>}
+          {permissionError && !stalePermissions && !staleSelection && <p className="mcp-feedback error" role="alert">{permissionError} <button type="button" onClick={discardPermissions}>{copy.discardPermissions}</button></p>}
+          {notice === 'permissionsSaved' && <p className="mcp-feedback success" role="status">{copy.permissionsSaved}</p>}
         </>}
       </div></details>}
       <div className="mcp-editor-footer">{dirty && <button type="button" disabled={busy || signingIn} onClick={discard}>{copy.discard}</button>}{!server && onCancel && <button type="button" disabled={busy || signingIn} onClick={onCancel}>{copy.cancelAdd}</button>}{server && <button type="button" className="mcp-danger" disabled={busy || signingIn || dirty} title={dirty ? copy.saveOrDiscard : undefined} onClick={() => void action(async () => { const removed = await window.workspace.mcpRemoveServer(server.id); if (removed) await onRefresh(); })}><Trash2 size={12}/>{copy.remove}</button>}</div>
-      {error && !repeatedError && <p className="mcp-feedback error" role="alert">{error}</p>}{notice && <p className="mcp-feedback success" role="status">{copy[notice]}</p>}
+      {error && !repeatedError && <p className="mcp-feedback error" role="alert">{error}</p>}{notice && notice !== 'permissionsSaved' && <p className="mcp-feedback success" role="status">{copy[notice]}</p>}
     </div>
   </details>;
 }
 
-function ToolRow({ tool, checked, disabled, onChange }: { tool: McpToolInfo; checked: boolean; disabled: boolean; onChange(value: boolean): void }) {
+function ToolRow({ tool, checked, disabled, suggested, outdated, removed, onChange, onRemove }: {
+  tool: McpToolInfo; checked: boolean; disabled: boolean; suggested: boolean; outdated: boolean; removed: boolean;
+  onChange(value: boolean): void; onRemove(): void;
+}) {
   const copy = mcpText[useUiLocale()];
-  return <label className={`mcp-tool${!tool.supported ? ' is-unsupported' : ''}`}><input type="checkbox" aria-label={copy.allowTool(tool.name)} checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)}/><span><strong>{tool.title || tool.name}{tool.readOnly && <small>{copy.readOnly}</small>}</strong>{tool.title && <code>{tool.name}</code>}<p>{tool.description || copy.noDescription}</p>{!tool.supported && <small className="mcp-tool-reason">{tool.reason || copy.unsupported}</small>}</span></label>;
+  const reviewId = useId();
+  const [definitionOpen, setDefinitionOpen] = useState(false);
+  const review = outdated || tool.reviewStatus === 'changed' ? copy.definitionChanged : tool.reviewStatus === 'legacy' ? copy.legacyPermission : '';
+  const removalAction = outdated ? copy.discardPermissions : removed ? copy.undoRemoval : copy.removeApproval;
+  return <div className="mcp-tool-entry">
+    <label className={`mcp-tool${!tool.supported ? ' is-unsupported' : ''}`}><input type="checkbox" aria-label={copy.allowTool(tool.name)} aria-describedby={review ? reviewId : undefined} checked={checked} disabled={disabled || !tool.supported} onChange={event => onChange(event.target.checked)}/>
+      <span><strong>{tool.title || tool.name}{tool.readOnly && <small>{copy.readOnly}</small>}</strong>{tool.title && <code>{tool.name}</code>}
+        <p>{tool.description || copy.noDescription}</p>
+        {suggested && <small className="mcp-tool-suggestion">{copy.suggestedTool}</small>}
+        {review && <small id={reviewId} className="mcp-tool-review">{review}</small>}
+        {!tool.supported && <small className="mcp-tool-reason">{tool.reason || copy.unsupported}</small>}
+      </span>
+    </label>
+    {(outdated || tool.reviewStatus) && <button className="mcp-forget-grant" aria-label={`${removalAction} · ${tool.name}`} type="button" disabled={disabled} onClick={onRemove}>{removalAction}</button>}
+    {tool.definition && <details className="mcp-tool-definition" onToggle={event => setDefinitionOpen(event.currentTarget.open)}><summary aria-label={`${copy.definition} · ${tool.name}`}>{copy.definition}</summary>{definitionOpen && <pre>{JSON.stringify(tool.definition, null, 2)}</pre>}</details>}
+  </div>;
 }
 
 function AuditPanel() {

@@ -27,7 +27,7 @@ let pendingSettingsNavigation: import('../shared/model').SettingsNavigation | un
 ipcRenderer.on('settings:navigate', (_event, request: import('../shared/model').SettingsNavigation) => { if (navigateSettings) navigateSettings(request); else pendingSettingsNavigation = request; });
 let prepareSettings: ((request: import('../shared/model').SettingsPreparation) => void) | undefined;
 const pendingSettingsPreparations: import('../shared/model').SettingsPreparation[] = [];
-ipcRenderer.on('settings:prepare', (_event, request: import('../shared/model').SettingsPreparation) => { if (prepareSettings) prepareSettings(request); else { pendingSettingsPreparations.push(request); if (pendingSettingsPreparations.length > 20) pendingSettingsPreparations.shift(); } });
+ipcRenderer.on('settings:prepare', (_event, request: import('../shared/model').SettingsPreparation) => { if (prepareSettings) prepareSettings(request); else pendingSettingsPreparations.push(request); });
 let showExampleMail: (() => void) | undefined;
 let pendingExampleMail = false;
 ipcRenderer.on('mail:show-example', () => { if (showExampleMail) showExampleMail(); else pendingExampleMail = true; });
@@ -145,6 +145,7 @@ const api: WorkspaceApi = {
   },
   onStateChanged: callback => { const listener = (_event: Electron.IpcRendererEvent, state: import('../shared/model').RendererWorkspaceState) => callback(state); ipcRenderer.on('workspace:changed', listener); return () => ipcRenderer.removeListener('workspace:changed', listener); },
   dispatchAction: action => ipcRenderer.invoke('workspace:action', action),
+  setAssistantPinned: pinned => ipcRenderer.invoke('window:set-assistant-pinned', pinned),
   updateSettings: patch => ipcRenderer.invoke('settings:update', patch),
   reportSpeechMicrophones: devices => ipcRenderer.invoke('speech:microphones:report', devices),
   getSpeechMicrophones: () => ipcRenderer.invoke('speech:microphones:get'),

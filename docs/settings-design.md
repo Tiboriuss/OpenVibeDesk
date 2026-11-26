@@ -21,11 +21,13 @@ Settings for an optional module's chat presentation belong in that module's cont
 
 Mail's current account forms live in [MailAccounts](../modules/ovd-mail/frontend/MailAccounts.tsx). MCP server forms live in [McpSettings](../modules/ovd-mcp/frontend/McpSettings.tsx). These domain forms remain with their modules rather than expanding a monolithic core settings page.
 
-Each Mail account contains a coherent **Konto & Posteingang · IMAP** group, an independent **Absender, Signatur & Abruf** group, and **Postausgang · SMTP**. Each group's save/test actions are inside its bordered content. The local account name is distinct from the outgoing sender name. Sender/signature/polling preferences save independently without a connection test; pending IMAP/SMTP edits remain intact. The Assistant can prepare public preference changes through `accounts.preferences` and inspect one account through `accounts.preferences_get`; the user reviews and saves the form.
+Each Mail account groups **Account & incoming mail · IMAP**, **Sender, signature & mail checks** and **Outgoing mail · SMTP**. Save and connection-test actions sit inside the group they affect. Changing the outgoing sender name, signature or polling interval has its own save action. Other account and connection edits stay in their forms.
+
+Mail shows Assistant suggestions inside the affected account and group. Each changed field shows its current form value and the proposal. Conflicts with manual edits start unchecked. **Apply to form** stages the selected values, **Dismiss** skips the proposal, and the group's Save action persists the form. Additional proposals for the same group can be reviewed in order while Settings is open. The suggestion view only accepts fields declared by the module. Credentials stay in the account form. [Mail settings workflow](getting-started.md#add-a-mail-account)
 
 Module-contributed category icons can show a small attention dot, shared with the OVD-Bar. A new hint breathes briefly, then remains static; reduced motion disables breathing. Visiting a concrete module category acknowledges its currently captured hints, while later arrivals remain. See the [module attention contract](../CONTRIBUTING.md#module-attention-indicators).
 
-Under **KI & Verbindung**, **Chat** and **Spracheingabe** are peer expandable groups with independent forms. Chat contains the connection, models and workspace-access sections, followed by **Chat-Einstellungen speichern** inside its border. Speech settings have their own save action inside their group. Saving one preserves pending changes in the other. Search and Assistant preparation reveal the relevant group; ordinary category navigation and collapse keep unsaved inputs intact.
+Under **AI & connection**, **Chat** and **Voice input** are expandable groups with independent forms. Chat contains the connection, models and workspace-access sections, followed by **Save chat settings** inside its border. Speech settings have their own save action inside their group. Saving one preserves pending changes in the other. Search and Assistant preparation reveal the relevant group; ordinary category navigation and collapse keep unsaved inputs intact.
 
 ### Selection controls
 
@@ -50,13 +52,17 @@ Internal navigation already supports opening a category or a search through the 
 
 The immediate **Interface language** control belongs to **Appearance**. UI actions and the Assistant’s `settings.update` capability share the same persisted preference. Use stable category and section IDs for navigation from other windows, including the microphone shortcut to `ai.speech`. Localize visible labels, accessible names, search terms and displayed dates or counts together. Keep the stored data and routing IDs independent of the display language. See [choosing the interface language](getting-started.md#choose-the-interface-language).
 
+### Assistant window pin
+
+The Assistant title bar has its own reversible pin, also available under **Appearance → Keep Assistant on top**. Its pressed state is visible and available to screen readers. Pinning changes the window's stacking level. It preserves the current keyboard focus and the minimized or closed state. The setting defaults to off. Apple Stickies and Microsoft PowerToys use a comparable per-window action. Electron supplies the native window level on supported desktops. [Apple Stickies](https://support.apple.com/en-ie/guide/stickies/welcome/mac) · [Microsoft PowerToys](https://learn.microsoft.com/en-us/windows/powertoys/always-on-top) · [Electron BrowserWindow](https://www.electronjs.org/docs/latest/api/browser-window#winsetalwaysontopflag-level-relativelevel)
+
 ### OVD-Bar appearance and order
 
 The **OVD-Bar** category groups orientation, size, placement and background opacity separately from foreground/idle-collapse behavior. Controls are compact, searchable and backed by the same validated settings service as the Assistant. The bar menu opens this category directly. See the [OVD-Bar guide](ovd-bar.md) for behavior, defaults and platform limits.
 
 The sliders save at the end of a pointer or keyboard adjustment, or on blur; other bar controls save immediately. Failed saves retain the edited values with a retry action. Appearance/behavior and entry order have separate resets. The Assistant can change preferences through `settings.update`, inspect actual geometry through `bar.get`, and place the bar through `bar.move`; internal category ID `dock` remains stable.
 
-Its **Entries & order** group arranges the **actual available workspace navigation entries** with Up/Down actions. It uses the same catalog as the live OVD-Bar.
+Its **Items and order** group arranges the **actual available workspace navigation entries** with Up/Down actions. It uses the same catalog as the live OVD-Bar.
 
 - Save a custom order immediately and apply it across windows and after restart.
 - Append newly available contributions after saved entries when a custom order exists.
@@ -82,7 +88,7 @@ The same allocation covers history, reference and memory snapshots, tool schemas
 
 **Current implementation:** display preferences, OVD-Bar controls and navigation order use immediate saves, with the slider commit points described above. Navigation-order failures restore the saved order; OVD-Bar form failures retain pending values for retry. AI, Agent, Mail connections and MCP server/tool settings use their respective explicit save controls. [Main-process persistence and close handling](../electron/main.ts) combine the reported dirty/busy states of those forms. In-progress operations block closing; unsaved edits use a visible discard decision. Existing password/token fields indicate stored state without returning their secret value. A save operation that fails must not be presented as completed.
 
-A prepared assistant change is not an applied setting. For protected configuration, the assistant opens the appropriate form and supplies allowed public fields; the user reviews and saves them. Existing unsaved inputs must survive that preparation flow. MCP tool permissions likewise require an explicit save and must not be granted merely because a suggestion was displayed. See [MCP module behavior](../modules/ovd-mcp/README.md) and [architecture](architecture.md).
+A prepared assistant change is not an applied setting. For protected configuration, the assistant opens the appropriate form and supplies allowed public fields; the user reviews and saves them. Existing unsaved inputs must survive that preparation flow. MCP tool permissions use a separate **Save permissions** action. When a tool definition changes, its review shows the current description, inputs, outputs and behavior hints. See [MCP module behavior](../modules/ovd-mcp/README.md) and [architecture](architecture.md).
 
 The saved “Without confirmations” mode (`Ohne Abfragen` in the current UI) governs individual confirmations for requested assistant actions that need approval, such as sending, destructive actions and protected settings. Ordinary requested domain reads and view navigation already work autonomously with Workspace tools enabled, including in the default confirmation mode; do not add a separate Mail access toggle or per-message read approval. The mode does not let the assistant enable itself, read credentials, approve new/changed third-party module code or expand configured MCP tool permissions. Explain immediate changes, prepared changes and user-saved access settings distinctly.
 

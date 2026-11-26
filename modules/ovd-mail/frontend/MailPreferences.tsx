@@ -1,20 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { mailPreferences, mailPreferencesSchema } from '../../../shared/mail-preferences';
+import { MAIL_POLL_INTERVALS, mailPreferences, mailPreferencesSchema } from '../../../shared/mail-preferences';
 import type { MailAccountSummary } from '../../../shared/mail';
-import { preparationValues, SettingsPreparationNotice, useSettingsPreparation, type SettingsSuggestion } from '../../../src/settings-preparation';
+import { MailSuggestion, type MailSuggestionProps } from './MailSuggestion';
+import { accountIssue, useAccountText, intervalText } from './account-copy';
+import { useUiLocale } from '../../../src/locale';
+import { useFormFeedback } from '../../../src/form-feedback';
 import type { MailAccountStatus } from './MailAccounts';
 
-const intervals = [[0, 'Nur manuell'], [60, 'Jede Minute'], [120, 'Alle 2 Minuten'], [300, 'Alle 5 Minuten'], [600, 'Alle 10 Minuten'], [900, 'Alle 15 Minuten'], [1800, 'Alle 30 Minuten'], [3600, 'Jede Stunde']] as const;
-
-export function MailPreferences({ account, preparation, searchQuery, peerBusy, peerDirty, onStatus }: {
-  account: MailAccountSummary; preparation?: SettingsSuggestion; searchQuery: string; peerBusy: boolean; peerDirty: boolean;
+export function MailPreferences({ account, suggestions, onDismissSuggestion, searchQuery, peerBusy, onStatus }: MailSuggestionProps & {
+  account: MailAccountSummary; searchQuery: string; peerBusy: boolean;
   onStatus(status: MailAccountStatus): void;
 }) {
   const [baseline, setBaseline] = useState(() => mailPreferences(account));
   const [values, setValues] = useState(() => mailPreferences(account));
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false);
-  const [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const copy = useAccountText(), locale = useUiLocale();
+  const [error, setError] = useFormFeedback(copy, locale), [notice, setNotice] = useFormFeedback(copy, locale);
   const form = useRef<HTMLFormElement>(null), waitingForSaved = useRef<string | undefined>(undefined);
   const savedKey = JSON.stringify(mailPreferences(account));
   const dirty = JSON.stringify(values) !== JSON.stringify(baseline);
@@ -27,39 +29,34 @@ export function MailPreferences({ account, preparation, searchQuery, peerBusy, p
     waitingForSaved.current = undefined;
     if (savedKey !== JSON.stringify(baseline)) { const saved = mailPreferences(account); setBaseline(saved); setValues(saved); }
   }, [savedKey, account, baseline, dirty, busy]);
-  useEffect(() => { if (preparation) setOpen(true); }, [preparation]);
-  const prepared = useSettingsPreparation(preparation, true, !dirty && !locked && !peerDirty, suggestion => {
-    const publicValues = preparationValues(suggestion);
-    setValues(current => ({ ...current, ...publicValues }));
-    setOpen(true); setError(''); setNotice('Vorschlag vorbereitet. Bitte prüfen und selbst speichern.');
-  });
+  useEffect(() => { if (suggestions[0]) setOpen(true); }, [suggestions[0]?.token]);
   function update(patch: Partial<typeof values>) { setValues(current => ({ ...current, ...patch })); setError(''); setNotice(''); }
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (locked || !form.current?.reportValidity()) return;
     const parsed = mailPreferencesSchema.safeParse({ accountId: account.id, ...values });
-    if (!parsed.success) { setError(parsed.error.issues[0]?.message || 'Bitte Absender, Signatur und Abrufintervall prüfen.'); return; }
+    if (!parsed.success) { setError(c => c.checkPreferences); return; }
     setBusy(true); setError(''); setNotice('');
     try {
       await window.workspace.saveMailPreferences(parsed.data);
       const { accountId: _accountId, ...saved } = parsed.data;
       waitingForSaved.current = JSON.stringify(saved); setBaseline(saved); setValues(saved);
-      setNotice('Absender, Signatur und Abrufintervall gespeichert.');
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Die Kontoeinstellungen konnten nicht gespeichert werden.'); }
+      setNotice(c => c.preferencesSaved);
+    } catch (reason) { setError((c, language) => accountIssue(reason, language) || c.preferencesFail); }
     finally { setBusy(false); }
   }
   const id = `preferences-${account.id}`;
-  const intervalLabel = intervals.find(([value]) => value === baseline.pollIntervalSeconds)?.[1] ?? 'Alle 5 Minuten';
+  const intervalLabel = intervalText(copy, baseline.pollIntervalSeconds);
   return <details className="mail-connection-group mail-preferences-group" open={!!searchQuery.trim() || open} onToggle={event => { if (event.target === event.currentTarget && !searchQuery.trim()) setOpen(event.currentTarget.open); }}>
-    <summary><span><strong>Absender, Signatur & Abruf</strong><small>{baseline.senderName || 'Absender ohne Anzeigenamen'} · {baseline.signature ? 'Signatur eingerichtet' : 'Ohne Signatur'} · {intervalLabel}{dirty ? ' · Änderungen offen' : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
+    <summary><span><strong>{copy.preferences}</strong><small>{baseline.senderName || copy.senderEmpty} · {baseline.signature ? copy.signatureSet : copy.signatureEmpty} · {intervalLabel}{dirty ? ` · ${copy.pending}` : ''}</small></span><ChevronDown size={16} aria-hidden="true" /></summary>
     <form ref={form} className="mail-preferences-form" data-protocol="preferences" data-status={status} onSubmit={event => void save(event)}>
-      <SettingsPreparationNotice suggestion={prepared.pending} blocked={dirty || locked || peerDirty} onApply={prepared.accept} onDismiss={prepared.dismiss} />
+      <MailSuggestion kind="mail-preferences" suggestions={suggestions} onDismissSuggestion={onDismissSuggestion} current={values} baseline={baseline} disabled={locked} onApply={update} />
       <fieldset disabled={locked}>
-        <div className="mail-account-field"><label htmlFor={`${id}-sender`}>Absendername</label><input id={`${id}-sender`} maxLength={120} autoComplete="name" value={values.senderName} onChange={event => update({ senderName: event.target.value })} placeholder="Zum Beispiel Alex vom Atlas Studio" /><p>Leer: nur {account.email}.</p></div>
-        <div className="mail-account-field"><label htmlFor={`${id}-signature`}>Signatur</label><textarea id={`${id}-signature`} rows={4} maxLength={5000} value={values.signature} onChange={event => update({ signature: event.target.value })} placeholder={'Viele Grüße\nAlex'} /><p>Für neue Nachrichten und Antworten.</p></div>
-        <div className="mail-account-field mail-retrieval-field"><label htmlFor={`${id}-interval`}>Neue Mails abrufen</label><select id={`${id}-interval`} value={values.pollIntervalSeconds} onChange={event => update({ pollIntervalSeconds: Number(event.target.value) })}>{intervals.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><p>Automatischer Abruf, auch bei geschlossenem Mailfenster.</p></div>
-        {dirty && <p className="mail-account-unsaved">Änderungen noch nicht gespeichert.</p>}
-        <div className="mail-account-actions">{dirty && <button className="mail-account-check" type="button" onClick={() => { setValues(baseline); setError(''); setNotice('Änderungen verworfen.'); }}>Änderungen verwerfen</button>}<button className="mail-account-save" type="submit" disabled={!dirty}>{busy ? 'Wird gespeichert …' : 'Einstellungen speichern'}</button></div>
+        <div className="mail-account-field"><label htmlFor={`${id}-sender`}>{copy.fields.senderName}</label><input id={`${id}-sender`} maxLength={120} autoComplete="name" value={values.senderName} onChange={event => update({ senderName: event.target.value })} placeholder={copy.senderExample} /><p>{copy.emailOnly(account.email)}</p></div>
+        <div className="mail-account-field"><label htmlFor={`${id}-signature`}>{copy.fields.signature}</label><textarea id={`${id}-signature`} rows={4} maxLength={5000} value={values.signature} onChange={event => update({ signature: event.target.value })} placeholder={copy.signatureExample} /><p>{copy.signatureHint}</p></div>
+        <div className="mail-account-field mail-retrieval-field"><label htmlFor={`${id}-interval`}>{copy.fields.pollIntervalSeconds}</label><select id={`${id}-interval`} value={values.pollIntervalSeconds} onChange={event => update({ pollIntervalSeconds: Number(event.target.value) })}>{MAIL_POLL_INTERVALS.map(value => <option key={value} value={value}>{intervalText(copy, value)}</option>)}</select><p>{copy.backgroundHint}</p></div>
+        {dirty && <p className="mail-account-unsaved">{copy.pending}</p>}
+        <div className="mail-account-actions">{dirty && <button className="mail-account-check" type="button" onClick={() => { setValues(baseline); setError(''); setNotice(c => c.discarded); }}>{copy.discard}</button>}<button className="mail-account-save" type="submit" disabled={!dirty}>{busy ? copy.saving : copy.savePreferences}</button></div>
       </fieldset>
       {error && <p className="mail-account-feedback error" role="alert">{error}</p>}{notice && <p className="mail-account-feedback success" role="status">{notice}</p>}
     </form>

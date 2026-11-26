@@ -3,17 +3,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { mcpAuthModeSchema, mcpOAuthClientAuthMethodSchema, mcpServerInputSchema, mcpServerIdSchema, validateMcpOAuthEndpointUrl, type McpServerConfig, type McpServerInput } from '../../../shared/mcp';
+import { mcpAuthModeSchema, mcpOAuthClientAuthMethodSchema, mcpPermissionRevisionSchema, mcpPermissionsSchema, mcpReviewedToolSchema, mcpServerInputSchema, mcpServerIdSchema, validateMcpOAuthEndpointUrl, type McpServerConfig, type McpServerInput, type McpToolPermissions } from '../../../shared/mcp';
 
 const storedServerSchema = z.object({
   id: mcpServerIdSchema, name: z.string().min(1).max(100), description: z.string().max(500), transport: z.enum(['stdio', 'http']),
   command: z.string().min(1).max(4096).optional(), args: z.array(z.string().max(4096)).max(100), cwd: z.string().max(4096).optional(), url: z.string().max(2048).optional(),
   autoConnect: z.boolean(), allowedTools: z.array(z.string().min(1).max(200)).max(500), hasToken: z.boolean(), envKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100)).max(100),
+  reviewedTools: z.array(mcpReviewedToolSchema).max(500).default([]),
+  permissionRevision: mcpPermissionRevisionSchema.default('legacy'),
   authMode: mcpAuthModeSchema.optional(), oauthClientId: z.string().max(2048).optional(), oauthIssuer: z.string().max(2048).optional(), oauthScopes: z.string().max(2000).optional(),
   oauthAuthorizationUrl: z.string().max(2048).optional(), oauthTokenUrl: z.string().max(2048).optional(),
   oauthClientAuthMethod: mcpOAuthClientAuthMethodSchema.optional(),
   oauthRedirectPort: z.number().int().min(1024).max(65535).default(43189), hasOAuthClientSecret: z.boolean().default(false), hasOAuthTokens: z.boolean().default(false), oauthRevision: z.string().uuid().default(() => randomUUID())
-}).strict().transform(value => ({ ...value, authMode: value.authMode ?? (value.transport === 'http' && value.hasToken ? 'bearer' as const : 'none' as const) }));
+}).strict().refine(({ allowedTools, reviewedTools }) => {
+  const names = new Set(allowedTools);
+  return reviewedTools.every(tool => names.delete(tool.name));
+}).transform(value => ({ ...value, authMode: value.authMode ?? (value.transport === 'http' && value.hasToken ? 'bearer' as const : 'none' as const) }));
 const storeSchema = z.object({ version: z.literal(1), servers: z.array(storedServerSchema).max(100) }).strict();
 export interface McpSecretStore { get(id: string, key: string): Promise<string | null>; set(id: string, key: string, value: string): Promise<void>; delete(id: string, key: string): Promise<void>; }
 function entry(id: string, key: string) { return localCredentialEntry('OpenVibeDesk MCP', `${id}:${key}`); }
@@ -108,16 +113,17 @@ export class McpConfigStore {
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.available = false; }
   }
-  list(): McpServerConfig[] { return this.servers.map(server => ({ ...server, args: [...server.args], envKeys: [...server.envKeys], allowedTools: [...server.allowedTools] })); }
-  get(id: string): McpServerConfig { if (!this.available) throw new Error('Die MCP-Speicherung ist nicht verfügbar. Bitte OVD neu starten und die Einstellungen prüfen.'); const found = this.list().find(server => server.id === id); if (!found) throw new Error('MCP-Server nicht gefunden.'); return found; }
+  list(): McpServerConfig[] { return structuredClone(this.servers); }
+  get(id: string): McpServerConfig { if (!this.available) throw new Error('Die MCP-Speicherung ist nicht verfügbar. Bitte OVD neu starten und die Einstellungen prüfen.'); const found = this.servers.find(server => server.id === id); if (!found) throw new Error('MCP-Server nicht gefunden.'); return structuredClone(found); }
   private serial<T>(operation: () => Promise<T>): Promise<T> { const next = this.queue.then(operation); this.queue = next.catch(() => {}); return next; }
-  private async persist(servers: McpServerConfig[]) {
+  private async persist(servers: McpServerConfig[], beforePublish?: () => void) {
     if (!this.available) throw new Error('Die MCP-Konfiguration konnte nicht gelesen werden. Die vorhandene Datei wurde nicht überschrieben.');
     const value = storeSchema.parse({ version: 1, servers }), target = path.join(this.dataRoot, 'servers.json'), temporary = `${target}.${randomUUID()}.tmp`;
     let renamed = false;
     try {
       const file = await fs.open(temporary, 'wx', 0o600);
       try { await file.writeFile(JSON.stringify(value)); await file.sync(); } finally { await file.close(); }
+      beforePublish?.();
       await fs.rename(temporary, target); renamed = true;
       if (process.platform !== 'win32') { const directory = await fs.open(this.dataRoot, 'r'); try { await directory.sync(); } finally { await directory.close(); } }
       this.servers = value.servers;
@@ -161,7 +167,8 @@ export class McpConfigStore {
       const next: McpServerConfig = {
         id, name: input.name, description: input.description, transport: input.transport, args: input.transport === 'stdio' ? input.args : [],
         ...(input.transport === 'stdio' ? { command: input.command, ...(input.cwd ? { cwd: input.cwd } : {}) } : { url: validateMcpUrl(input.url!) }),
-        autoConnect: input.autoConnect, allowedTools: [...new Set(input.allowedTools)], hasToken: false, envKeys, authMode,
+        autoConnect: input.autoConnect, allowedTools: old?.allowedTools ?? [], reviewedTools: old?.reviewedTools ?? [],
+        permissionRevision: old?.permissionRevision ?? randomUUID(), hasToken: false, envKeys, authMode,
         ...(authMode === 'oauth' ? { oauthClientId: optional(input.oauthClientId, old?.oauthClientId), oauthIssuer: optional(input.oauthIssuer, old?.oauthIssuer), oauthScopes: optional(input.oauthScopes, old?.oauthScopes), oauthAuthorizationUrl: optional(input.oauthAuthorizationUrl, old?.oauthAuthorizationUrl), oauthTokenUrl: optional(input.oauthTokenUrl, old?.oauthTokenUrl), ...(oauthClientAuthMethod ? { oauthClientAuthMethod } : {}) } : {}),
         oauthRedirectPort: input.oauthRedirectPort ?? old?.oauthRedirectPort ?? 43189,
         hasOAuthClientSecret: false, hasOAuthTokens: false, oauthRevision: old?.oauthRevision ?? randomUUID()
@@ -179,7 +186,13 @@ export class McpConfigStore {
       next.hasOAuthClientSecret = authMode === 'oauth' && !input.clearOAuthClientSecret && (!!input.oauthClientSecret || sameClient && old!.hasOAuthClientSecret);
       if (next.oauthClientAuthMethod && (!next.oauthClientId || !next.hasOAuthClientSecret)) throw new Error('Für dieses Client-Anmeldeverfahren sind eine registrierte Client-ID und ein gespeichertes Client-Secret erforderlich.');
       next.hasOAuthTokens = sameAuth && old!.hasOAuthTokens;
-      if (old && !sameAuth) { next.oauthRevision = randomUUID(); next.allowedTools = []; }
+      if (old && !sameAuth) next.oauthRevision = randomUUID();
+      const environmentEdited = Object.keys(input.env ?? {}).length > 0 || input.removeEnvKeys?.some(key => old?.envKeys.includes(key));
+      if (old && (!sameAuth || next.transport === 'stdio' && environmentEdited)) {
+        next.allowedTools = [];
+        next.reviewedTools = [];
+        next.permissionRevision = randomUUID();
+      }
       const changes: SecretChange[] = [];
       if (input.token && authMode === 'bearer') changes.push({ key: 'token', value: input.token });
       else if (input.clearToken || old?.hasToken && !next.hasToken) changes.push({ key: 'token', value: null });
@@ -234,6 +247,34 @@ export class McpConfigStore {
       catch { throw new Error('Die MCP-Anmeldung wurde lokal gesperrt. Ihre gespeicherten Zugangsdaten konnten nicht vollständig entfernt werden; bitte erneut abmelden.'); }
     });
   }
-  permissions(id: string, allowedTools: string[]): Promise<McpServerConfig> { return this.serial(async () => { const old = this.get(id); await this.persist(this.servers.map(server => server.id === id ? { ...old, allowedTools: [...new Set(allowedTools)] } : server)); return this.get(id); }); }
+  permissions(raw: McpToolPermissions, validateCatalog: () => void): Promise<McpServerConfig> {
+    const input = mcpPermissionsSchema.parse(raw);
+    return this.serial(async () => {
+      const current = this.get(input.serverId);
+      if (input.permissionRevision !== current.permissionRevision) throw new Error('MCP_PERMISSION_REVISION_CHANGED');
+      validateCatalog();
+      const names = new Set(current.allowedTools);
+      const reviewed = new Map(current.reviewedTools.map(tool => [tool.name, tool.fingerprint]));
+      let changed = false;
+      for (const { name, fingerprint } of input.changes) {
+        if (fingerprint === null) {
+          if (names.delete(name)) changed = true;
+          reviewed.delete(name);
+        } else if (reviewed.get(name) !== fingerprint) {
+          names.add(name);
+          reviewed.set(name, fingerprint);
+          changed = true;
+        }
+      }
+      if (!changed) return current;
+      if (names.size > 500) throw new Error('MCP_PERMISSION_LIMIT');
+      const next: McpServerConfig = {
+        ...current, allowedTools: [...names], reviewedTools: Array.from(reviewed, ([name, fingerprint]) => ({ name, fingerprint })),
+        permissionRevision: randomUUID()
+      };
+      await this.persist(this.servers.map(server => server.id === next.id ? next : server), validateCatalog);
+      return this.get(next.id);
+    });
+  }
   remove(id: string): Promise<void> { return this.serial(async () => { const old = this.get(id); await this.persist(this.servers.filter(server => server.id !== id)); for (const key of [...old.envKeys.map(key => `env:${key}`), 'token', 'oauth', 'oauth-client-secret']) try { if (await this.secrets.get(id, key) !== null) await this.secrets.delete(id, key); } catch { /* Deleted config never makes orphaned secrets available. */ } }); }
 }

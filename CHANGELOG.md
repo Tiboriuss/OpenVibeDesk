@@ -2,6 +2,18 @@
 
 [Repository overview](README.md) · [Documentation](docs/README.md) · [Installer and update guide](docs/releases.md)
 
+## v0.1.14 — 26 November 2026
+
+This alpha makes Mail easier to use alongside the Assistant. You can keep Chat visible while you work, review suggested account changes one field at a time and ask the Assistant to open a link from an email.
+
+- Stopping dictation releases the microphone immediately while the captured audio finishes transcribing. Closing Chat also releases it while the draft saves. [Speech input](docs/speech-input.md#dictate-in-chat)
+- The Mail reader gives the message the available space in narrow windows. Returning to the list restores the selected row and filter. Larger text also scales HTML email. The Assistant can list links in a message and open a requested link using the saved confirmation mode. [Read HTML mail](docs/getting-started.md#read-html-mail)
+- Pin the Assistant above other windows from its title bar, **Settings → Appearance** or Chat. The choice survives restart and is independent of the OVD-Bar. [Arrange the workspace](docs/getting-started.md#arrange-the-workspace)
+- Review Mail settings suggested by the Assistant field by field. Compare the current and proposed values, choose what to apply, then save the account section when ready. The account forms and their review controls are available in English and German. [Mail account settings](docs/getting-started.md#add-a-mail-account)
+- **Upgrading MCP from v0.1.13 or earlier:** reconnect your saved server and review its previously approved tools under **Settings → MCP → Tool permissions**. Earlier releases stored approvals by name. OVD now remembers each approved definition across reconnects and restarts, and flags a tool if its definition changes. Server settings and credentials carry over. [Tool permissions](modules/ovd-mcp/README.md#reviewing-tool-changes)
+
+The production build and all 52 existing tests passed. Practical macOS checks used fictional mail accounts, local MCP servers and a simulated microphone. An Apple Silicon upgrade from v0.1.13 to a local development package preserved the workspace and credentials. Installer targets are Apple Silicon Mac, Intel Mac and Windows x64. [Installer and update guide](docs/releases.md)
+
 ## v0.1.13 — 26 November 2026
 
 This alpha improves recovery from interrupted Assistant replies and makes MCP connection problems easier to diagnose.

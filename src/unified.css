@@ -33,6 +33,8 @@
 .window-chrome-actions{display:flex;flex:none;margin-left:auto;align-self:stretch;-webkit-app-region:no-drag}
 .window-chrome-button{width:43px;border:0;background:transparent;color:var(--ovd-white);display:grid;place-items:center}
 .window-chrome-button:hover{background:#ffffff1c;color:var(--ovd-white)}
+.window-chrome-pin[aria-pressed=true]{color:var(--ovd-inverse-accent);background:#ffffff14}
+.window-chrome-pin[aria-pressed=true] svg{fill:currentColor}
 .window-chrome-close:hover{background:#c84455;color:var(--ovd-white)}
 .window-chrome-button:focus-visible{outline:2px solid var(--ovd-inverse-accent);outline-offset:-4px}
 .native-error{display:flex;align-items:flex-start;gap:8px;max-height:calc(100% - 60px);cursor:auto}

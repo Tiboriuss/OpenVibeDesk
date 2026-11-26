@@ -14,7 +14,7 @@ Open the bar's **…** menu and choose **Customize OVD-Bar…**, or use **Settin
 | Size | Scales icons and their hit areas together, from 80% to 140%; 100% is the default. |
 | Position | Left, right, top or bottom of the current display, or freely placed. Drag the grip to move it; dragging switches to free placement. |
 | Opacity | Background opacity from 70% to 100%, default 96%. Icons and focus indicators remain opaque. |
-| Keep in front | Uses the existing always-on-top preference. Enabled by default. |
+| Keep in front | Keeps the OVD-Bar above ordinary windows. Enabled by default. To pin Chat separately, use the Assistant title bar or **Settings → Appearance → Keep Assistant on top**. [Window pin](settings-design.md#assistant-window-pin) |
 | Collapse when idle | Optional; off by default. After 800ms without hover, focus or an open menu, the bar becomes a small reachable launcher. Hover or keyboard focus expands it; activating the launcher focuses its controls. |
 | Items and order | Move the actual available entries with Up/Down controls. Disabled modules retain their saved position for reactivation. |
 

@@ -29,9 +29,9 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 // Explicitly audited business reads: ImapFlow's BODY.PEEK/download path does not
 // set \Seen. Search/query may present their results in Mail, but never mutate
 // mailbox content or submit mail. This is not a claim that all UI effects vanish.
-const reads = new Set(['drafts.list', 'drafts.get', 'drafts.save_status', 'drafts.sent_status', 'mail.accounts', 'mail.list_folders', 'mail.list_messages', 'mail.read', 'mail.previews', 'mail.display_status', 'mail.count', 'mail.search', 'mail.query', 'accounts.test', 'accounts.preferences_get', 'smtp.list', 'smtp.test']);
+const reads = new Set(['drafts.list', 'drafts.get', 'drafts.save_status', 'drafts.sent_status', 'mail.accounts', 'mail.list_folders', 'mail.list_messages', 'mail.read', 'mail.previews', 'mail.display_status', 'mail.list_links', 'mail.count', 'mail.search', 'mail.query', 'accounts.test', 'accounts.preferences_get', 'smtp.list', 'smtp.test']);
 const draftTargets = new Set(['drafts.get', 'drafts.open', 'drafts.update', 'drafts.save', 'drafts.save_status', 'drafts.file_sent', 'drafts.sent_status', 'drafts.send', 'files.attach', 'files.remove_attachment']);
-const mailTargets = new Set(['mail.read', 'mail.set_display', 'mail.display_status', 'mail.open', 'mail.set_read', 'mail.download_attachment']);
+const mailTargets = new Set(['mail.read', 'mail.set_display', 'mail.display_status', 'mail.list_links', 'mail.open_link', 'mail.open', 'mail.set_read', 'mail.download_attachment']);
 
 /** Freezes mutable selections before hashing. Status hooks never call SMTP or APPEND. */
 export function createMailOperationAdapter(deps: Dependencies): ModuleOperationAdapter {

@@ -71,6 +71,8 @@
   padding: 7px 12px;
 }
 .settings-choice-row:not([hidden]) + .settings-choice-row:not([hidden]) { border-top: 1px solid var(--line); }
+.settings-choice-row.settings-toggle-row:not([hidden]) { grid-template-columns: minmax(0, 1fr) auto; }
+.settings-toggle-row > small { grid-column: 1 / -1; color: var(--muted); }
 .settings-choice-label { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .settings-choice-label label { font-size: var(--settings-field-size); font-weight: 700; overflow-wrap: anywhere; }
 .settings-choice-reset {

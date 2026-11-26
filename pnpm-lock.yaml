@@ -20,6 +20,9 @@ importers:
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
+      htmlparser2:
+        specifier: 10.1.0
+        version: 10.1.0
       imapflow:
         specifier: ^2.9.1
         version: 2.9.1

@@ -6,7 +6,7 @@ OpenVibeDesk's documentation is maintained in English. The host interface is ava
 
 ## Choose a starting point
 
-- **Use OVD:** [Install and set up the app](getting-started.md), then connect your AI provider and mail account.
+- **Use OVD.** [Install and set up the app](getting-started.md), [connect an AI provider](getting-started.md#connect-an-ai-provider) and [add a mail account](getting-started.md#add-a-mail-account).
 - **Connect AI:** Follow [AI providers](ai-providers.md) for Azure Foundry, OpenAI, compatible endpoints or direct ChatGPT sign-in.
 - **Dictate into Chat:** Configure [speech input](speech-input.md) separately for Live or After-recording transcription.
 - **Report a connection problem:** Enable and export a local [diagnostic report](diagnostics.md) on the affected computer.
@@ -19,8 +19,8 @@ OpenVibeDesk's documentation is maintained in English. The host interface is ava
 
 | Guide | What it covers |
 | --- | --- |
-| [Getting started](getting-started.md) | Installer setup and manual updates, local startup, first-run configuration, data locations, and troubleshooting. |
-| [Changelog](../CHANGELOG.md) | Changes in v0.1.9, verification scope, update compatibility and remaining work. |
+| [Getting started](getting-started.md) | Installers, update notifications, local startup, account setup, working in Chat and troubleshooting. |
+| [Changelog](../CHANGELOG.md) | Release history, upgrade notes and verification scope for each version. |
 | [OVD-Bar](ovd-bar.md) | Floating launcher, orientation, sizing, transparency, placement, idle collapse and Assistant control. |
 | [AI providers](ai-providers.md) | OpenAI Chat Completions/Responses, Azure endpoints and deployments, compatible local services and direct ChatGPT OAuth/plan usage. |
 | [Speech input](speech-input.md) | Separate speech providers and credentials, Live or After-recording transcription, microphone controls, limits and Assistant configuration. |
@@ -58,7 +58,7 @@ Design guides include intended behavior that is not implemented yet. The [reposi
 | [Module events](module-events.md) | Opt-in subscriptions, bounded publications, durable delivery, acknowledgements and background processing contracts. |
 | [Downloadable module catalog](https://github.com/Tiboriuss/OpenVibeDesk-Modules) | Separately published Notes, Skill Library and Memory modules, their source and package documentation. |
 | [Notes module example](../examples/notes-module/README.md) | A standalone process module with its own HTML interface and settings. |
-| [MCP module](../modules/ovd-mcp/README.md) | Server setup, browser OAuth and endpoint overrides, tool approvals, credentials, and dynamic discovery. |
+| [MCP module](../modules/ovd-mcp/README.md) | Server setup, browser OAuth, supported protocol revisions, and reviewing changed tool definitions. |
 | [MCP server example](../examples/mcp-server/README.md) | A local server for exercising the MCP integration. |
 | [Built-in module sources](../modules/) | The required assistant and optional Mail, Files, and MCP implementations. |
 
